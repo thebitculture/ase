@@ -1,0 +1,74 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <PublishAot>false</PublishAot>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <Platforms>AnyCPU;x64</Platforms>
+    <AllowUnsafeBlocks>True</AllowUnsafeBlocks>
+    <Description>Atari System Emulator</Description>
+  </PropertyGroup>
+
+	<PropertyGroup>
+		<Major>1</Major>
+		<Minor>0</Minor>
+	</PropertyGroup>
+
+	<PropertyGroup>
+		<Product>Atari System Emulator</Product>
+		<Company>The Bit Culture</Company>
+		<Description>Atari System Emulator</Description>
+		<Copyright>Copyright © 2026 The Bit Culture</Copyright>
+
+		<AssemblyVersion>$(Major).$(Minor)</AssemblyVersion>
+		<FileVersion>$(Major).$(Minor)</FileVersion>
+		<Version>$(Major).$(Minor)</Version>
+
+		<IncludeSourceRevisionInInformationalVersion>true</IncludeSourceRevisionInInformationalVersion>
+
+		<ApplicationIcon>icon.ico</ApplicationIcon>
+	</PropertyGroup>
+
+	<PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
+    <DebugType>full</DebugType>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <DebugType>full</DebugType>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
+    <DebugType>full</DebugType>
+  </PropertyGroup>
+	<PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+		<DebugType>full</DebugType>
+	</PropertyGroup>
+  <ItemGroup>
+    <Content Include="icon.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="sdl2" Version="2.0.5" />
+    <PackageReference Include="TinyDialogsNet" Version="2.0.0" />
+  </ItemGroup>
+
+	<ItemGroup>
+		<None Update="native/libSDL2.dylib" Condition="'$(OS)' != 'Windows_NT'">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+			<Link>libSDL2.dylib</Link>
+		</None>
+		<None Update="native/SDL2.dll" Condition="'$(OS)' == 'Windows_NT'">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+			<Link>SDL2.dll</Link>
+		</None>
+		<None Update="native\moira.dll">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+			<Link>moira.dll</Link>
+		</None>
+    		<None Update="native/moira.dylib" Condition="'$(OS)' != 'Windows_NT'">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+			<Link>moira.dylib</Link>
+		</None>
+	</ItemGroup>
+</Project>
