@@ -1,0 +1,145 @@
+<Window xmlns="https://github.com/avaloniaui"
+		xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+		xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+		xmlns:svg="clr-namespace:Avalonia.Svg;assembly=Svg.Controls.Avalonia"
+		xmlns:local="clr-namespace:ASE"
+		x:Class="ASE.ConfigurationWindow"
+		Title="Configuration"
+		CanResize="False"
+		WindowStartupLocation="CenterScreen"
+		UseLayoutRounding="True"
+		mc:Ignorable="d" Width="600" Height="470"
+		>
+
+	<Grid RowDefinitions="Auto,*,Auto" Margin="14">
+
+		<TabControl Grid.Row="1">
+			<TabItem>
+				<TabItem.Header>
+					<Grid ColumnDefinitions="Auto,Auto" VerticalAlignment="Center">
+						<Svg Path="/Assets/Icons/gear.svg"
+							 Width="18" Height="18"
+							 Margin="0,4,12,0"
+							 VerticalAlignment="Center"/>
+						<TextBlock Grid.Column="1" Text="Setup" VerticalAlignment="Center"/>
+					</Grid>
+				</TabItem.Header>
+				<StackPanel Orientation="Vertical" Margin="0,10,0,0" Spacing="6" >
+					<Separator Margin="0,10"/>
+					<StackPanel Orientation="Horizontal" Margin="10,0,10,0" Spacing="8">
+						<!--
+						<Label VerticalAlignment="Center">Atari model</Label>
+						<ComboBox MaxDropDownHeight="100" Width="180" SelectedIndex="{Binding STModel, Mode=TwoWay}">
+							<ComboBoxItem>Atari STF/FM</ComboBoxItem>
+							<ComboBoxItem>Atari STF/FM + Blitter</ComboBoxItem>
+							<ComboBoxItem>Atari STE</ComboBoxItem>
+						</ComboBox>
+						-->
+						<Label VerticalAlignment="Center">Memory</Label>
+						<ComboBox MaxDropDownHeight="100" Width="180" SelectedIndex="{Binding RAMConfiguration, Mode=TwoWay}">
+							<ComboBoxItem>512KB</ComboBoxItem>
+							<ComboBoxItem>1MB</ComboBoxItem>
+							<ComboBoxItem>2MB</ComboBoxItem>
+							<ComboBoxItem>4MB</ComboBoxItem>
+						</ComboBox>
+					</StackPanel>
+					<StackPanel Orientation="Vertical" Margin="10,0,10,20" Spacing="8">
+						<Label>TOS image</Label>
+						<Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+							<TextBox Grid.Column="0" IsReadOnly="True" Text="{Binding TOSPath}"/>
+							<Button Grid.Column="1" Content="Browse…" Click="OnBrowseTOSImageClick" />
+						</Grid>
+					</StackPanel>
+					<Border
+						Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
+						BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+						BorderThickness="2"
+						CornerRadius="4"
+						Padding="6"
+						Margin="6">
+						<TextBlock TextWrapping="Wrap">ℹ️ Atari ST F/FM: 512 colors, mono YM sound, no blitter. TOS 1.00 to 1.04</TextBlock>
+					</Border>
+				</StackPanel>
+		    </TabItem>
+			<TabItem>
+				<TabItem.Header>
+					<Grid ColumnDefinitions="Auto,Auto" VerticalAlignment="Center">
+						<Svg Path="/Assets/Icons/tv.svg"
+							 Width="18" Height="18"
+							 Margin="0,4,12,0"
+							 VerticalAlignment="Center"/>
+						<TextBlock Grid.Column="1"
+								   Text="Video"
+								   VerticalAlignment="Center"/>
+					</Grid>
+				</TabItem.Header>
+				<StackPanel Orientation="Vertical" Margin="0,10,0,0" Spacing="6" >
+					<Separator Margin="0,10"/>
+					<Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto,Auto" Margin="10,0,10,0">
+						
+						<StackPanel Grid.Column="0" Grid.Row="0" Orientation="Vertical" Margin="0,0,10,0">
+							<TextBlock Text="{Binding #SliderCurvature.Value, StringFormat={}Curvature : {0:0.000}}" VerticalAlignment="Center"/>
+							<Slider x:Name="SliderCurvature" Minimum="0" Maximum="0.05" ValueChanged="SliderCurvature_OnValueChanged" />							
+						</StackPanel>
+						<StackPanel Grid.Column="1" Grid.Row="0" Orientation="Vertical" Margin="10,0,0,0">
+							<TextBlock Text="{Binding #SliderVignette.Value, StringFormat={}Vignette : {0:0.000}}" VerticalAlignment="Center"/>
+							<Slider Minimum="0" Maximum="1.0" x:Name="SliderVignette" ValueChanged="SliderVignette_OnValueChanged" />							
+						</StackPanel>
+						
+						<StackPanel Grid.Column="0" Grid.Row="1" Orientation="Vertical" Margin="0,0,10,0">
+							<TextBlock Text="{Binding #SliderScanline.Value, StringFormat={}Scanline : {0:0.000}}" VerticalAlignment="Center"/>
+							<Slider Minimum="-5.0" Maximum="5.0" x:Name="SliderScanline" ValueChanged="SliderScanline_OnValueChanged" />							
+						</StackPanel>
+						<StackPanel Grid.Column="1" Grid.Row="1" Orientation="Vertical" Margin="10,0,0,0">
+							<TextBlock Text="{Binding #SliderAberration.Value, StringFormat={}Aberration : {0:0.000}}" VerticalAlignment="Center"/>
+							<Slider Minimum="0.0" Maximum="2.0" x:Name="SliderAberration" ValueChanged="SliderAberration_OnValueChanged" />							
+						</StackPanel>
+						
+						<StackPanel Grid.Column="0" Grid.Row="2" Orientation="Vertical" Margin="0,0,10,0">
+							<TextBlock Text="{Binding #SliderBloom.Value, StringFormat={}Bloom : {0:0.000}}" VerticalAlignment="Center"/>
+							<Slider Minimum="0.0" Maximum="2.0" x:Name="SliderBloom" ValueChanged="SliderBloom_OnValueChanged" />							
+						</StackPanel>
+						<StackPanel Grid.Column="1" Grid.Row="2" Orientation="Vertical" Margin="10,0,0,0">
+							<TextBlock Text="{Binding #SliderMask.Value, StringFormat={}Mask : {0:0.000}}" VerticalAlignment="Center"/>
+							<Slider Minimum="0.0" Maximum="2.0" x:Name="SliderMask" ValueChanged="SliderMask_OnValueChanged" />							
+						</StackPanel>
+						
+						<StackPanel Grid.Column="0" Grid.Row="3" Orientation="Vertical" Margin="0,0,10,0">
+							<TextBlock Text="{Binding #SliderNoise.Value, StringFormat={}Noise : {0:0.000}}" VerticalAlignment="Center"/>
+							<Slider Minimum="0.0" Maximum="1.0" x:Name="SliderNoise" ValueChanged="SliderNoise_OnValueChanged" />							
+						</StackPanel>
+
+						<Button Grid.Column="1" Grid.Row="3" Name="ButtonDefaultGLValues" Click="ButtonDefaultGLValues_OnClick" Content="Set default values" VerticalAlignment="Center" HorizontalAlignment="Right"></Button>
+						
+					</Grid>
+					<Separator Margin="0,10"/>
+				</StackPanel>
+			</TabItem>
+			<!--
+			<TabItem>
+				<TabItem.Header>
+					<Grid ColumnDefinitions="Auto,Auto" VerticalAlignment="Center">
+						<Svg Path="/Assets/Icons/joystick.svg"
+							 Width="18" Height="18"
+							 Margin="0,4,12,0"
+							 VerticalAlignment="Center"/>
+						<TextBlock Grid.Column="1"
+								   Text="Input"
+								   VerticalAlignment="Center"/>
+					</Grid>
+				</TabItem.Header>
+				<StackPanel Orientation="Vertical" Margin="0,10,0,0" Spacing="6" >
+					<Separator Margin="0,10"/>
+				</StackPanel>
+			</TabItem>
+			-->
+		</TabControl>
+
+		<StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="10" Spacing="8" Grid.Row="2">
+			<Button Content="OK" Width="80" Click="OnOkClick" />
+			<Button Content="Cancel" Click="OnCancelClick" Width="80" />
+		</StackPanel>
+
+	</Grid>
+
+</Window>

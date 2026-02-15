@@ -3,9 +3,6 @@
  * Wrapper for Moira 68k CPU emulator.
  * This class handles interaction with the Moira native library,
  * 
- * I've created this wrapper with Google IA Studio
- * with some minor changes by me.
- * 
  * Official repository 👉 https://github.com/thebitculture/ase
  * 
  */
@@ -105,16 +102,15 @@ namespace ASE
         /// <summary>Execute a single instruction.</summary>
         public void Step() => Native.moira_execute(_h);
 
-        /// <summary>Execute until at least the given number of cycles has elapsed.</summary>
+        /// <summary>
+        /// Execute until at least the given number of cycles has elapsed.
+        /// </summary>
+        /// <remarks>This method catches all exceptions thrown by the emulator loop since it executes in a different thread.</remarks>
         public void RunForCycles(long cycles) 
         {
             try
             {
                 Native.moira_execute_cycles(_h, cycles);
-            }
-            catch (EmulatorBusErrorException)
-            {
-                Console.WriteLine("68k Bus exception");
             }
             catch
             {
@@ -131,7 +127,13 @@ namespace ASE
         /// <remarks>Supervisor mode may grant elevated access to protected memory.</param>
         public void SetSupervisorMode(bool s) => Native.moira_setSupervisorMode(_h, s);
 
-        // -------------------- Clock --------------------
+        public void TriggerBusError(uint ErrorAdress, bool IsWrite)
+        {
+            if (Config.ConfigOptions.RunninConfig.DebugMode)
+                ColoredConsole.WriteLine($"Moira: Triggering bus error at address [[red]]{ErrorAdress:X}[[/red]] (isWrite=[[magenta]]{IsWrite}[[/magenta]])");
+
+            Native.moira_triggerBusError(_h, ErrorAdress, IsWrite);
+        }
 
         public long Clock
         {
@@ -139,7 +141,7 @@ namespace ASE
             set => Native.moira_setClock(_h, value);
         }
 
-        // -------------------- Registers (idiomatic) --------------------
+        // Registers (idiomatic)
 
         public uint PC
         {
@@ -222,7 +224,7 @@ namespace ASE
             }
         }
 
-        // -------------------- Disassembler / formatting --------------------
+        // Disassembler / formatting
 
         /// <summary>
         /// Disassembles instruction at address and returns the formatted line.
@@ -269,7 +271,7 @@ namespace ASE
             return sb.ToString();
         }
 
-        // -------------------- Private state --------------------
+        // Private state
 
         private IntPtr _h;
 
@@ -289,7 +291,7 @@ namespace ASE
         private readonly SyncFn? _syncNative;
         private readonly ReadIrqUserVectorFn? _irqNative;
 
-        // -------------------- Native interop (internal/private) --------------------
+        // Native interop (internal/private)
 
         private const string Lib = "moira";
 
@@ -346,6 +348,8 @@ namespace ASE
 
             [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
             internal static extern void moira_setSupervisorMode(IntPtr h, bool s);
+            [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+            internal static extern void moira_triggerBusError(IntPtr h, uint adress, bool iswrite);
 
             [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
             internal static extern long moira_getClock(IntPtr h);

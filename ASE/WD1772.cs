@@ -8,6 +8,7 @@
  * 
  */
 
+using Avalonia.Threading;
 using static ASE.Config;
 
 namespace ASE
@@ -63,11 +64,6 @@ namespace ASE
         private const byte CMD_WRITE_TRACK = 0xF0;
         private const byte CMD_FORCE_INTERRUPT = 0xD0;
 
-        private static void RaiseInterrupt() => Program._mfp.SetGPIOBit(5, false);
-
-        // ClearInterrupt pone la línea en alto (inactivo)
-        private static void ClearInterrupt() => Program._mfp.SetGPIOBit(5, true);
-
         public static void Reset()
         {
             commandRegister = 0;
@@ -80,12 +76,11 @@ namespace ASE
             headTrack = 0;
             dmaSectorCount = 0;
             statusRegister = 0;
-            if (Program._mfp != null) Program._mfp.SetGPIOBit(5, true);
+
+            if (ASEMain._mfp != null) 
+                ASEMain._mfp.SetGPIOBit(5, true);
         }
 
-        /*
-         * I should move this method to Memory.cs ...
-         */
         public static void WriteByte(uint address, byte value)
         {
             switch (address)
@@ -115,9 +110,6 @@ namespace ASE
             }
         }
 
-        /*
-         * ... and this one ...
-         */
         public static void WriteWord(uint address, ushort value)
         {
             switch (address)
@@ -148,15 +140,12 @@ namespace ASE
             WriteByte(address + 1, (byte)(value & 0xFF));
         }
 
-        /*
-         * ... and this one ...
-         */
         public static byte ReadByte(uint address)
         {
             switch (address)
             {
                 case 0xFF8604: 
-                    return Program._mem.Ports[address - Memory.PortsBase];
+                    return ASEMain._mem.Ports[address - Memory.PortsBase];
                 case 0xFF8605: 
                     return ReadFromFDCOrSectorCount();
                 case 0xFF8606: 
@@ -170,13 +159,10 @@ namespace ASE
                 case 0xFF860D: 
                     return (byte)(dmaAddress & 0xFE);
                 default: 
-                    return Program._mem.Ports[address - Memory.PortsBase];
+                    return ASEMain._mem.Ports[address - Memory.PortsBase];
             }
         }
 
-        /*
-         * ... and this one too
-         */
         public static ushort ReadWord(uint address)
         {
             switch (address)
@@ -302,7 +288,7 @@ namespace ASE
 
             if (headTrack == 0) 
                 statusRegister |= STATUS_TRACK0;
-            if (Program.driveA.WriteProtected) 
+            if (ASEMain.driveA.WriteProtected) 
                 statusRegister |= STATUS_WRITE_PROTECT;
             if ((System.Environment.TickCount & 32) != 0) 
                 statusRegister |= 0x02; // Index Pulse
@@ -321,18 +307,12 @@ namespace ASE
                 return; 
             }
 
-            /*
-            FloppyImage activeDisk = (currentDrive == 0) ? Program.driveA : null;
-            if (activeDisk == null || !activeDisk.HasDisk) 
-            { 
-                statusRegister |= STATUS_NOT_READY; 
-                RaiseInterrupt(); 
-                return; 
-            }
-            */
-
             statusRegister |= STATUS_BUSY;
             ClearInterrupt();
+
+            Dispatcher.UIThread.InvokeAsync(() => { 
+                ASEMain.MainWindow.DriveLed(true); 
+            }, DispatcherPriority.Background);
 
             // Type I (0xF0)
             byte hiNibble = (byte)(command & 0xF0);
@@ -410,7 +390,12 @@ namespace ASE
 
         private static void PulseInterrupt()
         {
-            Program._mfp.SetGPIOBit(5, false);
+            ASEMain._mfp.SetGPIOBit(5, false);
+        }
+
+        private static void ClearInterrupt() 
+        { 
+            ASEMain._mfp.SetGPIOBit(5, true); 
         }
 
         private static void ExecuteRestore()
@@ -427,7 +412,7 @@ namespace ASE
             headTrack = dataRegister;
             trackRegister = dataRegister;
 
-            if (!Program.driveA.HasDisk)
+            if (!ASEMain.driveA.HasDisk)
             {
                 statusRegister |= STATUS_RECORD_NOT_FOUND;
                 return;
@@ -436,8 +421,8 @@ namespace ASE
             if (headTrack < 0) 
                 headTrack = 0;
 
-            if (headTrack > Program.driveA.DiskConfig.Tracks - 1) 
-                headTrack = Program.driveA.DiskConfig.Tracks - 1;
+            if (headTrack > ASEMain.driveA.DiskConfig.Tracks - 1) 
+                headTrack = ASEMain.driveA.DiskConfig.Tracks - 1;
 
             UpdateTypeIStatus();
             statusRegister &= 0xFE;
@@ -447,7 +432,10 @@ namespace ASE
         {
             bool multi = (commandRegister & 0x10) != 0; // bit 4 = multiple
 
-            if (sectorRegister < 1 || sectorRegister > Program.driveA.DiskConfig.SectorsPerTrack)
+            if (!ASEMain.driveA.HasDisk)
+                return;
+
+            if (sectorRegister < 1 || sectorRegister > ASEMain.driveA.DiskConfig.SectorsPerTrack)
             {
                 statusRegister |= STATUS_RECORD_NOT_FOUND;
                 return;
@@ -467,9 +455,9 @@ namespace ASE
             }
 
             // LBA lineal para wrap correcto
-            int spt = Program.driveA.DiskConfig.SectorsPerTrack;
-            int sides = Program.driveA.DiskConfig.Sides;
-            int bps = Program.driveA.DiskConfig.SectorSize;
+            int spt = ASEMain.driveA.DiskConfig.SectorsPerTrack;
+            int sides = ASEMain.driveA.DiskConfig.Sides;
+            int bps = ASEMain.driveA.DiskConfig.SectorSize;
 
             int lba = ((headTrack * sides) + currentSide) * spt + (sectorRegister - 1);
 
@@ -477,7 +465,7 @@ namespace ASE
             for (int n = 0; n < sectorsToRead; n++, lba++)
             {
                 int offset = lba * bps;
-                if (Program.driveA.Data == null || offset + bps > Program.driveA.Data.Length)
+                if (ASEMain.driveA.Data == null || offset + bps > ASEMain.driveA.Data.Length)
                 {
                     statusRegister |= STATUS_RECORD_NOT_FOUND;
                     dmaError = true;
@@ -486,9 +474,8 @@ namespace ASE
 
                 for (int j = 0; j < bps; j++)
                 {
-                    Program.SetAtariWindowsTittle($"💾");
-                    Program._mem.Write8(dmaAddress++, Program.driveA.Data[offset + j]);
-                    dump += $"{Program.driveA.Data[offset + j]:X2} ";
+                    ASEMain._mem.Write8(dmaAddress++, ASEMain.driveA.Data[offset + j]);
+                    dump += $"{ASEMain.driveA.Data[offset + j]:X2} ";
                 }
 
                 if (dmaSectorCount > 0) dmaSectorCount--;
@@ -513,17 +500,16 @@ namespace ASE
 
         private static void ExecuteWriteSector()
         {
-            if (Program.driveA.WriteProtected) { statusRegister |= STATUS_WRITE_PROTECT; statusRegister &= 0xFE; return; }
+            if (ASEMain.driveA.WriteProtected) { statusRegister |= STATUS_WRITE_PROTECT; statusRegister &= 0xFE; return; }
             int sectorsToWrite = ((commandRegister & 0x10) != 0) ? Math.Max((byte)1, dmaSectorCount) : 1;
             for (int i = 0; i < sectorsToWrite; i++)
             {
                 int offset = CalculateDiskOffset(headTrack, currentSide, sectorRegister + i);
-                if (Program.driveA.Data != null && offset + Program.driveA.DiskConfig.SectorSize <= Program.driveA.Data.Length)
+                if (ASEMain.driveA.Data != null && offset + ASEMain.driveA.DiskConfig.SectorSize <= ASEMain.driveA.Data.Length)
                 {
-                    for (int j = 0; j < Program.driveA.DiskConfig.SectorSize; j++)
+                    for (int j = 0; j < ASEMain.driveA.DiskConfig.SectorSize; j++)
                     {
-                        Program.driveA.Data[offset + j] = Program._mem.Read8(dmaAddress++);
-                        Program.SetAtariWindowsTittle($"💾");
+                        ASEMain.driveA.Data[offset + j] = ASEMain._mem.Read8(dmaAddress++);
                     }
                 }
                 if (dmaSectorCount > 0) dmaSectorCount--;
@@ -533,12 +519,12 @@ namespace ASE
 
         private static void ExecuteReadAddress()
         {
-            Program._mem.Write8(dmaAddress++, (byte)headTrack);
-            Program._mem.Write8(dmaAddress++, (byte)currentSide);
-            Program._mem.Write8(dmaAddress++, sectorRegister);
-            Program._mem.Write8(dmaAddress++, 2);
-            Program._mem.Write8(dmaAddress++, 0);
-            Program._mem.Write8(dmaAddress++, 0);
+            ASEMain._mem.Write8(dmaAddress++, (byte)headTrack);
+            ASEMain._mem.Write8(dmaAddress++, (byte)currentSide);
+            ASEMain._mem.Write8(dmaAddress++, sectorRegister);
+            ASEMain._mem.Write8(dmaAddress++, 2);
+            ASEMain._mem.Write8(dmaAddress++, 0);
+            ASEMain._mem.Write8(dmaAddress++, 0);
             statusRegister = 0x00;
         }
 
@@ -554,12 +540,12 @@ namespace ASE
 
         private static int CalculateDiskOffset(int track, int side, int sector)
         {
-            return (track * Program.driveA.DiskConfig.Sides * Program.driveA.DiskConfig.SectorsPerTrack + side * Program.driveA.DiskConfig.SectorsPerTrack + (sector - 1)) * Program.driveA.DiskConfig.SectorSize;
+            return (track * ASEMain.driveA.DiskConfig.Sides * ASEMain.driveA.DiskConfig.SectorsPerTrack + side * ASEMain.driveA.DiskConfig.SectorsPerTrack + (sector - 1)) * ASEMain.driveA.DiskConfig.SectorSize;
         }
 
         public static void SetWriteProtect(int drive, bool protect)
         {
-            if (drive >= 0 && drive < 2) Program.driveA.WriteProtected = protect;
+            if (drive >= 0 && drive < 2) ASEMain.driveA.WriteProtected = protect;
         }
     }
 }

@@ -1,0 +1,42 @@
+<Window xmlns="https://github.com/avaloniaui"
+		xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+		xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:ASE"
+        x:Class="ASE.AboutWindow"
+        Title="About ASE"
+		CanResize="False"
+		WindowStartupLocation="CenterScreen"
+		UseLayoutRounding="True"
+		mc:Ignorable="d" Width="500" Height="320">
+  
+    <Grid RowDefinitions="Auto,*,Auto" ColumnDefinitions="*" Margin="20">
+
+		<Border Grid.Row="0" Grid.Column="0"
+			BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+			BorderThickness="1"
+			CornerRadius="12"
+			Padding="8" >
+			<Image Source="./Assets/logo.png" Height="48"></Image>
+		</Border>
+
+		<Grid ColumnDefinitions="Auto,*" Grid.Row="1" Grid.Column="0" Margin="20">
+			<Image Grid.Column="0" Source="./Assets/retrodude.png" Margin="0,10,0,0" Height="100"></Image>
+			<StackPanel Grid.Column="1" Orientation="Vertical">
+				<TextBlock Name="TextVersion" TextAlignment="Right">You are using version {{version}}</TextBlock>
+
+				<Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto" Margin="10">
+					<Svg Margin="6,0,6,0" Grid.Column="0" Grid.Row="0" Path="/Assets/Icons/github.svg" Width="18" Height="18"/>
+					<HyperlinkButton Grid.Column="1" Grid.Row="0" Click="OpenLink_Click">https://github.com/thebitculture/ase</HyperlinkButton>
+					<Svg Margin="6,0,6,0" Grid.Column="0" Grid.Row="1" Path="/Assets/Icons/youtube.svg" Width="18" Height="18"/>
+					<HyperlinkButton Grid.Column="1" Grid.Row="1" Click="OpenLink_Click">https://youtube.com/@thebitculture</HyperlinkButton>
+				</Grid>
+			</StackPanel>
+		</Grid>
+
+		<StackPanel Orientation="Vertical" Grid.Row="2" Grid.Column="0">
+			<Separator></Separator>
+			<Button Content="Okay" Margin="0,10,10,0" HorizontalAlignment="Right" Width="80" Name="ButtonOkay" Click="ButtonOkay_Click" />
+		</StackPanel>
+    </Grid>
+
+</Window>

@@ -1,47 +1,105 @@
 ﻿/*
  * 
- * An incomplete Atari ST ACIA emulation functions.
- *
+ * Atari ST ACIA emulation functions.
+ * Some parts ported from Hatari emulator by Thomas Huth and others.
+ * 
  * Official repository 👉 https://github.com/thebitculture/ase
  * 
  */
 
 using static ASE.Config;
-using static ASE.MFP68901;
-using static SDL2.SDL;
+using System.Collections.Generic;
 
 namespace ASE
 {
-    /// <summary>
-    /// Provides constants, state, and methods for emulating the Atari ST's Asynchronous Communication Interface Adapter
-    /// (ACIA), including keyboard, mouse, and joystick input handling.
-    /// </summary>
-    /// <remarks>The ACIA class is intended for use in emulation scenarios where accurate simulation of input
-    /// devices is required. It exposes methods to reset device state, send mouse movement packets, and update joystick
-    /// status, as well as constants and fields representing hardware registers and input mappings. All members are
-    /// static, reflecting the hardware's global nature. Thread safety is not guaranteed; callers should ensure
-    /// appropriate synchronization if accessed from multiple threads.</remarks>
     public static class ACIA
     {
+        private static readonly object _syncLock = new object();
+
         public const byte ACIA_RDRF = 1 << 0;
+        public const byte ACIA_TDRE = 1 << 1;
         public const byte ACIA_IRQ = 1 << 7;  // interrupt request (status)
+        public const byte ACIA_OVRN = 1 << 5; // Overrun Error
+        public const byte ACIA_FE = 1 << 4;   // Framing Error
 
         public static Queue<byte> IkbdRx = new();
 
-        public static byte AciaKbdStatus; // TDRE=1
-        public static byte AciaKbdControl; // ACIA Control register, I'm not using in emulation by now
+        public static byte AciaKbdStatus;   // ACIA Status register
+        public static byte AciaKbdControl;  // ACIA Control register
+
+        // CPU cycles per byte (7812.5 baud @ 8MHz ~= 10240 cycles)
+        private const int CYCLES_PER_BYTE = 10240;
+        private static int _cyclesUntilNextByte = 0;
 
         public static byte JoystickState = 0;
 
-        // Bit 0 up, 1: down, 2: left, 3: right, 7: fire
+        private static List<byte> _commandBuffer = new List<byte>();
+
+        // Enabled or disabled for the ACIA chip
+        // Confirmation pending: after IKBD reset, both mouse and joystick are active?
+        public static bool JoystickEnabled = true;
+        public static bool MouseEnabled = true;
+
+        // for the joy -> bit 0 up, 1: down, 2: left, 3: right, 7: fire
         public const byte JOY_UP = 0x01;
         public const byte JOY_DOWN = 0x02;
         public const byte JOY_LEFT = 0x04;
         public const byte JOY_RIGHT = 0x08;
         public const byte JOY_FIRE = 0x80;
 
-        // Bit 0 = No button, 1 = right, 2 = left
+        // for the mouse -> bit 0 = No button, 1 = right, 2 = left
         public static int _mouseButtons = 0;
+
+        private static byte _latchedData = 0;
+        private static bool _hasLatchedData = false;
+
+        // IKBD command length table (from Hatari ikbd.c KeyboardCommands[])
+        // Key = first byte (command), Value = total bytes expected (including command byte)
+        // Commands not in this table are unknown -> discard immediately.
+        // I copied this behaviour from hatari...
+        private static readonly Dictionary<byte, int> _commandLengths = new Dictionary<byte, int>
+        {
+            { 0x07, 2 },  // SET MOUSE BUTTON ACTION
+            { 0x08, 1 },  // SET RELATIVE MOUSE POSITION REPORTING
+            { 0x09, 5 },  // SET ABSOLUTE MOUSE POSITIONING
+            { 0x0A, 3 },  // SET MOUSE KEYCODE MODE
+            { 0x0B, 3 },  // SET MOUSE THRESHOLD
+            { 0x0C, 3 },  // SET MOUSE SCALE
+            { 0x0D, 1 },  // INTERROGATE MOUSE POSITION
+            { 0x0E, 6 },  // SET INTERNAL MOUSE POSITION (LOAD)
+            { 0x0F, 1 },  // SET Y=0 AT BOTTOM
+            { 0x10, 1 },  // SET Y=0 AT TOP
+            { 0x11, 1 },  // RESUME
+            { 0x12, 1 },  // DISABLE MOUSE
+            { 0x13, 1 },  // PAUSE OUTPUT
+            { 0x14, 1 },  // SET JOYSTICK EVENT REPORTING (auto mode)
+            { 0x15, 1 },  // SET JOYSTICK INTERROGATION MODE
+            { 0x16, 1 },  // JOYSTICK INTERROGATE
+            { 0x17, 2 },  // SET JOYSTICK MONITORING
+            { 0x18, 1 },  // SET FIRE BUTTON MONITORING (duration)
+            { 0x19, 7 },  // SET JOYSTICK KEYCODE MODE
+            { 0x1A, 1 },  // DISABLE JOYSTICKS
+            { 0x1B, 7 },  // SET TIME-OF-DAY CLOCK
+            { 0x1C, 1 },  // INTERROGATE TIME-OF-DAY CLOCK
+            { 0x20, 4 },  // MEMORY LOAD
+            { 0x21, 3 },  // MEMORY READ
+            { 0x22, 3 },  // CONTROLLER EXECUTE
+            { 0x80, 2 },  // RESET
+            // Status inquiry commands (top bit set)
+            { 0x87, 1 },  // REPORT MOUSE BUTTON ACTION
+            { 0x88, 1 },  // REPORT MOUSE MODE (relative)
+            { 0x89, 1 },  // REPORT MOUSE MODE (absolute)
+            { 0x8A, 1 },  // REPORT MOUSE MODE (keycode)
+            { 0x8B, 1 },  // REPORT MOUSE THRESHOLD
+            { 0x8C, 1 },  // REPORT MOUSE SCALE
+            { 0x8F, 1 },  // REPORT MOUSE VERTICAL
+            { 0x90, 1 },  // REPORT MOUSE VERTICAL
+            { 0x92, 1 },  // REPORT MOUSE AVAILABILITY
+            { 0x94, 1 },  // REPORT JOYSTICK MODE
+            { 0x95, 1 },  // REPORT JOYSTICK MODE
+            { 0x99, 1 },  // REPORT JOYSTICK MODE
+            { 0x9A, 1 },  // REPORT JOYSTICK AVAILABILITY
+        };
 
         // Map SDL_Scancode (index) to Atari ST scancode (value)
         public static byte[] AtariScancodes = new byte[256]
@@ -72,7 +130,7 @@ namespace ASE
             0x4D, 0x4B, 0x50, 0x48,
             // 83 - 99 (Keypad: Numlock, /, *, -, +, Enter, 1-9, 0, .)
             0x00, 0x65, 0x66, 0x4A, 0x4E, 0x72,
-            0x6D, 0x6E, 0x6F, 0x6A, 0x6B, 0x6C, 0x67, 0x68, 0x69, 0x70, 
+            0x6D, 0x6E, 0x6F, 0x6A, 0x6B, 0x6C, 0x67, 0x68, 0x69, 0x70,
             0x62, // Mapped numeric . to Atari Help key <- <- This should be configurable (as the rest of keyboard keys)
             // padding 124
             0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,
@@ -93,74 +151,360 @@ namespace ASE
 
         public static void Reset()
         {
-            IkbdRx.Clear();
+            lock (_syncLock)
+            {
+                IkbdRx.Clear();
+                _commandBuffer.Clear();
+                _mouseButtons = 0;
+                JoystickState = 0;
 
-            _mouseButtons = 0;
-            AciaKbdStatus = 0x02;
-            AciaKbdControl = 0;
+                _hasLatchedData = false;
+                _latchedData = 0;
+                _cyclesUntilNextByte = 0;
+
+                AciaKbdStatus = ACIA_TDRE;
+                AciaKbdControl = 0;
+
+                // After IKBD boot, mouse (relative) and joystick (auto) are enabled?
+                JoystickEnabled = true;
+                MouseEnabled = true;
+
+                // MFP IRQ On
+                ASEMain._mfp.SetGPIOBit(4, true);
+            }
+        }
+
+        public static void Sync(int cycles)
+        {
+            lock (_syncLock)
+            {
+                // If there’s already a byte waiting for the CPU to read,
+                // PAUSE TIME. I don’t pull anything else from the queue.
+                // This protects the st from receiving data faster than it can read it.
+                if (_hasLatchedData) return;
+
+                // If there’s nothing in the queue, reset the counter so that the
+                // next incoming byte is instantaneous (start bit).
+                if (IkbdRx.Count == 0)
+                {
+                    _cyclesUntilNextByte = 0;
+                    return;
+                }
+
+                // Hay datos en la cola y el registro está libre. Avanzamos el tiempo.
+                _cyclesUntilNextByte -= cycles;
+
+                if (_cyclesUntilNextByte <= 0)
+                {
+                    // Movemos el dato al registro visible
+                    _latchedData = IkbdRx.Dequeue();
+                    _hasLatchedData = true;
+
+                    // Activamos flags
+                    AciaKbdStatus |= (ACIA_RDRF | ACIA_IRQ);
+
+                    // Disparamos interrupción (Línea Baja = Activa)
+                    ASEMain._mfp.SetGPIOBit(4, false);
+
+                    // Reiniciamos el temporizador para el SIGUIENTE byte
+                    _cyclesUntilNextByte = CYCLES_PER_BYTE;
+                }
+            }
+        }
+
+        public static void WriteControl(byte v)
+        {
+            lock (_syncLock)
+            {
+                AciaKbdControl = v;
+
+                // Master Reset del ACIA (Bits 0 y 1 a '1')
+                // Muchos juegos hacen esto para limpiar el estado antes de empezar.
+                if ((v & 0x03) == 0x03)
+                {
+                    Reset();
+                }
+            }
+        }
+
+        public static byte ReadStatus()
+        {
+            lock (_syncLock)
+            {
+                return AciaKbdStatus;
+            }
+        }
+
+        public static byte ReadData()
+        {
+            lock (_syncLock)
+            {
+                byte result = _latchedData;
+
+                // La CPU ha leído. Liberamos el registro.
+                _hasLatchedData = false;
+
+                // Limpiamos flags
+                AciaKbdStatus &= unchecked((byte)~(ACIA_RDRF | ACIA_IRQ | ACIA_OVRN | ACIA_FE));
+
+                // IMPORTANTE: Subimos la línea de interrupción (Inactiva)
+                ASEMain._mfp.SetGPIOBit(4, true);
+
+                // No tocamos _cyclesUntilNextByte. El método Sync() empezará a contar
+                // en la siguiente iteración del emulador.
+
+                return result;
+            }
+        }
+
+        // *** IKBD Command Processing ***
+        //
+        // Emulates the HD6301 command parser as documented in Hatari
+        //
+        // 1) Each byte received is added to the input buffer.
+        // 2) If the first byte matches a known command, wait until
+        //    all expected parameter bytes have arrived, then execute.
+        // 3) If the first byte is NOT a known command, discard the
+        //    entire buffer immediately (the real IKBD treats it as NOP).
+        // 4) After execution or discard, the buffer is cleared for
+        //    the next command.
+        //
+        // WITHOUT this logic, any unrecognized multi-byte command
+        // (like 0x07 sent by TOS) will jam the buffer and prevent
+        // ALL subsequent commands from being processed.
+        public static void HandleCommand(byte b)
+        {
+            lock (_syncLock)
+            {
+                _commandBuffer.Add(b);
+
+                byte cmd = _commandBuffer[0];
+
+                // Is this a known command?
+                if (!_commandLengths.TryGetValue(cmd, out int expectedLength))
+                {
+                    // Unknown command -> discard immediately (IKBD treats as NOP)
+                    _commandBuffer.Clear();
+                    return;
+                }
+
+                // ...Do we have all the bytes for this command?...
+                if (_commandBuffer.Count < expectedLength)
+                {
+                    // Still waiting for more parameter bytes
+                    return;
+                }
+
+                // ...Command is complete? execute it
+                ExecuteCommand(cmd);
+
+                // Clear buffer for next command
+                _commandBuffer.Clear();
+            }
+        }
+
+        private static void ExecuteCommand(byte cmd)
+        {
+            // Already inside _syncLock from HandleCommand
+
+            switch (cmd)
+            {
+                case 0x80: // RESET (0x80, 0x01)
+                    if (_commandBuffer[1] == 0x01)
+                    {
+                        IkbdRx.Clear();
+                        JoystickState = 0;
+
+                        _hasLatchedData = false;
+                        _cyclesUntilNextByte = 0;
+
+                        AciaKbdStatus &= unchecked((byte)~(ACIA_RDRF | ACIA_IRQ));
+                        ASEMain._mfp.SetGPIOBit(4, true);
+
+                        // After reset, both mouse and joystick are active
+                        // (matches Hatari's IKBD_Boot_ROM)
+                        MouseEnabled = true;
+                        JoystickEnabled = true;
+
+                        PushIkbd_Internal(0xF0);
+                        PushIkbd_Internal(0xF1);
+                    }
+                    // else: 0x80 followed by non-0x01 -> ignored
+                    break;
+
+                // Mouse mode commands
+
+                case 0x08: // SET RELATIVE MOUSE POSITION REPORTING
+                    MouseEnabled = true;
+                    break;
+
+                case 0x09: // SET ABSOLUTE MOUSE POSITIONING
+                    MouseEnabled = true;
+                    // Parameters: XMSB, XLSB, YMSB, YLSB (ignored for now)
+                    break;
+
+                case 0x0A: // SET MOUSE KEYCODE MODE
+                    MouseEnabled = true;
+                    break;
+
+                case 0x07: // SET MOUSE BUTTON ACTION
+                case 0x0B: // SET MOUSE THRESHOLD
+                case 0x0C: // SET MOUSE SCALE
+                case 0x0E: // LOAD MOUSE POSITION
+                case 0x0D: // INTERROGATE MOUSE POSITION
+                case 0x0F: // SET Y=0 AT BOTTOM
+                case 0x10: // SET Y=0 AT TOP
+                    break;
+                case 0x12: // DISABLE MOUSE
+                    MouseEnabled = false;
+                    break;
+
+                // Keyboard commands
+
+                case 0x11: // RESUME (unpause output)
+                    break;
+
+                case 0x13: // PAUSE OUTPUT
+                    break;
+
+                // Joystick mode commands
+
+                case 0x14: // SET JOYSTICK EVENT REPORTING (auto mode)
+                    JoystickEnabled = true;
+                    MouseEnabled = false;
+                    // Send immediate joystick
+                    PushIkbd_Internal(0xFF);
+                    PushIkbd_Internal(JoystickState);
+                    break;
+
+                case 0x15: // SET JOYSTICK INTERROGATION MODE (stop auto)
+                    JoystickEnabled = false;
+                    break;
+
+                case 0x16: // JOYSTICK INTERROGATE
+                    PushIkbd_Internal(0xFD);
+                    PushIkbd_Internal(0x00);           // Joy 0 (mouse port, normally 0)
+                    PushIkbd_Internal(JoystickState);  // Joy 1
+                    break;
+
+                case 0x17: // SET JOYSTICK MONITORING
+                case 0x18: // SET FIRE BUTTON MONITORING
+                case 0x19: // SET JOYSTICK KEYCODE MODE
+                    break;
+
+                case 0x1A: // DISABLE JOYSTICKS
+                    JoystickEnabled = false;
+                    break;
+
+                // Clock commands
+
+                case 0x1B: // SET TIME-OF-DAY CLOCK
+                    break;
+
+                case 0x1C: // INTERROGATE TIME-OF-DAY CLOCK, I dont know how to implement
+                    PushIkbd_Internal(0xFC);
+                    PushIkbd_Internal(0); // YY
+                    PushIkbd_Internal(0); // MM
+                    PushIkbd_Internal(0); // DD
+                    PushIkbd_Internal(0); // hh
+                    PushIkbd_Internal(0); // mm
+                    PushIkbd_Internal(0); // ss
+                    break;
+
+                // Memory commands
+
+                case 0x20: // MEMORY LOAD
+                case 0x21: // MEMORY READ
+                case 0x22: // CONTROLLER EXECUTE
+                    break;
+
+                // Status inquiry commands
+
+                case 0x87:
+                case 0x88:
+                case 0x89:
+                case 0x8A:
+                case 0x8B:
+                case 0x8C:
+                case 0x8F:
+                case 0x90:
+                case 0x92:
+                case 0x94:
+                case 0x95:
+                case 0x99:
+                case 0x9A:
+                    break;
+            }
         }
 
         public static void SendMousePacket(int dx, int dy)
         {
-            dx = dx / ConfigOptions.RunninConfig.MouseXSensitivity;
-            dy = dy / ConfigOptions.RunninConfig.MouseYSensitivity;
+            lock (_syncLock)
+            {
+                if (!MouseEnabled) return;
 
-            // El protocolo IKBD espera valores entre -128 y 127
-            if (dx < -127) dx = -127;
-            if (dx > 127) dx = 127;
-            if (dy < -127) dy = -127;
-            if (dy > 127) dy = 127;
+                dx = dx / ConfigOptions.RunninConfig.MouseXSensitivity;
+                dy = dy / ConfigOptions.RunninConfig.MouseYSensitivity;
+                if (dx < -127) dx = -127; if (dx > 127) dx = 127;
+                if (dy < -127) dy = -127; if (dy > 127) dy = 127;
 
-            byte header = (byte)(0xF8 | _mouseButtons); // 0xF8 mouse button
-
-            // Transmit
-            PushIkbd(header);
-            PushIkbd((byte)dx);
-            PushIkbd((byte)dy);
+                PushIkbd_Internal((byte)(0xF8 | _mouseButtons));
+                PushIkbd_Internal((byte)dx);
+                PushIkbd_Internal((byte)dy);
+            }
         }
 
         public static void PushIkbd(byte b)
         {
+            lock (_syncLock)
+            {
+                PushIkbd_Internal(b);
+            }
+        }
+
+        private static void PushIkbd_Internal(byte b)
+        {
             IkbdRx.Enqueue(b);
-
-            // $FFFC02 should holds the last scancode
-            Program._mem.Write8(0xFFFC02, (byte)((b >> 7 == 1) ? 0 : b));
-
-            // Status ACIA: data ready
-            AciaKbdStatus |= (ACIA_RDRF | ACIA_IRQ);
-            Program._mfp.SetGPIOBit(4, false);
         }
 
         public static void UpdateJoystick(byte mask, bool pressed)
         {
-            byte oldState = JoystickState;
-
-            // HACK !!!
-            // Some games are not reading the trigger on the joystick in the standard way,
-            // and I have to remap it as the right mouse button.
-            // I assume this isn’t correct and that I should look into it further.
-
-            if (mask == JOY_FIRE)
+            lock (_syncLock)
             {
-                if (pressed)
-                    _mouseButtons |= 0x01; // Bit 0
-                else
-                    _mouseButtons &= ~0x01; // Apagar Bit 0
+                // *** Fire button ***
+                // IKBD routes fire differently depending on mode:
+                //
+                // - Mouse active: fire -> right mouse button (in mouse packet header)
+                //                 The joystick packet does NOT include fire.
+                //
+                // - Mouse OFF, joystick ON: fire -> bit 7 in joystick packet
+                //
+                // I’m keeping both modes because some games don’t work depending on
+                // the method they use to read the joystick fire button.
+                //
+                if (mask == JOY_FIRE)
+                {
+                    // Fire -> mouse right button (this is what the desktop and most
+                    // games that use mouse expect)
+                    if (pressed) 
+                        _mouseButtons |= 0x01; 
+                    else 
+                        _mouseButtons &= ~0x01;
 
-                SendMousePacket(0, 0);
-            }
-            
-            if (pressed)
-                JoystickState |= mask;
-            else
-                JoystickState &= (byte)~mask;
-            
-            // Send only if the state changed
-            if (JoystickState != oldState)
-            {
-                // Paquete Joystick 1: 0xFF + Estado
-                PushIkbd(0xFF);
-                PushIkbd(JoystickState);
+                    PushIkbd_Internal((byte)(0xF8 | _mouseButtons));
+                    PushIkbd_Internal(0);
+                    PushIkbd_Internal(0);
+                }
+
+                // Directions (and fire when mouse is off)
+                byte oldState = JoystickState;
+                if (pressed) JoystickState |= mask; else JoystickState &= (byte)~mask;
+
+                if (JoystickEnabled && JoystickState != oldState)
+                {
+                    PushIkbd_Internal(0xFF);
+                    PushIkbd_Internal(JoystickState);
+                }
             }
         }
 

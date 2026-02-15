@@ -1,0 +1,40 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:svg="clr-namespace:Avalonia.Svg;assembly=Svg.Controls.Avalonia"
+             x:Class="ASE.App">
+  
+  <Application.Styles>
+    <FluentTheme/>
+
+    <!-- SVG -->
+    <Style Selector="Svg">
+      <Setter Property="Svg.Css" Value="{DynamicResource IconCssNormal}"/>
+    </Style>
+    <Style Selector=":disabled Svg">
+      <Setter Property="Svg.Css" Value="{DynamicResource IconCssDisabled}"/>
+    </Style>
+    <Style Selector="TabItem:selected Svg">
+      <Setter Property="Svg.Css" Value="{DynamicResource IconCssSelected}"/>
+    </Style>
+  </Application.Styles>
+
+  <Application.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.ThemeDictionaries>
+
+        <ResourceDictionary x:Key="Light">
+          <x:String x:Key="IconCssNormal">* { fill: #111; stroke: #111; }</x:String>
+          <x:String x:Key="IconCssDisabled">* { fill: #888; stroke: #888; }</x:String>
+          <x:String x:Key="IconCssSelected">* { fill: #0b5ed7; stroke: #0b5ed7; }</x:String>
+        </ResourceDictionary>
+
+        <ResourceDictionary x:Key="Dark">
+          <x:String x:Key="IconCssNormal">* { fill: #f2f2f2; stroke: #f2f2f2; }</x:String>
+          <x:String x:Key="IconCssDisabled">* { fill: #777; stroke: #777; }</x:String>
+          <x:String x:Key="IconCssSelected">* { fill: #4dabf7; stroke: #4dabf7; }</x:String>
+        </ResourceDictionary>
+
+      </ResourceDictionary.ThemeDictionaries>
+    </ResourceDictionary>
+  </Application.Resources>
+</Application>

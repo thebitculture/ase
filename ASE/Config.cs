@@ -26,6 +26,21 @@ namespace ASE
         /// serves as the default configuration accessible throughout the application.</remarks>
         public class ConfigOptions
         {
+            public enum STModels
+            {
+                ST = 0,
+                Mega = 1,
+                STE = 2
+            }
+
+            public enum RAMConfigurations
+            {
+                RAM_512KB = 0,
+                RAM_1MB = 1,
+                RAM_2MB = 2,
+                RAM_4MB = 3,
+            }
+
             /// <summary>
             /// Holds the active configuration
             /// </summary>
@@ -34,42 +49,53 @@ namespace ASE
             public string TOSPath { get; set; } = "tos.rom";
 
             // Hardware flags
+            public STModels STModel { get; set; } = STModels.ST; // Only STFM/F by now
+            public RAMConfigurations RAMConfiguration { get; set; } = RAMConfigurations.RAM_1MB;
             public  bool MaxSpeed { get; set; } = false;
             public string FloppyImagePath { get; set; } = "";
             public int MouseXSensitivity { get; set; } = 2;
             public int MouseYSensitivity { get; set; } = 2;
             public int SampleRate { get; set; } = 44100;
 
+            // Screen flags
+            public float Curvature { get; set; } = 0.01f;
+            public float Vignette { get; set; } = 0.18f;
+            public float Scanline { get; set; } = 1.0f;
+            public float ChromAb { get; set; } = 0.25f;
+            public float Bloom { get; set; } = 0.22f;
+            public float Mask { get; set; } = 0.50f;
+            public float Noise { get; set; } = 0.25f;
+            
             // Debug flags
             [JsonIgnore(Condition = JsonIgnoreCondition.WhenWriting)]
-            public bool DiskDump { get; set; } = false;  // Not exposed, only for testing
+            public bool DiskDump { get; set; } = false;  // Not exposed, only for my testing
             public bool DebugMode { get; set; } = false;
         }
 
-        /// <summary>
-        /// Loads the emulator configuration from command-line arguments and a configuration file.
-        /// </summary>
-        /// <remarks>If the configuration file 'config.json' does not exist, a default configuration is
-        /// created. Command-line arguments can override settings in the configuration file. Supported options include
-        /// specifying the TOS ROM path, enabling debug mode, setting maximum speed, providing a floppy image, adjusting
-        /// mouse sensitivity, and loading an alternative configuration file.</remarks>
-        /// <param name="args">An array of command-line arguments that specify configuration options, such as ROM file paths, debug mode,
-        /// and mouse sensitivity settings.</param>
+        public static string Version = "";
+
+        const string AppName = "ASE";
+        const string DefaultConfigFileName = "config.json";
+
+        string AppDataConfigPath;
+        string PathToDefaultConfig;
+
+
         public void LoadConfig(string[] args)
         {
-            var exePath = Environment.ProcessPath!;
-            var fileVersionInfo = FileVersionInfo.GetVersionInfo(exePath);
+            AppDataConfigPath = GetAppDefaultConfigsFilePath();
+            PathToDefaultConfig = Path.Combine(AppDataConfigPath, DefaultConfigFileName);
 
-            string fileVersion = fileVersionInfo.FileVersion;
+            Version = Assembly.GetEntryAssembly()?.GetName().Version?.ToString();
 
-            ColoredConsole.WriteLine($"[[white]]ATARI SYSTEM EMULATOR[[/white]] v{fileVersion} - The Bit Culture {DateTime.Now.Year}");
+            ColoredConsole.WriteLine($"[[white]]ATARI SYSTEM EMULATOR[[/white]] v{Version} - The Bit Culture {DateTime.Now.Year}");
             ColoredConsole.WriteLine("👉 [[magenta]]https://github.com/thebitculture/ase[[/magenta]]");
             ColoredConsole.WriteLine("👉 [[magenta]]https://youtube.com/@thebitculture?si=2s4M5Iu4QbIdq_hn[[/magenta]]" + Environment.NewLine);
 
-            if (File.Exists("config.json"))
-                LoadJsonConfig("config.json");
+            if (File.Exists(PathToDefaultConfig))
+                LoadJsonConfig(PathToDefaultConfig);
             else
-                DumpJsonConfig("config.json");  // Creates default configuration
+                DumpJsonConfig(PathToDefaultConfig);  // Creates default configuration
 
             foreach (string arg in args)
             {
@@ -105,13 +131,17 @@ namespace ASE
                         }
                         else
                         {
-                            Console.WriteLine("Invalid mouse sensitivity format. Use --mouse-sensitivity=X,Y where X and Y are integers.");
-                            Environment.Exit(1);
+                            ColoredConsole.WriteLine("Invalid mouse sensitivity format. Use --mouse-sensitivity=X,Y where X and Y are integers.");
+                            ColoredConsole.WriteLine("Example: --mouse-sensitivity=3,3");
+                            ColoredConsole.WriteLine($"Using default sensitivity [[cyan]]{ConfigOptions.RunninConfig.MouseXSensitivity},{ConfigOptions.RunninConfig.MouseYSensitivity}[[/cyan]].");
                         }
                         break;
                     case "--altconfig":
                         if (parts.Length > 1)
+                        {
+                            ColoredConsole.WriteLine($"Config override [[cyan]]{parts[1]}[[/cyan]]!");
                             LoadJsonConfig(parts[1]);
+                        }
                         break;
 
                     default:
@@ -130,16 +160,24 @@ namespace ASE
             }
         }
 
-        /// <summary>
-        /// Loads application configuration settings from a specified JSON file and applies them to the global
-        /// configuration.
-        /// </summary>
-        /// <remarks>If the configuration file does not exist or cannot be parsed, an error message is
-        /// displayed and the application terminates. The method updates the global configuration options based on the
-        /// contents of the file.</remarks>
-        /// <param name="ConfigFile">The path to the JSON configuration file to load. The file must exist and be in a valid JSON format.</param>
-        void LoadJsonConfig(string ConfigFile)
+        public static string GetAppDefaultConfigsFilePath()
         {
+            string basePath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            string appFolderPath = Path.Combine(basePath, AppName);
+
+            if (!Directory.Exists(appFolderPath))
+            {
+                Directory.CreateDirectory(appFolderPath);
+            }
+
+            return appFolderPath;
+        }
+
+        public void LoadJsonConfig(string ConfigFile = "")
+        {
+            if(string.IsNullOrEmpty(ConfigFile))
+                ConfigFile = PathToDefaultConfig;
+
             try
             {
                 if (File.Exists(ConfigFile))
@@ -156,7 +194,7 @@ namespace ASE
 
                     if (cfg == null)
                     {
-                        Console.WriteLine($"ERROR: Could not parse config file {ConfigFile}.");
+                        ColoredConsole.WriteLine($"ERROR: Could not parse config file [[red]]{ConfigFile}[[/red]].");
                         Environment.Exit(1);
                     }
 
@@ -169,23 +207,19 @@ namespace ASE
             }
             catch 
             {
-                Console.WriteLine($"ERROR: Could not configure using {ConfigFile} config file.");
+                ColoredConsole.WriteLine($"ERROR: Could not configure using [[red]]{ConfigFile}[[/red]] config file.");
                 Environment.Exit(1);
             }
 
-            Console.WriteLine($"ERROR: Config file {ConfigFile} does not exists.");
+            ColoredConsole.WriteLine($"ERROR: Config file [[red]]{ConfigFile}[[/red]] does not exists.");
             Environment.Exit(1);
         }
 
-        /// <summary>
-        /// Serializes the current configuration options to a JSON file specified by the ConfigFile parameter.
-        /// </summary>
-        /// <remarks>If an error occurs during the file writing process, an error message is displayed,
-        /// and the application exits with a non-zero status.</remarks>
-        /// <param name="ConfigFile">The path to the file where the JSON configuration will be written. This file will be created or overwritten
-        /// if it already exists.</param>
-        void DumpJsonConfig(string ConfigFile)
+        public void DumpJsonConfig(string ConfigFile = "")
         {
+            if (string.IsNullOrEmpty(ConfigFile))
+                ConfigFile = PathToDefaultConfig;
+
             try
             {
                 JsonSerializerOptions options = new JsonSerializerOptions
@@ -199,7 +233,7 @@ namespace ASE
             }
             catch
             {
-                Console.WriteLine($"ERROR: Cannot create {ConfigFile} config file.");
+                ColoredConsole.WriteLine($"ERROR: Cannot create [[red]]{ConfigFile}[[//red]] config file.");
                 Environment.Exit(1);
             }
         }

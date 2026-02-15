@@ -1,0 +1,70 @@
+<Window xmlns="https://github.com/avaloniaui"
+		xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+		xmlns:local="clr-namespace:ASE"
+		x:Class="ASE.MainWindow"
+		Title="Atari System Emulator"
+		WindowStartupLocation="CenterScreen"
+		UseLayoutRounding="True"
+		Width="800" Height="600">
+
+	<DockPanel LastChildFill="True">
+		<Menu DockPanel.Dock="Top" Name="MainMenu">
+
+			<MenuItem Header="_File">
+				<MenuItem Header="_Open disk image" Click="OnOpenImageClick" />
+				<MenuItem Header="_Ejec disk image" Click="OnEjecImageClick" Name="ItemMenuEjecDisk" IsEnabled="False" />
+				<Separator/>
+				<MenuItem Header="_Quit" Click="OnExitClick"/>
+			</MenuItem>
+
+			<MenuItem Header="_Emulation">
+				<MenuItem Header="_Configuration" Click="OnConfigurationClick" />
+				<Separator/>
+				<MenuItem Header="_Reset" Click="OnResetClick" />
+			</MenuItem>
+
+			<MenuItem Header="_Help">
+				<MenuItem Header="_About ASE..." Click="OnAboutClick" />
+			</MenuItem>
+
+		</Menu>
+
+		<Border DockPanel.Dock="Bottom" Name="BottomStatusBar"
+				Background="#202020"
+				Padding="10,6"
+				BorderBrush="#404040"
+				BorderThickness="0,1,0,0">
+			<DockPanel LastChildFill="False">
+				<Image Name="DriveLedImage" 
+				       Source="./Assets/drive_led_off.png" 
+				       DockPanel.Dock="Right" 
+				       Height="16" />
+       
+				<TextBlock Name="TextBlockStatusBar" VerticalAlignment="Center">Press F12 to capture/release input.
+					<TextBlock.Styles>
+						<Style Selector="TextBlock.fadeOut">
+							<Style.Animations>
+								<Animation Duration="0:0:1" FillMode="Forward">
+									<KeyFrame Cue="0%">
+										<Setter Property="Opacity" Value="1.0"/>
+									</KeyFrame>
+									<KeyFrame Cue="100%">
+										<Setter Property="Opacity" Value="0.0"/>
+									</KeyFrame>
+								</Animation>
+							</Style.Animations>
+						</Style>
+					</TextBlock.Styles>
+				</TextBlock>
+			</DockPanel>
+		</Border>
+
+		<Grid>
+			<local:GLControl Name="GlDisplay" />
+			<Border x:Name="GlInputOverlay"
+					Background="Transparent"
+					ZIndex="10"/>
+		</Grid>
+
+	</DockPanel>
+</Window>

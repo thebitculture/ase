@@ -3,8 +3,6 @@
  * Memory control functions.
  * Acts as GLUE and MMU in the Atari ST.
  * 
- * It's a mess!
- * 
  * Official repository 👉 https://github.com/thebitculture/ase
  * 
  */
@@ -31,7 +29,7 @@ namespace ASE
 
             public const uint ST_SCRHIGHADDR = 0xFF8201;   // Screen address (high)
             public const uint ST_SCRMIDADDR = 0xFF8203;    // Screen address (mid)
-            public const uint ST_SCRLOWADDR = 0xFF8203;    // Screen address (low, STE)
+            public const uint ST_SCRLOWADDR = 0xFF8203;    // Screen address (low, this register is for the STE)
             public const uint ST_HIVADRPOINT = 0xFF8205;   // Video address pointer (high)
             public const uint ST_MIVADRPOINT = 0xFF8207;   // Video address pointer (mid)
             public const uint ST_LOVADRPOINT = 0xFF8209;   // Video address pointer (low)
@@ -46,13 +44,15 @@ namespace ASE
             public const uint ST_ACIADATA = 0xFFFC02;      // Keyboard ACIA data
         }
 
-        public const int RamSize = 1 * 1024 * 1024;         // 1MB
-        public const uint TosBase = 0xFC0000;               // ROM
-        public const uint PortsBase = 0xFF8000;             // I/O
-        public const int TosSize = 192 * 1024;
+        public int TosSize = 192 * 1024;
+        public int RamSize = 1 * 1024 * 1024;
+        public uint TosBase = 0xFC0000;
+        public const uint PortsBase = 0xFF8000;
+
+        byte MMUConfig = 0;
 
         public byte[] RAM;   // 0x000000..0x0FFFFF
-        public byte[] ROM;   // 192KB, 0xFC0000
+        public byte[] ROM;
         public byte[] Ports; // I/O adresses, starting at 0xFF8000 (PortsBase)
 
         public Memory()
@@ -66,20 +66,60 @@ namespace ASE
             {
                 string ErrorMessage = $"TOS file [[red]]{ConfigOptions.RunninConfig.TOSPath}[[/red]] not found.";
                 ColoredConsole.WriteLine(ErrorMessage);
-                Environment.Exit(0);
+                ASEMain.Shutdown();
+                return;
             }
 
-            if (ROM.Length != TosSize)
-                throw new ArgumentException($"ASE requires TOS 1.0x.");
+            if (ROM.Length == 192 * 1024)
+            { 
+                TosSize = 192 * 1024;
+                TosBase = 0xFC0000;
+            }
+            else if (ROM.Length == 256 * 1024)
+            {
+                TosSize = 256 * 1024;
+                TosBase = 0xE00000;
+            }
+            else
+            {
+                ColoredConsole.WriteLine($"Error: TOS size [[]]{ROM.Length}[[/yellow]] bytes is unknow.");
+                ASEMain.Shutdown();
+                return;
+            }
 
-            RAM = new byte[RamSize];
             Ports = new byte[(0xffffff - 0xff8000) + 1];
 
             // $FF8001 MMU memory configuration
             // bits 0-1 bank 0, bits 2-3 bank 1
-            // 2 512KB SIMMs -> %01 Bank1, %01 Bank0
-            Ports[0x0001] = 5;
-            
+            // --------------------------------
+            // This is not working as expected, memory is not propertly detected on TOS.
+            // I have to study how it works in more detail and maybe implement a more complete MMU emulation,
+            // but for now I just set the value that corresponds to the selected RAM size and hope for the best.
+
+            switch (Config.ConfigOptions.RunninConfig.RAMConfiguration)
+            { 
+                case ConfigOptions.RAMConfigurations.RAM_512KB:
+                    MMUConfig = 4; // 01 00 -> 512KB
+                    RamSize = 512 * 1024;
+                    RAM = new byte[RamSize];
+                    break;
+                case ConfigOptions.RAMConfigurations.RAM_1MB:
+                    MMUConfig = 5; // 01 01 -> 1MB
+                    RamSize = 1024 * 1024;
+                    RAM = new byte[RamSize];
+                    break;
+                case ConfigOptions.RAMConfigurations.RAM_2MB:
+                    MMUConfig = 8; // 10 00 -> 2MB
+                    RamSize = 2048 * 1024;
+                    RAM = new byte[RamSize];
+                    break;
+                case ConfigOptions.RAMConfigurations.RAM_4MB:
+                    MMUConfig = 10; // 10 10 -> 4MB
+                    RamSize = 4096 * 1024;
+                    RAM = new byte[RamSize];
+                    break;
+            }
+
             // Color, PAL
             Ports[0x260] = 0;
             Ports[0x20a] = 2;
@@ -90,8 +130,7 @@ namespace ASE
         /// </summary>
         /// <remarks>This method handles address mapping for RAM, ROM, and multiple I/O devices, including
         /// special handling for certain hardware registers. For unimplemented or unsupported addresses, the method
-        /// returns 0xFF. Some address ranges may trigger hardware exceptions or log debug messages if accessed in debug
-        /// mode.</remarks>
+        /// returns 0xFF. Some address ranges may trigger internal hardware exceptions captured by Moira.</remarks>
         /// <param name="addr">The 24-bit memory address from which to read a byte. The address determines whether the value is read from
         /// RAM, ROM, or an I/O port. 32 bit addresses will be trimmed to 24 bits addresses.</param>
         /// <returns>The byte value read from the specified address. Returns 0xFF if the address is invalid or not implemented.</returns>
@@ -100,11 +139,10 @@ namespace ASE
             addr &= 0xFFFFFFu;  // 24 bits addressing
 
             // Vector mirror at 0x000000
-            // During startup, the ST remaps the first 8 bytes of RAM to the ROM
+            // The ST remaps the first 8 bytes of RAM to the ROM
             if (addr < 0x08)
                 return ROM[(int)addr];
 
-            // RAM
             if (addr < RamSize)
                 return RAM[(int)addr];
 
@@ -124,12 +162,13 @@ namespace ASE
                     if (ConfigOptions.RunninConfig.DebugMode)
                         ColoredConsole.WriteLine("Trying to read STe not implemented registers.. ignored!");
 
+                    CPU._moira.TriggerBusError(addr, false);
                     return 0xFF;
                 }
 
                 // YM2149
                 if (addr == STPortAdress.ST_PSGREADSELECT)
-                    return Program._ym.PSGRegisterData();
+                    return ASEMain._ym.PSGRegisterData();
                 if (addr == STPortAdress.ST_PSGWRITEDATA)
                     return 0xFF;
                 
@@ -137,90 +176,60 @@ namespace ASE
                 if (addr >= 0xFF8604 && addr <= 0xFF860D)
                     return WD1772.ReadByte(addr);
 
-                /***
-                 * Blitter
-                 * 
-                 * TOS tries to detect the blitter by writing to its registers and expecting a bus error if it is not present.
-                 * Moira cannot force this exception and will not update its state until all pending cycles finish, so ASE triggers a runtime exception instead.
-                 * However, this exception only propagates when Moira is running and compiled in Windows with Microsoft's compilers, so it does not work on Mac,
-                 * I have not tested it on Linux. For now, Mac users can only run the emulator with TOS 1.0 until blitter emulation or proper exception
-                 * handling is implemented.
-                 ***/
-
+                 // Blitter:
+                 // TOS tries to detect the blitter by writing to its registers and expecting a bus error if it is not present.
                 if (addr >= 0xFF8A00 && addr <= 0xFF8A3C)
                 {
                     if (ConfigOptions.RunninConfig.DebugMode)
                         ColoredConsole.WriteLine($"Trying to read a byte from blitter at [[red]]${addr:X8}[[/red]], but it's not emulated yet.");
 
-                    // 
-                    CPU.TriggerBusError(addr, true);
+                    CPU._moira.TriggerBusError(addr, false);
                     return 0xFF;
                 }
 
-                if (addr < MFP68901.MFP_BASE)
-                {
-                    return Ports[addr - PortsBase];
-                }
+                // ACIA - Keyboard and Joystick ports
+                if (addr == STPortAdress.ST_ACIACMD)
+                    return ACIA.ReadStatus();
 
+                if (addr == STPortAdress.ST_ACIADATA)
+                    return ACIA.ReadData();
+
+                // Any other port below MFP registers
+                if (addr < MFP68901.MFP_BASE)
+                    return Ports[addr - PortsBase];
+
+                // treatment for MFP registers
                 if (addr >= MFP68901.MFP_BASE && addr <= MFP68901.MFP_BASE + 0x26)
                 {
                     uint offset = addr - MFP68901.MFP_BASE;
 
                     switch (offset)
                     {
-                        case 0x01: return Program._mfp.GPIP;
-                        case 0x03: return Program._mfp.AER;
-                        case 0x05: return Program._mfp.DDR;
-                        case 0x07: return Program._mfp.IERA;
-                        case 0x09: return Program._mfp.IERB;
-                        case 0x0B: return Program._mfp.IPRA;
-                        case 0x0D: return Program._mfp.IPRB;
-                        case 0x0F: return Program._mfp.ISRA;
-                        case 0x11: return Program._mfp.ISRB;
-                        case 0x13: return Program._mfp.IMRA;
-                        case 0x15: return Program._mfp.IMRB;
-                        case 0x17: return Program._mfp.VR;
-                        case 0x19: return Program._mfp.TACR;
-                        case 0x1B: return Program._mfp.TBCR;
-                        case 0x1D: return Program._mfp.TCDCR;
-                        case 0x1F: return (byte)Program._mfp.timerACounter;
-                        case 0x21: return (byte)Program._mfp.timerBCounter;
-                        case 0x23: return (byte)Program._mfp.timerCCounter;
-                        case 0x25: return (byte)Program._mfp.timerDCounter;
+                        case 0x01: return ASEMain._mfp.GPIP;
+                        case 0x03: return ASEMain._mfp.AER;
+                        case 0x05: return ASEMain._mfp.DDR;
+                        case 0x07: return ASEMain._mfp.IERA;
+                        case 0x09: return ASEMain._mfp.IERB;
+                        case 0x0B: return ASEMain._mfp.IPRA;
+                        case 0x0D: return ASEMain._mfp.IPRB;
+                        case 0x0F: return ASEMain._mfp.ISRA;
+                        case 0x11: return ASEMain._mfp.ISRB;
+                        case 0x13: return ASEMain._mfp.IMRA;
+                        case 0x15: return ASEMain._mfp.IMRB;
+                        case 0x17: return ASEMain._mfp.VR;
+                        case 0x19: return ASEMain._mfp.TACR;
+                        case 0x1B: return ASEMain._mfp.TBCR;
+                        case 0x1D: return ASEMain._mfp.TCDCR;
+                        case 0x1F: return (byte)ASEMain._mfp.timerACounter;
+                        case 0x21: return (byte)ASEMain._mfp.timerBCounter;
+                        case 0x23: return (byte)ASEMain._mfp.timerCCounter;
+                        case 0x25: return (byte)ASEMain._mfp.timerDCounter;
                         default:
                             // this should throw a bus error
                             return Ports[addr - PortsBase];
                     }
                 }
 
-                // ACIA - Keyboard and Joystick ports
-                if (addr == STPortAdress.ST_ACIACMD)
-                    return ACIA.AciaKbdStatus;
-
-                if (addr == STPortAdress.ST_ACIADATA)
-                {
-                    if (ACIA.IkbdRx.Count == 0)
-                    {
-                        // Returns the last loaded scancode
-                        return Ports[addr - PortsBase];
-                    }
-
-                    byte v = ACIA.IkbdRx.Dequeue();
-
-                    if (ACIA.IkbdRx.Count == 0)
-                    {
-                        ACIA.AciaKbdStatus &= unchecked((byte)~(ACIA.ACIA_RDRF | ACIA.ACIA_IRQ));
-                        Program._mfp.SetGPIOBit(4, true);
-                    }
-                    else
-                    {
-                        // force new read.. that's right?
-                        Program._mfp.SetGPIOBit(4, true);
-                        Program._mfp.SetGPIOBit(4, false);
-                    }
-
-                    return v;
-                }
             }
 
             return 0xFF;
@@ -260,13 +269,15 @@ namespace ASE
                     if (ConfigOptions.RunninConfig.DebugMode)
                         ColoredConsole.WriteLine($"Trying to read a word from blitter at [[red]]${addr:X8}[[/red]], but it's not emulated yet.");
 
-                    CPU.TriggerBusError(addr, true);
+                    CPU._moira.TriggerBusError(addr, false);
                     return 0xFFFF; // dummy return
                 }
 
+                // Any other I/O port is read without special treatment.
                 return BigEndian.Read16(addr);
             }
 
+            // out of the bounds of the RAM, ROM or I/O ports, returns waste
             return 0xFFFF;
         }
 
@@ -318,7 +329,7 @@ namespace ASE
             // RAM
             if (addr < RamSize)
             {
-                RAM[(int)addr] = v;
+                RAM[addr] = v;
                 return;
             }
 
@@ -333,12 +344,12 @@ namespace ASE
                 // Chip de sonido YM2149
                 if (addr == STPortAdress.ST_PSGREADSELECT)
                 {
-                    Program._ym.PSGRegisterSelect(v);
+                    ASEMain._ym.PSGRegisterSelect(v);
                     return;
                 }
                 if (addr == STPortAdress.ST_PSGWRITEDATA)
                 {
-                    Program._ym.PSGWriteRegister(v);
+                    ASEMain._ym.PSGWriteRegister(v);
                     return;
                 }
 
@@ -350,10 +361,16 @@ namespace ASE
                     return;
                 }
 
-                // Keyboard
+                // ACIA
                 if (addr == STPortAdress.ST_ACIACMD)
                 {
-                    ACIA.AciaKbdControl = v;
+                    ACIA.WriteControl(v);
+                    return;
+                }
+                
+                if (addr == STPortAdress.ST_ACIADATA)
+                {
+                    ACIA.HandleCommand(v);
                     return;
                 }
 
@@ -361,7 +378,7 @@ namespace ASE
                 if (addr >= 0xFF8A00 && addr <= 0xFF8A3C)
                 {
                     ColoredConsole.WriteLine($"Trying to write a byte to blitter at [[red]]${addr:X8}[[/red]], but it's not emulated yet.");
-                    CPU.TriggerBusError(addr, false);
+                    CPU._moira.TriggerBusError(addr, true);
                     return;
                 }
 
@@ -370,132 +387,129 @@ namespace ASE
                 // This is a complete mess.. fixme later
                 switch (offset)
                 {
-                    case 0x03: Program._mfp.AER = v; break;
-                    case 0x05: Program._mfp.DDR = v; break;
+                    case 0x03: ASEMain._mfp.AER = v; break;
+                    case 0x05: ASEMain._mfp.DDR = v; break;
                     case 0x07: // IERA
-                        Program._mfp.IERA = v;
-                        Program._mfp.UpdateIRQ();
+                        ASEMain._mfp.IERA = v;
+                        ASEMain._mfp.UpdateIRQ();
                         break;
 
                     case 0x09: // IERB
-                        Program._mfp.IERB = v;
-                        Program._mfp.UpdateIRQ();
+                        ASEMain._mfp.IERB = v;
+                        ASEMain._mfp.UpdateIRQ();
                         break;
 
                     case 0x0B: // IPRA
-                        Program._mfp.IPRA &= (byte)~v; // Escribir 1 limpia el bit
-                        Program._mfp.UpdateIRQ();
+                        ASEMain._mfp.IPRA &= (byte)~v; // Escribir 1 limpia el bit
+                        ASEMain._mfp.UpdateIRQ();
                         break;
 
                     case 0x0D: // IPRB
-                        Program._mfp.IPRB &= (byte)~v;
-                        Program._mfp.UpdateIRQ();
+                        ASEMain._mfp.IPRB &= (byte)~v;
+                        ASEMain._mfp.UpdateIRQ();
                         break;
 
                     case 0x0F: // ISRA: escribir 0 limpia
-                        Program._mfp.ISRA &= v;
-                        Program._mfp.UpdateIRQ();
+                        ASEMain._mfp.ISRA &= v;
+                        ASEMain._mfp.UpdateIRQ();
                         break;
 
                     case 0x11: // ISRB: escribir 0 limpia
-                        Program._mfp.ISRB &= v;
-                        Program._mfp.UpdateIRQ();
+                        ASEMain._mfp.ISRB &= v;
+                        ASEMain._mfp.UpdateIRQ();
                         break;
 
                     case 0x13: // IMRA
-                        Program._mfp.IMRA = v;
-                        Program._mfp.UpdateIRQ();
+                        ASEMain._mfp.IMRA = v;
+                        ASEMain._mfp.UpdateIRQ();
                         break;
 
                     case 0x15: // IMRB
-                        Program._mfp.IMRB = v;
-                        Program._mfp.UpdateIRQ();
+                        ASEMain._mfp.IMRB = v;
+                        ASEMain._mfp.UpdateIRQ();
                         break;
 
                     case 0x17: // VR
-                        Program._mfp.VR = (byte)(v & 0xF8);
-                        if ((Program._mfp.VR & 0x08) == 0)
+                        ASEMain._mfp.VR = (byte)(v & 0xF8);
+                        if ((ASEMain._mfp.VR & 0x08) == 0)
                         {
-                            Program._mfp.ISRA = 0;
-                            Program._mfp.ISRB = 0;
+                            ASEMain._mfp.ISRA = 0;
+                            ASEMain._mfp.ISRB = 0;
                         }
                         break;
 
                     case 0x19: // TACR
                         {
-                            byte old = Program._mfp.TACR;
+                            byte old = ASEMain._mfp.TACR;
                             int oldMode = old & 0x0F;
 
-                            Program._mfp.TACR = v;
+                            ASEMain._mfp.TACR = v;
                             int newMode = v & 0x0F;
 
                             // Si cambia modo/prescaler, resetea fase del prescaler
                             if (oldMode != newMode)
-                                Program._mfp.timerAPredivAcc = 0;
+                                ASEMain._mfp.timerAPredivAcc = 0;
 
                             // Si estaba apagado y lo encienden (delay 1..7 o event count 8)
                             bool wasOff = (oldMode == 0);
                             bool isOn = (newMode != 0);
-                            if (wasOff && isOn && Program._mfp.timerACounter == 0)
-                                Program._mfp.timerACounter = (Program._mfp.TADR == 0 ? 256 : Program._mfp.TADR);
+                            if (wasOff && isOn && ASEMain._mfp.timerACounter == 0)
+                                ASEMain._mfp.timerACounter = (ASEMain._mfp.TADR == 0 ? 256 : ASEMain._mfp.TADR);
 
                             break;
                         }
 
                     case 0x1B:
                         { // TBCR
-                            bool wasOff = (Program._mfp.TBCR & 0x07) == 0;
-                            Program._mfp.TBCR = v;
-                            if (wasOff && (v & 0x07) != 0 && Program._mfp.timerBCounter == 0)
-                                Program._mfp.timerBCounter = (Program._mfp.TBDR == 0 ? 256 : Program._mfp.TBDR);
+                            bool wasOff = (ASEMain._mfp.TBCR & 0x07) == 0;
+                            ASEMain._mfp.TBCR = v;
+                            if (wasOff && (v & 0x07) != 0 && ASEMain._mfp.timerBCounter == 0)
+                                ASEMain._mfp.timerBCounter = (ASEMain._mfp.TBDR == 0 ? 256 : ASEMain._mfp.TBDR);
                             break;
                         }
 
                     case 0x1D: // TCDCR
                         {
-                            byte old = Program._mfp.TCDCR;
-                            Program._mfp.TCDCR = v;
+                            byte old = ASEMain._mfp.TCDCR;
+                            ASEMain._mfp.TCDCR = v;
 
                             // Timer C: bits 4..6
                             bool cWasOff = (((old >> 4) & 0x07) == 0);
                             bool cIsOn = (((v >> 4) & 0x07) != 0);
                             if (cWasOff && cIsOn)
-                                Program._mfp.timerCCounter = (Program._mfp.TCDR == 0) ? 256 : Program._mfp.TCDR;
+                                ASEMain._mfp.timerCCounter = (ASEMain._mfp.TCDR == 0) ? 256 : ASEMain._mfp.TCDR;
 
                             // Timer D: bits 0..2
                             bool dWasOff = ((old & 0x07) == 0);
                             bool dIsOn = ((v & 0x07) != 0);
                             if (dWasOff && dIsOn)
-                                Program._mfp.timerDCounter = (Program._mfp.TDDR == 0) ? 256 : Program._mfp.TDDR;
+                                ASEMain._mfp.timerDCounter = (ASEMain._mfp.TDDR == 0) ? 256 : ASEMain._mfp.TDDR;
 
                             break;
                         }
 
                     case 0x1F: // TADR
-                        Program._mfp.TADR = v;
-                        Program._mfp.timerACounter = (v == 0 ? 256 : v);
+                        ASEMain._mfp.TADR = v;
+                        ASEMain._mfp.timerACounter = (v == 0 ? 256 : v);
                         break;
 
                     case 0x21: // TBDR
-                        Program._mfp.TBDR = v;
-                        Program._mfp.timerBCounter = (v == 0 ? 256 : v);
+                        ASEMain._mfp.TBDR = v;
+                        ASEMain._mfp.timerBCounter = (v == 0 ? 256 : v);
                         break;
 
                     case 0x23: // TCDR
-                        Program._mfp.TCDR = v;
-                        Program._mfp.timerCCounter = (v == 0 ? 256 : v);
+                        ASEMain._mfp.TCDR = v;
+                        ASEMain._mfp.timerCCounter = (v == 0 ? 256 : v);
                         break;
 
                     case 0x25: // TDDR
-                        Program._mfp.TDDR = v;
-                        Program._mfp.timerDCounter = (v == 0 ? 256 : v);
-                        break;
-
-                    default:
-                        Ports[addr - PortsBase] = v;
+                        ASEMain._mfp.TDDR = v;
+                        ASEMain._mfp.timerDCounter = (v == 0 ? 256 : v);
                         break;
                 }
 
+                Ports[addr - PortsBase] = v;
             }
         }
 
@@ -553,7 +567,7 @@ namespace ASE
                 BigEndian.Write32(addr, v);
                 return;
             }
-            
+
             if (addr >= TosBase && addr + 3 < TosBase + TosSize)
             {
                 ColoredConsole.WriteLine($"Warning: Attempt to write to ROM area -> [[yellow]]${addr:X8}.l[[/yellow]]");

@@ -39,12 +39,10 @@ set(MOIRA_OUT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../ASE/native" CACHE PATH "Output
 file(MAKE_DIRECTORY "${MOIRA_OUT_DIR}")
 
 set_target_properties(moira PROPERTIES
-    # --- 1. Propiedades GENÉRICAS (Importante para Makefiles/Ninja sin Build Type) ---
     ARCHIVE_OUTPUT_DIRECTORY "${MOIRA_OUT_DIR}"
     LIBRARY_OUTPUT_DIRECTORY "${MOIRA_OUT_DIR}"
     RUNTIME_OUTPUT_DIRECTORY "${MOIRA_OUT_DIR}"
 
-    # --- 2. Propiedades por CONFIGURACIÓN (Importante para Xcode/Multi-config) ---
     ARCHIVE_OUTPUT_DIRECTORY_DEBUG "${MOIRA_OUT_DIR}"
     LIBRARY_OUTPUT_DIRECTORY_DEBUG "${MOIRA_OUT_DIR}"
     RUNTIME_OUTPUT_DIRECTORY_DEBUG "${MOIRA_OUT_DIR}"

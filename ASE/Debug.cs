@@ -61,7 +61,7 @@ namespace ASE
 
                 string data = "";
                 for (uint x = 0 ; x < disSize; x+=2)
-                    data += $"{Program._mem.Read16(lineAddr + x):X4} ";
+                    data += $"{ASEMain._mem.Read16(lineAddr + x):X4} ";
 
                 Console.ForegroundColor = (lineAddr == CPU._moira.PC) ? ConsoleColor.White : ConsoleColor.DarkGray;
                 Console.WriteLine($"{lineAddr:X8} {data.PadRight(20)} {disStr}");
@@ -81,7 +81,7 @@ namespace ASE
                 line.AppendFormat("{0:X8}: ", addr);
                 for (uint offset = 0; offset < 16 && (addr + offset) < (startAddr + length); offset++)
                 {
-                    byte value = Program._mem.Read8(addr + offset);
+                    byte value = ASEMain._mem.Read8(addr + offset);
                     line.AppendFormat("{0:X2} ", value);
                 }
                 Console.WriteLine(line.ToString().TrimEnd());

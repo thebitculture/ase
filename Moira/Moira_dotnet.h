@@ -38,6 +38,17 @@ extern "C" {
         moira_read_irq_user_vector_fn readIrqUserVector; // puede ser NULL
     } moira_callbacks;
 
+    // Stack Frame structure (for exception handling)
+    typedef struct moira_stackframe {
+        uint16_t code;
+        uint32_t addr;
+        uint16_t ird;
+        uint16_t sr;
+        uint32_t pc;
+        uint16_t fc;
+        uint16_t ssw;
+    } moira_stackframe;
+
     // Lifecycle mínimo
     MOIRA_C_API moira_handle moira_create(const moira_callbacks* cb);
     MOIRA_C_API void         moira_destroy(moira_handle h);
@@ -83,17 +94,19 @@ extern "C" {
     MOIRA_C_API uint8_t  moira_getIPL(moira_handle h);
     MOIRA_C_API void     moira_setIPL(moira_handle h, uint8_t v);
 
-		MOIRA_C_API void  moira_setSupervisorMode(moira_handle h, bool s);
+    MOIRA_C_API void moira_setSupervisorMode(moira_handle h, bool s);
+    MOIRA_C_API void moira_triggerBusError(moira_handle h, uint32_t faultaddress, bool isWrite);
 
-    // Disassembler (1:1: escribe en buffer)
     MOIRA_C_API int moira_disassemble(moira_handle h, char* str, uint32_t addr);
     MOIRA_C_API void moira_disassembleSR(moira_handle h, char* str);
 
-    // Dumps (1:1)
     MOIRA_C_API void moira_dump8(moira_handle h, char* str, uint8_t v);
     MOIRA_C_API void moira_dump16(moira_handle h, char* str, uint16_t v);
     MOIRA_C_API void moira_dump24(moira_handle h, char* str, uint32_t v);
     MOIRA_C_API void moira_dump32(moira_handle h, char* str, uint32_t v);
+
+    MOIRA_C_API void moira_getStackFrame(moira_handle h, moira_stackframe* frame);
+    MOIRA_C_API void moira_setStackFrame(moira_handle h, const moira_stackframe* frame);
 
 #ifdef __cplusplus
 }

@@ -25,15 +25,7 @@ namespace ASE
         /// <returns>The 16-bit unsigned integer read from the specified address.</returns>
         public static ushort Read16(uint addr)
         {
-            try
-            {
-                return (ushort)((Program._mem.Read8(addr) << 8) | Program._mem.Read8(addr + 1));
-            }
-            catch
-            {
-                Console.WriteLine($"BigEndian.Read16 exception reading ${addr:X8}");
-                throw;
-            }
+            return (ushort)((ASEMain._mem.Read8(addr) << 8) | ASEMain._mem.Read8(addr + 1));
         }
 
         /// <summary>
@@ -44,18 +36,10 @@ namespace ASE
         /// <returns>A 32-bit unsigned integer representing the value read from the specified address.</returns>
         public static uint Read32(uint addr)
         {
-            try
-            {
-                return ((uint)Program._mem.Read8(addr) << 24) |
-                       ((uint)Program._mem.Read8(addr + 1) << 16) |
-                       ((uint)Program._mem.Read8(addr + 2) << 8) |
-                        Program._mem.Read8(addr + 3);
-            }
-            catch
-            {
-                Console.WriteLine($"BigEndian.Read32 exception reading ${addr:X8}");
-                throw;
-            }
+            return ((uint)ASEMain._mem.Read8(addr) << 24) |
+                    ((uint)ASEMain._mem.Read8(addr + 1) << 16) |
+                    ((uint)ASEMain._mem.Read8(addr + 2) << 8) |
+                    ASEMain._mem.Read8(addr + 3);
         }
 
         /// <summary>
@@ -66,15 +50,8 @@ namespace ASE
         /// <param name="v">The 16-bit unsigned integer value to write to memory. The most significant byte is written first.</param>
         public static void Write16(uint addr, ushort v)
         {
-            try
-            {
-                Program._mem.Write8(addr, (byte)(v >> 8));
-                Program._mem.Write8(addr + 1, (byte)v);
-            }
-            catch
-            {
-                Console.WriteLine($"BigEndian.Write16 exception writting ${addr:X8} value {v:X8}");
-            }
+            ASEMain._mem.Write8(addr, (byte)(v >> 8));
+            ASEMain._mem.Write8(addr + 1, (byte)v);
         }
 
         /// <summary>
@@ -86,17 +63,10 @@ namespace ASE
         /// <param name="v">The 32-bit unsigned integer value to write to memory.</param>
         public static void Write32(uint addr, uint v)
         {
-            try
-            {
-                Program._mem.Write8(addr, (byte)(v >> 24));
-                Program._mem.Write8(addr + 1, (byte)(v >> 16));
-                Program._mem.Write8(addr + 2, (byte)(v >> 8));
-                Program._mem.Write8(addr + 3, (byte)v);
-            }
-            catch 
-            { 
-                Console.WriteLine($"BigEndian.Write32 exception writting ${addr:X8} value {v:X8}");
-            }
+            ASEMain._mem.Write8(addr, (byte)(v >> 24));
+            ASEMain._mem.Write8(addr + 1, (byte)(v >> 16));
+            ASEMain._mem.Write8(addr + 2, (byte)(v >> 8));
+            ASEMain._mem.Write8(addr + 3, (byte)v);
         }
 
     }

@@ -1,9 +1,9 @@
 ﻿/*
- *  YM2149 Sound Chip Emulator for Atari ST
+ * YM2149 Sound Chip Emulator for Atari ST
  *  
- *  Ported from Hatari emulator (C) 1999-2024 by Thomas Huth and others.
- *  Adapted to work in C# with SDL2 for audio output and ASE project structure.
- *  Original source: hatari/src/sound.c
+ * Some parts ported from Hatari emulator by Thomas Huth and others.
+ * Adapted to work in C# with SDL2 for audio output and ASE project structure.
+ * Original source: hatari/src/sound.c
  *  
  * Official repository 👉 https://github.com/thebitculture/ase
  *  
@@ -16,8 +16,6 @@ namespace ASE
 {
     public class YM2149
     {
-        // Atari ST hardware base constants
-        private const int YM_CLOCK = 2000000;         // 2 MHz
         private const int YM_FREQ_INTERNAL = 250000;  // 2 MHz / 8 = 250 kHz (Counter update frequency)
 
         // Output configuration
@@ -28,7 +26,7 @@ namespace ASE
         private byte[] _regs = new byte[16];
         private int _selectedReg = 0;
 
-        // Internal counters (Integers, exact Hatari logic)
+        // Internal counters
         private int _cntA, _perA;
         private int _cntB, _perB;
         private int _cntC, _perC;
@@ -154,7 +152,7 @@ namespace ASE
             Array.Clear(_regs, 0, _regs.Length);
             _cntA = _cntB = _cntC = 0;
             _outA = _outB = _outC = 0;
-            _outNoise = 1; // Hatari init
+            _outNoise = 1;
             _rng = 1;
 
             _cntNoise = 0;
@@ -198,7 +196,6 @@ namespace ASE
                     _envShape = val & 0x0F;
                     _envPos = 0;
                     _cntEnv = 0;
-                    // Hatari: "when writing to env reg 13 the current envelope is restarted"
                     break;
                 case 14:
                     HandlePortA(val);
@@ -235,7 +232,7 @@ namespace ASE
             int ymUpdates = cpuCycles / 32;
 
             // Simplified "Weighted Average" Resampling Algorithm from Hatari.
-            // We generate at 250kHz and accumulate until completing a 44.1kHz sample.
+            // Generates at 250kHz and accumulate until completing a 44.1kHz sample.
 
             for (int i = 0; i < ymUpdates; i++)
             {
@@ -276,8 +273,7 @@ namespace ASE
         // Simulates a cycle at 250kHz (Exact hardware)
         private void StepInternal250k()
         {
-            // --- Tones ---
-            // Hatari: counter counts UP. toggle when >= period.
+            // -> Tones
             // Period 0 is treated as 1.
 
             // Channel A
@@ -304,7 +300,7 @@ namespace ASE
                 _outC ^= 1;
             }
 
-            // --- Noise ---
+            // -> Noise
             // Noise runs at 125kHz (half of 250kHz).
             // We use effective period * 2 to simulate it running at half speed.
 
@@ -327,27 +323,22 @@ namespace ASE
                 }
             }
 
-            // --- Envelope ---
-            // CRITICAL CORRECTION:
+            // -> Envelope
             // The envelope frequency is Master / (256 * EP).
-            // Since an envelope cycle has 32 steps (Hatari/ST internal simulation),
-            // each step occurs every (256 * EP) / 32 = 8 * EP Master clock cycles.
-            //
+            // Since an envelope cycle has 32 steps, each step occurs every
+            // (256 * EP) / 32 = 8 * EP Master clock cycles.
             // Our internal clock (StepInternal250k) runs at 250kHz (Master / 8).
             // Therefore, the number of ticks of our clock to advance a step is:
             // (8 * EP) / 8 = EP.
-            //
-            // Previously we had " * 32", which made the envelope 32 times slower.
 
             _cntEnv++;
-            int effectiveEnvPer = (_perEnv == 0 ? 1 : _perEnv); // <--- CORRECTED (Removed the * 32)
+            int effectiveEnvPer = (_perEnv == 0 ? 1 : _perEnv);
 
             if (_cntEnv >= effectiveEnvPer)
             {
                 _cntEnv = 0;
                 _envPos++;
 
-                // Hatari loop logic (blocks 0, 1, 2)
                 // Block 0 is attack/initial. Blocks 1 and 2 are the loop (sustain/alternate).
                 if (_envPos >= 3 * 32)
                 {
@@ -406,7 +397,7 @@ namespace ASE
             }
         }
 
-        // --- Floppy Drive Interface (Port A) ---
+        // *** Floppy Drive Interface (Port A) ***
         private void HandlePortA(byte val)
         {
             int side = (val & 0x01) != 0 ? 0 : 1;
@@ -416,7 +407,7 @@ namespace ASE
             WD1772.SetDriveAndSide(drive, side);
         }
 
-        // --- SDL Callback ---
+        // *** SDL Callback ***
         private static float[] _marshalBuf;
 
         public static void AudioCallback(IntPtr userdata, IntPtr stream, int len)
@@ -428,7 +419,7 @@ namespace ASE
             int read = 0;
             while (read < samplesNeeded)
             {
-                if (Program._ym.AudioQueue.TryDequeue(out float s))
+                if (ASEMain._ym.AudioQueue.TryDequeue(out float s))
                 {
                     _marshalBuf[read++] = s;
                 }
@@ -436,7 +427,7 @@ namespace ASE
                 {
                     // Underrun: Fill with last value (or silence)
                     // To avoid clicks, repeating the last sample is usually better than abrupt 0
-                    _marshalBuf[read++] = Program._ym._lastOut;
+                    _marshalBuf[read++] = ASEMain._ym._lastOut;
                 }
             }
 

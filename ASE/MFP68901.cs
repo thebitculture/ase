@@ -3,7 +3,7 @@
  * Functions to emulate the Motorola MFP 68901 chip.
  * 
  * This file is a total mess! It contains code snippets ported directly from the MS-DOS version of ASE,
- * as well as others rewritten based on bits of documentation I found along the way, or using Google AI Studio for help.
+ * as well as others rewritten based on bits of documentation I found along the way.
  * It needs a complete refactor and cleanup. I also need to review the documentation again, as there are still 
  * incompatibilities with some programs.
  * 
@@ -74,7 +74,7 @@ namespace ASE
         public static class RegB
         {
             public const byte FDC = 0x80;       // GPIP 5
-            public const byte ACIA = 0x40;      // GPIP 4
+            public const byte ACIA = 0x40;      // GPIP 4 (Joystick/Kbd)
             public const byte TimerC = 0x20;
             public const byte TimerD = 0x10;
             public const byte Blitter = 0x08;   // Not used on ASE.. by now
@@ -104,13 +104,17 @@ namespace ASE
         public void Reset()
         {
             mfpAcc = 0;
-
             AER = 0x00;
-            GPIP = 0xFF;
+            GPIP = 0xFF; // Inputs por defecto a pull-up
+            VR = 0x40;   // Vector base 64 ($40)
 
-            // Vector base by default.
-            // The 68k seeks from this pointer to find the interrupt vector
-            VR = 0x40;
+            // Limpiar registros de interrupción
+            IERA = IERB = 0;
+            IPRA = IPRB = 0;
+            ISRA = ISRB = 0;
+            IMRA = IMRB = 0;
+
+            irqController.ClearMFP();
         }
 
         public bool HasActiveInterrupts()
@@ -127,133 +131,156 @@ namespace ASE
             return (activeA != 0) || (activeB != 0);
         }
 
+        public bool CheckPendingInterrupts()
+        {
+            ushort pending = (ushort)((IPRA << 8) | IPRB);
+            ushort enabled = (ushort)((IERA << 8) | IERB);
+            ushort masked = (ushort)((IMRA << 8) | IMRB);
+            ushort service = (ushort)((ISRA << 8) | ISRB);
+
+            // Interrupciones candidatas
+            ushort active = (ushort)(pending & enabled & masked);
+
+            if (active == 0) return false;
+
+            int highestActiveBit = GetHighestBitSet(active);
+            int highestServiceBit = GetHighestBitSet(service);
+
+            // Solo interrumpimos si la prioridad es mayor que la que se está sirviendo
+            if (highestActiveBit > highestServiceBit)
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        // Método auxiliar rápido para obtener el bit más alto
+        private int GetHighestBitSet(ushort v)
+        {
+            if (v == 0) return -1;
+            int bit = 15;
+            ushort mask = 0x8000;
+            while ((v & mask) == 0)
+            {
+                mask >>= 1;
+                bit--;
+            }
+            return bit;
+        }
+
         // Mark an interrupt as pending
         public void SetInterruptPending(byte interruptBit, bool isRegisterB = false)
         {
             if (isRegisterB)
             {
-                IPRB |= interruptBit;
+                // Solo si el bit correspondiente en IERB está activo
+                if ((IERB & interruptBit) != 0)
+                {
+                    IPRB |= interruptBit;
+                    UpdateIRQ();
+                }
             }
             else
             {
-                IPRA |= interruptBit;
+                // Solo si el bit correspondiente en IERA está activo
+                if ((IERA & interruptBit) != 0)
+                {
+                    IPRA |= interruptBit;
+                    UpdateIRQ();
+                }
             }
-
-            UpdateIRQ();
         }
 
-        // Update IRQ 6 state
         public void UpdateIRQ()
         {
-            if (HasActiveInterrupts())
-            {
+            if (CheckPendingInterrupts())
                 irqController.RaiseMFP();
-            }
             else
-            {
                 irqController.ClearMFP();
-            }
         }
 
-        // Get interrupt vector (called from IRQ callback)
+        // Llamado por la CPU cuando acepta la interrupción (Ciclo IACK)
         public ushort GetInterruptVector()
         {
-            // Find the highest priority interrupt
-            byte activeA = (byte)(IPRA & IERA & IMRA & ~ISRA);
-            byte activeB = (byte)(IPRB & IERB & IMRB & ~ISRB);
+            ushort pending = (ushort)((IPRA << 8) | IPRB);
+            ushort enabled = (ushort)((IERA << 8) | IERB);
+            ushort masked = (ushort)((IMRA << 8) | IMRB);
+            ushort service = (ushort)((ISRA << 8) | ISRB);
 
+            ushort active = (ushort)(pending & enabled & masked);
+            int highestServiceBit = GetHighestBitSet(service);
+
+            // Buscar la ganadora (Mayor que la que está en servicio)
             int bit = -1;
-            bool isRegB = false;
-
-            // Priority: IPRA has higher priority than IPRB
-            if (activeA != 0)
+            for (int i = 15; i > highestServiceBit; i--)
             {
-                // Find the most significant bit (highest priority)
-                for (int i = 7; i >= 0; i--)
+                if ((active & (1 << i)) != 0)
                 {
-                    if ((activeA & (1 << i)) != 0)
-                    {
-                        bit = i;
-                        isRegB = false;
-                        break;
-                    }
-                }
-            }
-            else if (activeB != 0)
-            {
-                for (int i = 7; i >= 0; i--)
-                {
-                    if ((activeB & (1 << i)) != 0)
-                    {
-                        bit = i;
-                        isRegB = true;
-                        break;
-                    }
+                    bit = i;
+                    break;
                 }
             }
 
-            if (bit >= 0)
+            if (bit != -1)
             {
-                if (isRegB)
+                ushort bitMask = (ushort)(1 << bit);
+
+                // Limpiar Pendiente
+                if (bit >= 8) IPRA &= (byte)~(bitMask >> 8);
+                else IPRB &= (byte)~bitMask;
+
+                // Gestionar In-Service
+                if (SoftwareEOI)
                 {
-                    if (SoftwareEOI) ISRB |= (byte)(1 << bit);
-                    IPRB &= (byte)~(1 << bit);
-                }
-                else
-                {
-                    if (SoftwareEOI) ISRA |= (byte)(1 << bit);
-                    IPRA &= (byte)~(1 << bit);
+                    if (bit >= 8) ISRA |= (byte)(bitMask >> 8);
+                    else ISRB |= (byte)bitMask;
                 }
 
-                // Calculate the vector
-                ushort vectorNumber = (ushort)((VR & 0xF0) | (isRegB ? (bit) : (bit + 8)));
-
-                // Update IRQ after processing
                 UpdateIRQ();
 
-                return vectorNumber;
+                // Vector = Base + Canal (0-15)
+                return (ushort)((VR & 0xF0) | bit);
             }
 
-            // Should not reach here
-            return 0x18; // Spurious vector
+            // Spurious Interrupt
+            return 0x18;
         }
 
         public void TickTimerA_EventCount()
         {
-            if ((TACR & 0x0F) == 0x08) // Event Count
+            if ((TACR & 0x0F) == 0x08)
             {
                 timerACounter--;
                 if (timerACounter <= 0)
                 {
                     timerACounter = Reload(TADR);
-                    SetInterruptPending(RegA.TimerA, false); // IPRA
+                    SetInterruptPending(RegA.TimerA, false);
                 }
             }
         }
 
         public void TickTimerB_EventCount()
         {
-            // Only if in Event Count mode (bit 3 active, mode 8)
             if ((TBCR & 0x0F) == 0x08)
             {
                 timerBCounter--;
                 if (timerBCounter <= 0)
                 {
                     timerBCounter = Reload(TBDR);
-                    SetInterruptPending(RegA.TimerB, false); // IPRA
+                    SetInterruptPending(RegA.TimerB, false);
                 }
             }
         }
 
         public void UpdateTimers(int cpuCycles)
         {
-            // accumulates "MFP ticks" (rational)
             mfpAcc += (long)cpuCycles * MFP_HZ;
-
-            int mfpTicks = (int)(mfpAcc / CPU_HZ);   // how many real MFP ticks passed
+            int mfpTicks = (int)(mfpAcc / CPU_HZ);
             mfpAcc %= CPU_HZ;
 
-            if (mfpTicks <= 0) return;
+            if (mfpTicks <= 0)
+                return;
 
             UpdateTimerA(mfpTicks);
             UpdateTimerB(mfpTicks);
@@ -264,199 +291,138 @@ namespace ASE
         void UpdateTimerA(int mfpTicks)
         {
             int mode = TACR & 0x0F;
-            if (mode == 0 || mode > 7) return; // Ignore Stopped or Event Count
+            if (mode == 0 || mode > 7) return;
 
-            int div = GetTimerAPrescaler();
-            if (div == 0) return;
-
+            int div = GetPrescaler(mode);
             timerAPredivAcc += mfpTicks;
             int dec = timerAPredivAcc / div;
             timerAPredivAcc %= div;
 
-            if (dec <= 0) return;
-
-            timerACounter -= dec;
-            while (timerACounter <= 0)
+            if (dec > 0)
             {
-                timerACounter += Reload(TADR);
-                SetInterruptPending(RegA.TimerA, false);
+                timerACounter -= dec;
+                while (timerACounter <= 0)
+                {
+                    timerACounter += Reload(TADR);
+                    SetInterruptPending(RegA.TimerA, false);
+                }
             }
         }
 
         void UpdateTimerB(int mfpTicks)
         {
             int mode = TBCR & 0x0F;
-            if (mode == 0 || mode > 7) return; // stopped or event count
+            if (mode == 0 || mode > 7) return;
 
-            int div = GetTimerBPrescaler();   // 4,10,16,50,64,100,200...
-            if (div == 0) return;
-
+            int div = GetPrescaler(mode);
             timerBPredivAcc += mfpTicks;
             int dec = timerBPredivAcc / div;
             timerBPredivAcc %= div;
-            if (dec <= 0) return;
 
-            timerBCounter -= dec;
-            while (timerBCounter <= 0)
+            if (dec > 0)
             {
-                timerBCounter += Reload(TBDR);
-                SetInterruptPending(RegA.TimerB, false);
+                timerBCounter -= dec;
+                while (timerBCounter <= 0)
+                {
+                    timerBCounter += Reload(TBDR);
+                    SetInterruptPending(RegA.TimerB, false);
+                }
             }
         }
 
         void UpdateTimerC(int mfpTicks)
         {
-            // MC68901: bits 6..4 = Timer C control
             int mode = (TCDCR >> 4) & 0x07;
             if (mode == 0) { timerCPredivAcc = 0; return; }
 
-            int div = GetTimerCPrescaler();
-
+            int div = GetPrescaler(mode);
             timerCPredivAcc += mfpTicks;
             int dec = timerCPredivAcc / div;
             timerCPredivAcc %= div;
-            if (dec <= 0) return;
 
-            timerCCounter -= dec;
-            while (timerCCounter <= 0)
+            if (dec > 0)
             {
-                timerCCounter += Reload(TCDR);
-                SetInterruptPending(RegB.TimerC, true);
+                timerCCounter -= dec;
+                while (timerCCounter <= 0)
+                {
+                    timerCCounter += Reload(TCDR);
+                    SetInterruptPending(RegB.TimerC, true);
+                }
             }
         }
 
         void UpdateTimerD(int mfpTicks)
         {
-            // MC68901: bits 2..0 = Timer D control
             int mode = TCDCR & 0x07;
-            if (mode == 0)
-            {
-                timerDPredivAcc = 0;
-                return;
-            }
+            if (mode == 0) { timerDPredivAcc = 0; return; }
 
-            int div = GetTimerDPrescaler();
-
+            int div = GetPrescaler(mode);
             timerDPredivAcc += mfpTicks;
             int dec = timerDPredivAcc / div;
             timerDPredivAcc %= div;
-            if (dec <= 0) return;
 
-            timerDCounter -= dec;
-            while (timerDCounter <= 0)
+            if (dec > 0)
             {
-                timerDCounter += Reload(TDDR);
-                SetInterruptPending(RegB.TimerD, true);
+                timerDCounter -= dec;
+                while (timerDCounter <= 0)
+                {
+                    timerDCounter += Reload(TDDR);
+                    SetInterruptPending(RegB.TimerD, true);
+                }
             }
         }
 
-        private int GetTimerAPrescaler()
+        private int GetPrescaler(int mode)
         {
-            int mode = TACR & 0x0F;
-            return mode switch
+            switch (mode)
             {
-                0 => 0,      // Stopped
-                1 => 4,      // Delay mode, prescaler = 4
-                2 => 10,     // Delay mode, prescaler = 10
-                3 => 16,     // Delay mode, prescaler = 16
-                4 => 50,     // Delay mode, prescaler = 50
-                5 => 64,     // Delay mode, prescaler = 64
-                6 => 100,    // Delay mode, prescaler = 100
-                7 => 200,    // Delay mode, prescaler = 200
-                _ => 0
-            };
-        }
-
-        private int GetTimerBPrescaler()
-        {
-            int mode = TBCR & 0x0F;
-            return mode switch
-            {
-                0 => 0,      // Stopped
-                1 => 4,      // Delay mode, prescaler = 4
-                2 => 10,     // Delay mode, prescaler = 10
-                3 => 16,     // Delay mode, prescaler = 16
-                4 => 50,     // Delay mode, prescaler = 50
-                5 => 64,     // Delay mode, prescaler = 64
-                6 => 100,    // Delay mode, prescaler = 100
-                7 => 200,    // Delay mode, prescaler = 200
-                _ => 0
-            };
-        }
-
-        private int GetTimerCPrescaler()
-        {
-            int mode = (TCDCR >> 4) & 0x07;
-            return mode switch
-            {
-                0 => 0,
-                1 => 4,
-                2 => 10,
-                3 => 16,
-                4 => 50,
-                5 => 64,
-                6 => 100,
-                7 => 200,
-                _ => 1
-            };
-        }
-
-        private int GetTimerDPrescaler()
-        {
-            int mode = TCDCR & 0x07;
-            return mode switch
-            {
-                0 => 0,
-                1 => 4,
-                2 => 10,
-                3 => 16,
-                4 => 50,
-                5 => 64,
-                6 => 100,
-                7 => 200,
-                _ => 1
-            };
+                case 1: return 4;
+                case 2: return 10;
+                case 3: return 16;
+                case 4: return 50;
+                case 5: return 64;
+                case 6: return 100;
+                case 7: return 200;
+                default: return 1;
+            }
         }
 
         public void SetGPIOBit(int bit, bool active)
         {
-            // Save previous state to detect edges
+            // GPIP bit logic: 0 = Input active (Low), 1 = Inactive (High) usually?
+            // Pero en emulación simplificada: active=true -> señal activa.
+            // El bit 4 (ACIA) suele ser Active LOW en hardware real.
+
             bool oldValue = (GPIP & (1 << bit)) != 0;
-            bool newValue = active;
+            bool newValue = active; // Si active es true, ponemos el bit a 1
 
-            // Update the data register (GPIP) so polling works
-            if (newValue)
-                GPIP |= (byte)(1 << bit);
-            else
-                GPIP &= (byte)~(1 << bit);
+            if (newValue) GPIP |= (byte)(1 << bit);
+            else GPIP &= (byte)~(1 << bit);
 
+            // AER: 1 = Rising edge (0->1), 0 = Falling edge (1->0)
             bool triggerOnRising = (AER & (1 << bit)) != 0;
-
             bool interruptTriggered = false;
 
             if (triggerOnRising)
             {
-                // Detect rising edge (0 -> 1)
                 if (!oldValue && newValue) interruptTriggered = true;
             }
             else
             {
-                // Detect falling edge (1 -> 0)
                 if (oldValue && !newValue) interruptTriggered = true;
             }
 
             if (interruptTriggered)
             {
-                if (bit == 4) // ACIA IRQ -> GPIP4
-                {
-                    SetInterruptPending(RegB.ACIA, true);
-                    TickTimerA_EventCount();
-                }
-                else if (bit == 5) // FDC/HDC
-                {
-                    SetInterruptPending(RegB.FDC, true);
-                }
+                // Bit 4 = ACIA (RegB Bit 6)
+                if (bit == 4) SetInterruptPending(RegB.ACIA, true);
+                // Bit 5 = FDC (RegB Bit 7)
+                else if (bit == 5) SetInterruptPending(RegB.FDC, true);
+
+                // (Se podrían añadir el resto de bits si se emularan)
             }
         }
+
+
     }
 }
