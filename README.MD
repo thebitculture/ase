@@ -48,6 +48,7 @@ You can download the latest release ready for use from the releases page, or bet
 To compile **Moira** on **Windows**, you will need to have `cmake.exe` in your system path or open a **Visual Studio** developer console.
 
 👉 ASE Releases: https://github.com/thebitculture/ase/releases/
+
 👉 Moira Releases: https://github.com/dirkwhoffmann/Moira/releases
 
 ---
