@@ -1,7 +1,7 @@
 ﻿/*
  * 
  * Atari ST ACIA emulation functions.
- * Some parts ported from Hatari emulator by Thomas Huth and others.
+ * Some parts ported from Hatari emulator created by Thomas Huth and others.
  * 
  * Official repository 👉 https://github.com/thebitculture/ase
  * 
@@ -191,22 +191,21 @@ namespace ASE
                     return;
                 }
 
-                // Hay datos en la cola y el registro está libre. Avanzamos el tiempo.
                 _cyclesUntilNextByte -= cycles;
 
                 if (_cyclesUntilNextByte <= 0)
                 {
-                    // Movemos el dato al registro visible
+                    // Next register
                     _latchedData = IkbdRx.Dequeue();
                     _hasLatchedData = true;
 
-                    // Activamos flags
+                    // activate flags
                     AciaKbdStatus |= (ACIA_RDRF | ACIA_IRQ);
 
-                    // Disparamos interrupción (Línea Baja = Activa)
+                    // and set interrupt pending
                     ASEMain._mfp.SetGPIOBit(4, false);
 
-                    // Reiniciamos el temporizador para el SIGUIENTE byte
+                    // ready for next read
                     _cyclesUntilNextByte = CYCLES_PER_BYTE;
                 }
             }
@@ -218,8 +217,7 @@ namespace ASE
             {
                 AciaKbdControl = v;
 
-                // Master Reset del ACIA (Bits 0 y 1 a '1')
-                // Muchos juegos hacen esto para limpiar el estado antes de empezar.
+                // Master Reset ACIA
                 if ((v & 0x03) == 0x03)
                 {
                     Reset();
@@ -241,17 +239,10 @@ namespace ASE
             {
                 byte result = _latchedData;
 
-                // La CPU ha leído. Liberamos el registro.
                 _hasLatchedData = false;
-
-                // Limpiamos flags
+                // clear flags
                 AciaKbdStatus &= unchecked((byte)~(ACIA_RDRF | ACIA_IRQ | ACIA_OVRN | ACIA_FE));
-
-                // IMPORTANTE: Subimos la línea de interrupción (Inactiva)
                 ASEMain._mfp.SetGPIOBit(4, true);
-
-                // No tocamos _cyclesUntilNextByte. El método Sync() empezará a contar
-                // en la siguiente iteración del emulador.
 
                 return result;
             }
@@ -443,8 +434,8 @@ namespace ASE
             {
                 if (!MouseEnabled) return;
 
-                dx = dx / ConfigOptions.RunninConfig.MouseXSensitivity;
-                dy = dy / ConfigOptions.RunninConfig.MouseYSensitivity;
+                dx = (int)(dx / ConfigOptions.RunninConfig.MouseSensitivity);
+                dy = (int)(dy / ConfigOptions.RunninConfig.MouseSensitivity);
                 if (dx < -127) dx = -127; if (dx > 127) dx = 127;
                 if (dy < -127) dy = -127; if (dy > 127) dy = 127;
 
@@ -477,7 +468,7 @@ namespace ASE
                 // - Mouse active: fire -> right mouse button (in mouse packet header)
                 //                 The joystick packet does NOT include fire.
                 //
-                // - Mouse OFF, joystick ON: fire -> bit 7 in joystick packet
+                // - Mouse OFF, joystick ON: fire → bit 7 in joystick packet
                 //
                 // I’m keeping both modes because some games don’t work depending on
                 // the method they use to read the joystick fire button.

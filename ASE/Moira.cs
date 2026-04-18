@@ -41,8 +41,8 @@ namespace ASE
             Read16 read16,
             Write8 write8,
             Write16 write16,
-            Sync? sync = null,
-            ReadIrqUserVector? readIrqUserVector = null)
+            Sync sync = null,
+            ReadIrqUserVector readIrqUserVector = null)
         {
             ArgumentNullException.ThrowIfNull(read8);
             ArgumentNullException.ThrowIfNull(read16);
@@ -280,16 +280,16 @@ namespace ASE
         private readonly Read16 _read16;
         private readonly Write8 _write8;
         private readonly Write16 _write16;
-        private readonly Sync? _sync;
-        private readonly ReadIrqUserVector? _readIrq;
+        private readonly Sync _sync;
+        private readonly ReadIrqUserVector _readIrq;
 
         // Keep unmanaged delegates alive
         private readonly Read8Fn _r8;
         private readonly Read16Fn _r16;
         private readonly Write8Fn _w8;
         private readonly Write16Fn _w16;
-        private readonly SyncFn? _syncNative;
-        private readonly ReadIrqUserVectorFn? _irqNative;
+        private readonly SyncFn _syncNative;
+        private readonly ReadIrqUserVectorFn _irqNative;
 
         // Native interop (internal/private)
 
@@ -303,8 +303,8 @@ namespace ASE
             public Read16Fn read16;
             public Write8Fn write8;
             public Write16Fn write16;
-            public SyncFn? sync;
-            public ReadIrqUserVectorFn? readIrqUserVector;
+            public SyncFn sync;
+            public ReadIrqUserVectorFn readIrqUserVector;
         }
 
         // Native callback signatures (match your current DLL)

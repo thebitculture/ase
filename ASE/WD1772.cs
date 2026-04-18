@@ -1,6 +1,7 @@
 ﻿/*
  * 
  * Western Digital WD1772 FDC emulation for Atari ST
+ * This class should be my next focus, because it's the cause of many games games does not work.
  * 
  * https://info-coach.fr/atari/documents/_mydoc/FD-HD_Programming.pdf
  * 
@@ -25,12 +26,12 @@ namespace ASE
         static byte dmaSectorCount;
         static uint dmaAddress;
         static ushort prevMode;
-        private static bool multiSectorInProgress;
 
         // Estado
         static int currentDrive = -1;
         static int currentSide;
         static int headTrack;
+        static int stepDirection = 1;
         static bool dmaError;
 
         // Bits Status
@@ -74,6 +75,7 @@ namespace ASE
             currentDrive = -1;
             currentSide = 0;
             headTrack = 0;
+            stepDirection = 1;
             dmaSectorCount = 0;
             statusRegister = 0;
 
@@ -124,15 +126,15 @@ namespace ASE
                     return;
 
                 case 0xFF8608: // -> $FF8609 High
-                    WriteByte(0xFF8609, (byte)(value >> 8));
+                    WriteByte(0xFF8609, (byte)(value & 0xFF));
                     return;
 
                 case 0xFF860A: // -> $FF860B Mid
-                    WriteByte(0xFF860B, (byte)(value >> 8));
+                    WriteByte(0xFF860B, (byte)(value & 0xFF));
                     return;
 
                 case 0xFF860C: // -> $FF860D Low
-                    WriteByte(0xFF860D, (byte)(value >> 8));
+                    WriteByte(0xFF860D, (byte)(value & 0xFF));
                     return;
             }
 
@@ -172,11 +174,11 @@ namespace ASE
                 case 0xFF8606: 
                     return GetDMAStatus();
                 case 0xFF8608: 
-                    return (ushort)(ReadByte(0xFF8609) << 8 | 0x00);
+                    return (ushort)(ReadByte(0xFF8609));
                 case 0xFF860A: 
-                    return (ushort)(ReadByte(0xFF860B) << 8 | 0x00);
+                    return (ushort)(ReadByte(0xFF860B));
                 case 0xFF860C: 
-                    return (ushort)(ReadByte(0xFF860D) << 8 | 0x00);
+                    return (ushort)(ReadByte(0xFF860D));
                 default:
                     return (ushort)((ReadByte(address) << 8) | ReadByte(address + 1));
             }
@@ -188,11 +190,7 @@ namespace ASE
             bool newDir = (dmaModeRegister & 0x0100) != 0;
 
             if (prevDir != newDir)
-            {
-                // Reset DMA
-                dmaSectorCount = 0;
                 dmaError = false;
-            }
 
             prevMode = dmaModeRegister;
         }
@@ -280,18 +278,33 @@ namespace ASE
             }
         }
 
+        // 300 RPM → 1 revolution per 200 ms → index pulse every ~160000 CPU cycles at 8 MHz.
+        // We approximate with a simple modulo on the emulated cycle counter.
+        static long indexPulseCycleAccum = 0;
+        private const long INDEX_PULSE_CYCLES = 160000; // 8 MHz / 300 RPM * 0.06 (6% duty)
+
+        public static void TickCycles(int cycles)
+        {
+            indexPulseCycleAccum += cycles;
+            if (indexPulseCycleAccum > INDEX_PULSE_CYCLES * 20)
+                indexPulseCycleAccum = 0; // wrap safely
+        }
+
         private static void UpdateTypeIStatus()
         {
             statusRegister = 0;
             statusRegister |= 0x80; // Motor On (Type I)
             statusRegister |= 0x20; // Spin-up completed
 
-            if (headTrack == 0) 
+            if (headTrack == 0)
                 statusRegister |= STATUS_TRACK0;
-            if (ASEMain.driveA.WriteProtected) 
+            if (ASEMain.driveA.WriteProtected)
                 statusRegister |= STATUS_WRITE_PROTECT;
-            if ((System.Environment.TickCount & 32) != 0) 
-                statusRegister |= 0x02; // Index Pulse
+
+            // Index pulse: active for the first ~6% of each revolution
+            long posInRevolution = indexPulseCycleAccum % (INDEX_PULSE_CYCLES * 20);
+            if (posInRevolution < INDEX_PULSE_CYCLES)
+                statusRegister |= 0x02;
         }
 
         private static void ExecuteCommand(byte command)
@@ -326,6 +339,30 @@ namespace ASE
             if (hiNibble == CMD_SEEK)
             {
                 ExecuteSeek();
+                EndCommandOK();
+                return;
+            }
+
+            // Type I: STEP, STEP-IN, STEP-OUT (decoded with 0xE0 mask, bit 4 = T flag)
+            byte typeI = (byte)(command & 0xE0);
+
+            if (typeI == 0x20) // STEP
+            {
+                ExecuteStep(command);
+                EndCommandOK();
+                return;
+            }
+            if (typeI == 0x40) // STEP-IN
+            {
+                stepDirection = 1;
+                ExecuteStep(command);
+                EndCommandOK();
+                return;
+            }
+            if (typeI == 0x60) // STEP-OUT
+            {
+                stepDirection = -1;
+                ExecuteStep(command);
                 EndCommandOK();
                 return;
             }
@@ -367,12 +404,17 @@ namespace ASE
                 return; 
             }
 
-            // Type IV: force interrupr (0xD0-0xDF)
+            // Type IV: Force Interrupt (0xD0-0xDF)
             if ((command & 0xF0) == CMD_FORCE_INTERRUPT)
             {
-                // Termina cualquier operación multi-sector en curso
                 statusRegister &= unchecked((byte)~STATUS_BUSY);
-                ClearInterrupt();
+                UpdateTypeIStatus();
+
+                byte intFlags = (byte)(command & 0x0F);
+                if (intFlags != 0)
+                    PulseInterrupt();
+                else
+                    ClearInterrupt();
 
                 return;
             }
@@ -428,6 +470,22 @@ namespace ASE
             statusRegister &= 0xFE;
         }
 
+        private static void ExecuteStep(byte command)
+        {
+            headTrack += stepDirection;
+
+            if (headTrack < 0) 
+                headTrack = 0;
+            if (ASEMain.driveA.HasDisk && headTrack >= ASEMain.driveA.DiskConfig.Tracks)
+                headTrack = ASEMain.driveA.DiskConfig.Tracks - 1;
+
+            // T flag (bit 4): update track register
+            if ((command & 0x10) != 0)
+                trackRegister = (byte)headTrack;
+
+            UpdateTypeIStatus();
+        }
+
         private static void ExecuteReadSector()
         {
             bool multi = (commandRegister & 0x10) != 0; // bit 4 = multiple
@@ -435,15 +493,17 @@ namespace ASE
             if (!ASEMain.driveA.HasDisk)
                 return;
 
-            if (sectorRegister < 1 || sectorRegister > ASEMain.driveA.DiskConfig.SectorsPerTrack)
+            int spt = ASEMain.driveA.DiskConfig.SectorsPerTrack;
+            int sides = ASEMain.driveA.DiskConfig.Sides;
+            int bps = ASEMain.driveA.DiskConfig.SectorSize;
+
+            if (sectorRegister < 1 || sectorRegister > spt)
             {
                 statusRegister |= STATUS_RECORD_NOT_FOUND;
                 return;
             }
 
-            // En Atari ST el conteo DMA es por bloques de 512 y se decrementa por bloque
-            // count=0 es error
-            int sectorsToRead = 1;
+            int sectorsToRead;
             if (multi)
             {
                 if (dmaSectorCount == 0)
@@ -451,24 +511,27 @@ namespace ASE
                     dmaError = true;
                     return;
                 }
-                sectorsToRead = dmaSectorCount;
+                // WD1772 multi-sector: reads from current sector to end of track,
+                // limited by DMA sector count
+                int sectorsRemaining = spt - sectorRegister + 1;
+                sectorsToRead = Math.Min((int)dmaSectorCount, sectorsRemaining);
+            }
+            else
+            {
+                sectorsToRead = 1;
             }
 
-            // LBA lineal para wrap correcto
-            int spt = ASEMain.driveA.DiskConfig.SectorsPerTrack;
-            int sides = ASEMain.driveA.DiskConfig.Sides;
-            int bps = ASEMain.driveA.DiskConfig.SectorSize;
-
-            int lba = ((headTrack * sides) + currentSide) * spt + (sectorRegister - 1);
-
+            bool readError = false;
             string dump = string.Empty;
-            for (int n = 0; n < sectorsToRead; n++, lba++)
+            for (int n = 0; n < sectorsToRead; n++)
             {
+                int lba = ((headTrack * sides) + currentSide) * spt + (sectorRegister - 1);
                 int offset = lba * bps;
                 if (ASEMain.driveA.Data == null || offset + bps > ASEMain.driveA.Data.Length)
                 {
                     statusRegister |= STATUS_RECORD_NOT_FOUND;
                     dmaError = true;
+                    readError = true;
                     break;
                 }
 
@@ -479,6 +542,10 @@ namespace ASE
                 }
 
                 if (dmaSectorCount > 0) dmaSectorCount--;
+
+                // WD1772: in multi-sector mode, auto-increment sector register
+                if (multi)
+                    sectorRegister++;
             }
 
             if (ConfigOptions.RunninConfig.DiskDump)
@@ -488,33 +555,67 @@ namespace ASE
                 Console.Write(Environment.NewLine);
             }
 
-            if (!multi)
+            if (!readError)
             {
-                statusRegister = 0x00;
-            }
-            else
-            {
-                multiSectorInProgress = true;
+                // In multi-sector mode the WD1772 keeps incrementing SR until the sector
+                // is not found on the track (SR > SPT). This RECORD_NOT_FOUND is the
+                // standard signal that loaders use to know the track is finished and they
+                // must seek to the next one before issuing a new read command.
+                if (multi && sectorRegister > spt)
+                    statusRegister = STATUS_RECORD_NOT_FOUND;
+                else
+                    statusRegister = 0x00;
             }
         }
 
         private static void ExecuteWriteSector()
         {
             if (ASEMain.driveA.WriteProtected) { statusRegister |= STATUS_WRITE_PROTECT; statusRegister &= 0xFE; return; }
-            int sectorsToWrite = ((commandRegister & 0x10) != 0) ? Math.Max((byte)1, dmaSectorCount) : 1;
+
+            bool multi = (commandRegister & 0x10) != 0;
+            int spt = ASEMain.driveA.DiskConfig.SectorsPerTrack;
+            int bps = ASEMain.driveA.DiskConfig.SectorSize;
+
+            int sectorsToWrite;
+            if (multi)
+            {
+                int sectorsRemaining = spt - sectorRegister + 1;
+                sectorsToWrite = Math.Min(Math.Max((int)dmaSectorCount, 1), sectorsRemaining);
+            }
+            else
+            {
+                sectorsToWrite = 1;
+            }
+
+            bool writeError = false;
             for (int i = 0; i < sectorsToWrite; i++)
             {
-                int offset = CalculateDiskOffset(headTrack, currentSide, sectorRegister + i);
-                if (ASEMain.driveA.Data != null && offset + ASEMain.driveA.DiskConfig.SectorSize <= ASEMain.driveA.Data.Length)
+                int offset = CalculateDiskOffset(headTrack, currentSide, sectorRegister);
+                if (ASEMain.driveA.Data == null || offset + bps > ASEMain.driveA.Data.Length)
                 {
-                    for (int j = 0; j < ASEMain.driveA.DiskConfig.SectorSize; j++)
-                    {
-                        ASEMain.driveA.Data[offset + j] = ASEMain._mem.Read8(dmaAddress++);
-                    }
+                    statusRegister |= STATUS_RECORD_NOT_FOUND;
+                    dmaError = true;
+                    writeError = true;
+                    break;
                 }
+
+                for (int j = 0; j < bps; j++)
+                    ASEMain.driveA.Data[offset + j] = ASEMain._mem.Read8(dmaAddress++);
+
                 if (dmaSectorCount > 0) dmaSectorCount--;
+
+                // WD1772: in multi-sector mode, auto-increment sector register
+                if (multi)
+                    sectorRegister++;
             }
-            statusRegister = 0x00;
+
+            if (!writeError)
+            {
+                if (multi && sectorRegister > spt)
+                    statusRegister = STATUS_RECORD_NOT_FOUND;
+                else
+                    statusRegister = 0x00;
+            }
         }
 
         private static void ExecuteReadAddress()

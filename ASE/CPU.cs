@@ -74,6 +74,7 @@ namespace ASE
 
             ACIA.Reset();
             WD1772.Reset();
+            Blitter.Reset();
             ASEMain._ym.Reset();
 
             _moira.Reset();

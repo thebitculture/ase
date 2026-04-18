@@ -5,6 +5,7 @@
 		Title="Atari System Emulator"
 		WindowStartupLocation="CenterScreen"
 		UseLayoutRounding="True"
+		DragDrop.AllowDrop="True"
 		Width="800" Height="600">
 
 	<DockPanel LastChildFill="True">
@@ -12,7 +13,8 @@
 
 			<MenuItem Header="_File">
 				<MenuItem Header="_Open disk image" Click="OnOpenImageClick" />
-				<MenuItem Header="_Ejec disk image" Click="OnEjecImageClick" Name="ItemMenuEjecDisk" IsEnabled="False" />
+				<MenuItem Header="_Change disk from ZIP" Click="OnChangeDiskClick" Name="ItemMenuChangeDisk" IsEnabled="False" />
+				<MenuItem Header="_Ejec disk image / ZIP" Click="OnEjecImageClick" Name="ItemMenuEjecDisk" IsEnabled="False" />
 				<Separator/>
 				<MenuItem Header="_Quit" Click="OnExitClick"/>
 			</MenuItem>

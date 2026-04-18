@@ -176,16 +176,20 @@ namespace ASE
                 if (addr >= 0xFF8604 && addr <= 0xFF860D)
                     return WD1772.ReadByte(addr);
 
-                 // Blitter:
-                 // TOS tries to detect the blitter by writing to its registers and expecting a bus error if it is not present.
-                if (addr >= 0xFF8A00 && addr <= 0xFF8A3C)
-                {
-                    if (ConfigOptions.RunninConfig.DebugMode)
-                        ColoredConsole.WriteLine($"Trying to read a byte from blitter at [[red]]${addr:X8}[[/red]], but it's not emulated yet.");
+                 // Blitter ($FF8A00-$FF8A3D)
+                 // On the real ST (without blitter), accessing these registers causes a bus error.
+                 // On the STE/Mega the blitter is present and registers are readable.
+                 if (addr >= 0xFF8A00 && addr <= 0xFF8A3D)
+                 {
+                     if (ConfigOptions.RunninConfig.STModel == ConfigOptions.STModels.STE ||
+                         ConfigOptions.RunninConfig.STModel == ConfigOptions.STModels.Mega)
+                     {
+                         return Blitter.ReadByte(addr);
+                     }
 
-                    CPU._moira.TriggerBusError(addr, false);
-                    return 0xFF;
-                }
+                     CPU._moira.TriggerBusError(addr, false);
+                     return 0xFF;
+                 }
 
                 // ACIA - Keyboard and Joystick ports
                 if (addr == STPortAdress.ST_ACIACMD)
@@ -263,14 +267,17 @@ namespace ASE
                 if (addr >= 0xFF8604 && addr <= 0xFF860D)
                     return WD1772.ReadWord(addr);
 
-                // See comment at Read8 about blitter emulation
+                // Blitter ($FF8A00-$FF8A3D)
                 if (addr >= 0xFF8A00 && addr <= 0xFF8A3C)
                 {
-                    if (ConfigOptions.RunninConfig.DebugMode)
-                        ColoredConsole.WriteLine($"Trying to read a word from blitter at [[red]]${addr:X8}[[/red]], but it's not emulated yet.");
+                    if (ConfigOptions.RunninConfig.STModel == ConfigOptions.STModels.STE ||
+                        ConfigOptions.RunninConfig.STModel == ConfigOptions.STModels.Mega)
+                    {
+                        return Blitter.ReadWord(addr);
+                    }
 
                     CPU._moira.TriggerBusError(addr, false);
-                    return 0xFFFF; // dummy return
+                    return 0xFFFF;
                 }
 
                 // Any other I/O port is read without special treatment.
@@ -374,10 +381,16 @@ namespace ASE
                     return;
                 }
 
-                // See comment at Read8 about blitter emulation
-                if (addr >= 0xFF8A00 && addr <= 0xFF8A3C)
+                // Blitter ($FF8A00-$FF8A3D)
+                if (addr >= 0xFF8A00 && addr <= 0xFF8A3D)
                 {
-                    ColoredConsole.WriteLine($"Trying to write a byte to blitter at [[red]]${addr:X8}[[/red]], but it's not emulated yet.");
+                    if (ConfigOptions.RunninConfig.STModel == ConfigOptions.STModels.STE ||
+                        ConfigOptions.RunninConfig.STModel == ConfigOptions.STModels.Mega)
+                    {
+                        Blitter.WriteByte(addr, v);
+                        return;
+                    }
+
                     CPU._moira.TriggerBusError(addr, true);
                     return;
                 }
@@ -389,23 +402,25 @@ namespace ASE
                 {
                     case 0x03: ASEMain._mfp.AER = v; break;
                     case 0x05: ASEMain._mfp.DDR = v; break;
-                    case 0x07: // IERA
+                    case 0x07: // IERA - disabling a channel also clears its pending bit
+                        ASEMain._mfp.IPRA &= v;
                         ASEMain._mfp.IERA = v;
                         ASEMain._mfp.UpdateIRQ();
                         break;
 
-                    case 0x09: // IERB
+                    case 0x09: // IERB - disabling a channel also clears its pending bit
+                        ASEMain._mfp.IPRB &= v;
                         ASEMain._mfp.IERB = v;
                         ASEMain._mfp.UpdateIRQ();
                         break;
 
-                    case 0x0B: // IPRA
-                        ASEMain._mfp.IPRA &= (byte)~v; // Escribir 1 limpia el bit
+                    case 0x0B: // IPRA - writing 0 clears the bit, writing 1 has no effect
+                        ASEMain._mfp.IPRA &= v;
                         ASEMain._mfp.UpdateIRQ();
                         break;
 
-                    case 0x0D: // IPRB
-                        ASEMain._mfp.IPRB &= (byte)~v;
+                    case 0x0D: // IPRB - writing 0 clears the bit, writing 1 has no effect
+                        ASEMain._mfp.IPRB &= v;
                         ASEMain._mfp.UpdateIRQ();
                         break;
 
@@ -450,20 +465,20 @@ namespace ASE
                             if (oldMode != newMode)
                                 ASEMain._mfp.timerAPredivAcc = 0;
 
-                            // Si estaba apagado y lo encienden (delay 1..7 o event count 8)
+                            // If timer transitions from stopped to running, always reload counter from TDR
                             bool wasOff = (oldMode == 0);
                             bool isOn = (newMode != 0);
-                            if (wasOff && isOn && ASEMain._mfp.timerACounter == 0)
+                            if (wasOff && isOn)
                                 ASEMain._mfp.timerACounter = (ASEMain._mfp.TADR == 0 ? 256 : ASEMain._mfp.TADR);
 
                             break;
                         }
 
                     case 0x1B:
-                        { // TBCR
+                        { // TBCR - always reload counter when transitioning from stopped to running
                             bool wasOff = (ASEMain._mfp.TBCR & 0x07) == 0;
                             ASEMain._mfp.TBCR = v;
-                            if (wasOff && (v & 0x07) != 0 && ASEMain._mfp.timerBCounter == 0)
+                            if (wasOff && (v & 0x07) != 0)
                                 ASEMain._mfp.timerBCounter = (ASEMain._mfp.TBDR == 0 ? 256 : ASEMain._mfp.TBDR);
                             break;
                         }
@@ -488,24 +503,28 @@ namespace ASE
                             break;
                         }
 
-                    case 0x1F: // TADR
+                    case 0x1F: // TADR - only reload counter when timer is stopped
                         ASEMain._mfp.TADR = v;
-                        ASEMain._mfp.timerACounter = (v == 0 ? 256 : v);
+                        if ((ASEMain._mfp.TACR & 0x0F) == 0)
+                            ASEMain._mfp.timerACounter = (v == 0 ? 256 : v);
                         break;
 
-                    case 0x21: // TBDR
+                    case 0x21: // TBDR - only reload counter when timer is stopped
                         ASEMain._mfp.TBDR = v;
-                        ASEMain._mfp.timerBCounter = (v == 0 ? 256 : v);
+                        if ((ASEMain._mfp.TBCR & 0x0F) == 0)
+                            ASEMain._mfp.timerBCounter = (v == 0 ? 256 : v);
                         break;
 
-                    case 0x23: // TCDR
+                    case 0x23: // TCDR - only reload counter when timer is stopped
                         ASEMain._mfp.TCDR = v;
-                        ASEMain._mfp.timerCCounter = (v == 0 ? 256 : v);
+                        if (((ASEMain._mfp.TCDCR >> 4) & 0x07) == 0)
+                            ASEMain._mfp.timerCCounter = (v == 0 ? 256 : v);
                         break;
 
-                    case 0x25: // TDDR
+                    case 0x25: // TDDR - only reload counter when timer is stopped
                         ASEMain._mfp.TDDR = v;
-                        ASEMain._mfp.timerDCounter = (v == 0 ? 256 : v);
+                        if ((ASEMain._mfp.TCDCR & 0x07) == 0)
+                            ASEMain._mfp.timerDCounter = (v == 0 ? 256 : v);
                         break;
                 }
 
@@ -544,6 +563,17 @@ namespace ASE
                 {
                     WD1772.WriteWord(addr, v);
                     return;
+                }
+
+                // Blitter ($FF8A00-$FF8A3C) - word writes handled atomically
+                if (addr >= 0xFF8A00 && addr <= 0xFF8A3C)
+                {
+                    if (ConfigOptions.RunninConfig.STModel == ConfigOptions.STModels.STE ||
+                        ConfigOptions.RunninConfig.STModel == ConfigOptions.STModels.Mega)
+                    {
+                        Blitter.WriteWord(addr, v);
+                        return;
+                    }
                 }
 
                 BigEndian.Write16(addr, v);

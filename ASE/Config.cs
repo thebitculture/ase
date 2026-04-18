@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using static SDL2.SDL;
 
 namespace ASE
 {
@@ -41,6 +42,11 @@ namespace ASE
                 RAM_4MB = 3,
             }
 
+            public enum GamepadButtonsMapping
+            {
+                None, Fire, Space, Up, Y, N, T
+            }
+
             /// <summary>
             /// Holds the active configuration
             /// </summary>
@@ -53,8 +59,7 @@ namespace ASE
             public RAMConfigurations RAMConfiguration { get; set; } = RAMConfigurations.RAM_1MB;
             public  bool MaxSpeed { get; set; } = false;
             public string FloppyImagePath { get; set; } = "";
-            public int MouseXSensitivity { get; set; } = 2;
-            public int MouseYSensitivity { get; set; } = 2;
+            public float MouseSensitivity { get; set; } = 2;
             public int SampleRate { get; set; } = 44100;
 
             // Screen flags
@@ -65,7 +70,24 @@ namespace ASE
             public float Bloom { get; set; } = 0.22f;
             public float Mask { get; set; } = 0.50f;
             public float Noise { get; set; } = 0.25f;
-            
+
+            // Joystick emulation
+            public SDL_Scancode KeyJoy1Up { get; set; } = SDL_Scancode.SDL_SCANCODE_KP_8;
+            public SDL_Scancode KeyJoy1Down { get; set; } = SDL_Scancode.SDL_SCANCODE_KP_5;
+            public SDL_Scancode KeyJoy1Left { get; set; } = SDL_Scancode.SDL_SCANCODE_KP_4;
+            public SDL_Scancode KeyJoy1Right { get; set; } = SDL_Scancode.SDL_SCANCODE_KP_6;
+            public SDL_Scancode KeyJoy1Fire { get; set; } = SDL_Scancode.SDL_SCANCODE_KP_0;
+
+            // Gamepad button mapping
+            public GamepadButtonsMapping GamepadButtonX { get; set; } = GamepadButtonsMapping.Up;
+            public GamepadButtonsMapping GamepadButtonY { get; set; } = GamepadButtonsMapping.Fire;
+            public GamepadButtonsMapping GamepadButtonA { get; set; } = GamepadButtonsMapping.Fire;
+            public GamepadButtonsMapping GamepadButtonB { get; set; } = GamepadButtonsMapping.Space;
+            public GamepadButtonsMapping GamepadButtonLS { get; set; } = GamepadButtonsMapping.Y;
+            public GamepadButtonsMapping GamepadButtonRS { get; set; } = GamepadButtonsMapping.N;
+            public GamepadButtonsMapping GamepadButtonLB { get; set; } = GamepadButtonsMapping.T;
+            public GamepadButtonsMapping GamepadButtonRB { get; set; } = GamepadButtonsMapping.Space;
+
             // Debug flags
             [JsonIgnore(Condition = JsonIgnoreCondition.WhenWriting)]
             public bool DiskDump { get; set; } = false;  // Not exposed, only for my testing
@@ -119,21 +141,16 @@ namespace ASE
                             ConfigOptions.RunninConfig.FloppyImagePath = parts[1];
                         break;
                     case "--mouse-sensitivity":
-                        if (parts.Length > 1 && Regex.IsMatch(parts[1], @"^\d+,\d+$"))
+                        if (parts.Length > 1 && Regex.IsMatch(parts[1], @"^\d+"))
                         {
-                            string[] sensParts = parts[1].Split(',');
-
-                            if (int.TryParse(sensParts[0], out int xSens))
-                                ConfigOptions.RunninConfig.MouseXSensitivity = xSens;
-
-                            if (int.TryParse(sensParts[1], out int ySens))
-                                ConfigOptions.RunninConfig.MouseYSensitivity = ySens;
+                            if (parts.Length > 1 && float.TryParse(parts[1], out float xSens))
+                                ConfigOptions.RunninConfig.MouseSensitivity = xSens;
                         }
                         else
                         {
-                            ColoredConsole.WriteLine("Invalid mouse sensitivity format. Use --mouse-sensitivity=X,Y where X and Y are integers.");
-                            ColoredConsole.WriteLine("Example: --mouse-sensitivity=3,3");
-                            ColoredConsole.WriteLine($"Using default sensitivity [[cyan]]{ConfigOptions.RunninConfig.MouseXSensitivity},{ConfigOptions.RunninConfig.MouseYSensitivity}[[/cyan]].");
+                            ColoredConsole.WriteLine("Invalid mouse sensitivity format. Use --mouse-sensitivity=N");
+                            ColoredConsole.WriteLine("Example: --mouse-sensitivity=2.5");
+                            ColoredConsole.WriteLine($"Using default sensitivity [[cyan]]{ConfigOptions.RunninConfig.MouseSensitivity}[[/cyan]].");
                         }
                         break;
                     case "--altconfig":
@@ -151,8 +168,8 @@ namespace ASE
                         Console.WriteLine("  --altconfig=<path>            Loads alternative config");
                         Console.WriteLine("  --debug                       Debug mode");
                         Console.WriteLine("  --maxspeed=[true/false]       Run at max speed or ST speed");
-                        Console.WriteLine("  --floppy=[image.st]           Starts with .st floppy image inserted");
-                        Console.WriteLine("  --mouse-sensitivity=X,Y       Set mouse sensitivity for X and Y axes (default: 2,2)");
+                        Console.WriteLine("  --floppy=[image file]         Starts with floppy image inserted");
+                        Console.WriteLine("  --mouse-sensitivity=N         Set mouse sensitivity (default: 2)");
                         Console.WriteLine("  --help, -h                    Show this help message");
                         Environment.Exit(0);
                         break;
@@ -190,7 +207,7 @@ namespace ASE
                     };
 
                     string json = File.ReadAllText(ConfigFile);
-                    ConfigOptions? cfg = JsonSerializer.Deserialize<ConfigOptions>(json, options);
+                    ConfigOptions cfg = JsonSerializer.Deserialize<ConfigOptions>(json, options);
 
                     if (cfg == null)
                     {

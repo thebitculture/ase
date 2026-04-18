@@ -4,6 +4,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
+using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using SDL2;
 using System;
@@ -23,6 +24,8 @@ namespace ASE
         Bitmap BitmapLedDriveOff;
         DateTime TimeLastDriveOn = DateTime.Now;
         DateTime TimeLastTimeTextBlock = DateTime.Now;
+
+        string ZipFile = "";
         
         public MainWindow()
         {
@@ -30,6 +33,8 @@ namespace ASE
 
             BitmapLedDriveOn = new Bitmap(AssetLoader.Open(new Uri("avares://ASE/Assets/drive_led_on.png")));
             BitmapLedDriveOff = new Bitmap(AssetLoader.Open(new Uri("avares://ASE/Assets/drive_led_off.png")));
+
+            AddHandler(DragDrop.DropEvent, OnDrop);
         }
 
         protected override void OnOpened(EventArgs e)
@@ -40,12 +45,11 @@ namespace ASE
             GameAspectRatio = (float)ASEMain.ScreenWidth / ((float)ASEMain.ScreenHeight + ((float)MainMenu.Height + (float)BottomStatusBar.Bounds.Height));
             this.GetObservable(Window.ClientSizeProperty).Subscribe(OnClientSizeChanged);
 
-            // El handle nativo, es lo que necesita SDL para acoplarse a la ventana.
+            // Attach SDL to the window
             var platformHandle = this.TryGetPlatformHandle();
 
             if (platformHandle != null)
             {
-                // platformHandle.Handle es el puntero (IntPtr) que necesitamos
                 _sdlWindowPtr = SDL.SDL_CreateWindowFrom(platformHandle.Handle);
 
                 if (_sdlWindowPtr == IntPtr.Zero)
@@ -72,7 +76,7 @@ namespace ASE
             ASEMain.Shutdown();
         }
 
-        private void GL_OnPointerPressed(object? sender, PointerPressedEventArgs e)
+        private void GL_OnPointerPressed(object sender, PointerPressedEventArgs e)
         {
             // SDL can't capture mouse button presses directly from Avalonia, so
             // I have to do it manually here and forward it to the ACIA mouse handling.
@@ -89,12 +93,12 @@ namespace ASE
             }
         }
 
-        private void GL_OnPointerReleased(object? sender, PointerReleasedEventArgs e)
+        private void GL_OnPointerReleased(object sender, PointerReleasedEventArgs e)
         {
             // SDL can't capture mouse button releases directly from Avalonia, so
             // I have to do it manually here and forward it to the ACIA mouse handling.
             // I’m sure there are better ways to do this, but for now it does what
-            // I need it to do and that’s enough for me.
+            // I need it to do and that’s enough by now.
 
             if (e.InitialPressMouseButton == MouseButton.Left && ASEMain.IsMouseCaptured)
             {
@@ -124,7 +128,7 @@ namespace ASE
 
             double currentRatio = newSize.Width / glHeight;
 
-            // Si la relación de aspecto difiere del objetivo (con un margen de tolerancia)
+            // MAintains aspect ratio of the window
             if (Math.Abs(currentRatio - GameAspectRatio) > 0.05)
             {
                 _isResizing = true;
@@ -132,7 +136,6 @@ namespace ASE
                 double targetGlHeight = newSize.Width / GameAspectRatio;
                 double targetClientHeight = targetGlHeight + barsHeight;
 
-                // Dispatcher para cambiar el tamaño fuera del ciclo actual de layout
                 Dispatcher.UIThread.Post(() =>
                 {
                     try
@@ -204,36 +207,116 @@ namespace ASE
             Close();
         }
 
-        public void OnOpenImageClick(object sender, RoutedEventArgs e)
+        private void OnDrop(object sender, DragEventArgs e)
+        {
+            bool HasValidFile = false;
+
+            var files = e.DataTransfer.GetItems(DataFormat.File);
+
+            foreach (var file in files)
+            {
+                IStorageItem storageItem = file.TryGetFile();
+
+                // Get the first valid file
+                if (storageItem != null)
+                {
+                    string s = storageItem.TryGetLocalPath();
+
+                    if (s.EndsWith(".st", StringComparison.OrdinalIgnoreCase)
+                        || s.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)
+                        || s.EndsWith(".msa", StringComparison.OrdinalIgnoreCase)
+                        )
+                    {
+                        HasValidFile = true;
+                        InsertDisk(s);
+                        break;
+                    }
+                }
+            }
+
+            if(!HasValidFile)
+                SetStatusBarText($"❌ Dropped file is an invalid disk image");
+
+            e.Handled = true;
+        }
+
+        public async void OnOpenImageClick(object sender, RoutedEventArgs e)
         {
             ASEMain.CaptureMouse(false);
 
-            var (canceled, selpath) = TinyDialogs.OpenFileDialog("Select disk image file", "", false, new FileFilter("ST disk images", ["*.st", "*.msa"]));
+            var (canceled, selpath) = TinyDialogs.OpenFileDialog("Select disk image file", "", false,
+                new FileFilter("ST disk images", ["*.st", "*.msa", "*.zip"]));
 
             if (!canceled && selpath.Count() == 1)
+                InsertDisk(selpath.ElementAt(0));
+        }
+
+        public async void OnChangeDiskClick(object sender, RoutedEventArgs e)
+        {
+            InsertDisk(ZipFile);
+        }
+
+        async void InsertDisk(string ImageFile)
+        {
+            DisableEjectMenu();
+
+            string message;
+            bool inserted = ASEMain.driveA.Insert(ImageFile, out message);
+
+            if (!inserted)
             {
-                string message;
-                bool inserted = ASEMain.driveA.Insert(selpath.ElementAt(0), out message);
+                if (ImageFile.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+                {
+                    // zip contains more than one image disk
+                    var dialog = new FileList(message);
+                    var selectedFile = await dialog.ShowDialog<string>(this);
 
-                if (!inserted)
-                    TinyDialogs.MessageBox("Error", message, MessageBoxDialogType.Ok, MessageBoxIconType.Error, MessageBoxButton.Ok);
+                    if (selectedFile != null)
+                    {
+                        bool insertedFromZip = ASEMain.driveA.Insert($"{ImageFile}|{selectedFile}", out message);
+
+                        if (!insertedFromZip)
+                        {
+                            TinyDialogs.MessageBox("Error", message, MessageBoxDialogType.Ok, MessageBoxIconType.Error, MessageBoxButton.Ok);
+                            return;
+                        }
+
+                        ZipFile = ImageFile;
+                        ItemMenuChangeDisk.IsEnabled = true;
+                        ImageFile = selectedFile;
+                    }
+                }
                 else
-                    ColoredConsole.WriteLine(message);
-
-                var response = TinyDialogs.MessageBox("Disk inserted", "Reboot?", MessageBoxDialogType.YesNo, MessageBoxIconType.Question, MessageBoxButton.Yes);
-
-                if (response == MessageBoxButton.Yes)
-                    ASEMain.HardReset();
-
-                ItemMenuEjecDisk.IsEnabled = true;
-                
-                SetStatusBarText( $"Disk {Path.GetFileName(( selpath.ElementAt(0)))} inserted in drive A");
+                {
+                    TinyDialogs.MessageBox("Error", message, MessageBoxDialogType.Ok, MessageBoxIconType.Error, MessageBoxButton.Ok);
+                    return;
+                }
             }
+            else
+            {
+                ColoredConsole.WriteLine(message);
+            }
+
+            var response = TinyDialogs.MessageBox("Disk inserted", "Reboot?", MessageBoxDialogType.YesNo, MessageBoxIconType.Question, MessageBoxButton.Yes);
+
+            if (response == MessageBoxButton.Yes)
+                ASEMain.HardReset();
+
+            ItemMenuEjecDisk.IsEnabled = true;
+
+            SetStatusBarText($"Disk {Path.GetFileName(ImageFile)} inserted in drive A");
         }
 
         public void OnEjecImageClick(object sender, RoutedEventArgs e)
         {
             ASEMain.driveA.Eject();
+            ZipFile = "";
+            DisableEjectMenu();
+        }
+
+        void DisableEjectMenu()
+        {
+            ItemMenuChangeDisk.IsEnabled = false;
             ItemMenuEjecDisk.IsEnabled = false;
         }
 
@@ -251,7 +334,7 @@ namespace ASE
             configWindow.ShowDialog(this);
         }
 
-        private void OnAboutClick(object? sender, RoutedEventArgs e)
+        private void OnAboutClick(object sender, RoutedEventArgs e)
         {
             var aboutWindow = new AboutWindow();
             aboutWindow.ShowDialog(this);

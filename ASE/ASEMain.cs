@@ -21,8 +21,8 @@ namespace ASE
         public const int ScreenHeight = 400;
         public const int ScreenViewSize = ScreenWidth * ScreenHeight;
 
-        public static Memory? _mem;
-        public static MFP68901? _mfp;
+        public static Memory _mem;
+        public static MFP68901 _mfp;
         public static YM2149 _ym;
 
         static SDL.SDL_AudioCallback _audiocallback;
@@ -154,6 +154,8 @@ namespace ASE
                     _ym.Sync(cyclesDuringScreenActive);
                     // Sync interrupts
                     _mfp.UpdateTimers(cyclesDuringScreenActive);
+                    // Sync FDC index pulse counter
+                    WD1772.TickCycles(cyclesDuringScreenActive);
 
                     // Actives H-Blank (right border)
                     int cyclesDuringHBL = 64;
@@ -283,10 +285,35 @@ namespace ASE
         public static void CaptureMouse(bool capture = true)
         {
             IsMouseCaptured = capture;
-            SDL.SDL_SetRelativeMouseMode(capture ? SDL.SDL_bool.SDL_TRUE : SDL.SDL_bool.SDL_FALSE);
+            SDL_SetRelativeMouseMode(capture ? SDL.SDL_bool.SDL_TRUE : SDL.SDL_bool.SDL_FALSE);
             
             MainWindow.Cursor = capture ? new Avalonia.Input.Cursor(Avalonia.Input.StandardCursorType.None) : null;
             MainWindow.ShowMenu(!capture);
+        }
+
+        public static void GamepadButton(ConfigOptions.GamepadButtonsMapping buttonMapping, bool pressed)
+        {
+            switch (buttonMapping)
+            {
+                case ConfigOptions.GamepadButtonsMapping.Fire:
+                    ACIA.UpdateJoystick(ACIA.JOY_FIRE, pressed);
+                    break;
+                case ConfigOptions.GamepadButtonsMapping.Up:
+                    ACIA.UpdateJoystick(ACIA.JOY_UP, pressed);
+                    break;
+                case ConfigOptions.GamepadButtonsMapping.Space:
+                    ACIA.PushIkbd((byte)(pressed ? 0x39 : (0x39 | 0x80)));
+                    break;
+                case ConfigOptions.GamepadButtonsMapping.Y:
+                    ACIA.PushIkbd((byte)(pressed ? 0x15 : (0x15 | 0x80)));
+                    break;
+                case ConfigOptions.GamepadButtonsMapping.N:
+                    ACIA.PushIkbd((byte)(pressed ? 0x31 : (0x31 | 0x80)));
+                    break;
+                case ConfigOptions.GamepadButtonsMapping.T:
+                    ACIA.PushIkbd((byte)(pressed ? 0x14 : (0x14 | 0x80)));
+                    break;
+            }
         }
 
         public static void HandleEvents(SDL_Event e)
@@ -294,34 +321,23 @@ namespace ASE
             bool IgnoreCtlrKeyUp = false;
 
             // First, check the host keyboard that emulates the joystick
-            // Numpad mapping: 8=Up, 5=Down, 4=Left, 6=Right, 0=Fire
-            // This should be configurable in the future...
             if ((e.type == SDL_EventType.SDL_KEYDOWN && e.key.repeat == 0) || e.type == SDL_EventType.SDL_KEYUP)
             {
                 bool pressed = (e.type == SDL_EventType.SDL_KEYDOWN);
                 bool isJoyKey = true;
 
-                switch (e.key.keysym.scancode)
-                {
-                    case SDL_Scancode.SDL_SCANCODE_KP_8:
-                        ACIA.UpdateJoystick(ACIA.JOY_UP, pressed);
-                        break;
-                    case SDL_Scancode.SDL_SCANCODE_KP_5:
-                        ACIA.UpdateJoystick(ACIA.JOY_DOWN, pressed);
-                        break;
-                    case SDL_Scancode.SDL_SCANCODE_KP_4:
-                        ACIA.UpdateJoystick(ACIA.JOY_LEFT, pressed);
-                        break;
-                    case SDL_Scancode.SDL_SCANCODE_KP_6:
-                        ACIA.UpdateJoystick(ACIA.JOY_RIGHT, pressed);
-                        break;
-                    case SDL_Scancode.SDL_SCANCODE_KP_0:
-                        ACIA.UpdateJoystick(ACIA.JOY_FIRE, pressed);
-                        break;
-                    default:
-                        isJoyKey = false;
-                        break;
-                }
+                if(e.key.keysym.scancode == ConfigOptions.RunninConfig.KeyJoy1Up)
+                    ACIA.UpdateJoystick(ACIA.JOY_UP, pressed);
+                else if (e.key.keysym.scancode == ConfigOptions.RunninConfig.KeyJoy1Down)
+                    ACIA.UpdateJoystick(ACIA.JOY_DOWN, pressed);
+                else if (e.key.keysym.scancode == ConfigOptions.RunninConfig.KeyJoy1Left)
+                    ACIA.UpdateJoystick(ACIA.JOY_LEFT, pressed);
+                else if (e.key.keysym.scancode == ConfigOptions.RunninConfig.KeyJoy1Right)
+                    ACIA.UpdateJoystick(ACIA.JOY_RIGHT, pressed);
+                else if (e.key.keysym.scancode == ConfigOptions.RunninConfig.KeyJoy1Fire)
+                    ACIA.UpdateJoystick(ACIA.JOY_FIRE, pressed);
+                else
+                    isJoyKey = false;
 
                 if (isJoyKey) return;
             }
@@ -347,10 +363,69 @@ namespace ASE
                         ACIA.UpdateJoystick(ACIA.JOY_RIGHT, pressed);
                         break;
                     case SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_A:
-                        ACIA.UpdateJoystick(ACIA.JOY_FIRE, pressed);
+                        GamepadButton(Config.ConfigOptions.RunninConfig.GamepadButtonA, pressed);
+                        break;
+                    case SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_B:
+                        GamepadButton(Config.ConfigOptions.RunninConfig.GamepadButtonB, pressed);
+                        break;
+                    case SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_X:
+                        GamepadButton(Config.ConfigOptions.RunninConfig.GamepadButtonX, pressed);
+                        break;
+                    case SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_Y:
+                        GamepadButton(Config.ConfigOptions.RunninConfig.GamepadButtonY, pressed);
+                        break;
+                    case SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_LEFTSHOULDER:
+                        GamepadButton(Config.ConfigOptions.RunninConfig.GamepadButtonLB, pressed);
+                        break;
+                    case SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_RIGHTSHOULDER:
+                        GamepadButton(Config.ConfigOptions.RunninConfig.GamepadButtonRB, pressed);
+                        break;
+                    case SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_LEFTSTICK:
+                        GamepadButton(Config.ConfigOptions.RunninConfig.GamepadButtonLS, pressed);
+                        break;
+                    case SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_RIGHTSTICK:
+                        GamepadButton(Config.ConfigOptions.RunninConfig.GamepadButtonRS, pressed);
                         break;
                 }
 
+                return;
+            }
+
+            // Gamepad connected
+            if (e.type == SDL.SDL_EventType.SDL_CONTROLLERDEVICEADDED)
+            {
+                int deviceIndex = e.cdevice.which;
+                if (GamepadController == nint.Zero && SDL.SDL_IsGameController(deviceIndex) == SDL.SDL_bool.SDL_TRUE)
+                {
+                    GamepadController = SDL.SDL_GameControllerOpen(deviceIndex);
+                    ColoredConsole.WriteLine("[[green]]Gamepad connected![[/green]]");
+                }
+                return;
+            }
+
+            // Gamepad disconnected
+            if (e.type == SDL.SDL_EventType.SDL_CONTROLLERDEVICEREMOVED)
+            {
+                if (GamepadController != nint.Zero)
+                {
+                    var instanceId = e.cdevice.which;
+                    var currentInstanceId = SDL.SDL_JoystickInstanceID(SDL.SDL_GameControllerGetJoystick(GamepadController));
+
+                    if (instanceId == currentInstanceId)
+                    {
+                        SDL.SDL_GameControllerClose(GamepadController);
+                        GamepadController = nint.Zero;
+
+                        // Reset joystick state
+                        ACIA.UpdateJoystick(ACIA.JOY_UP, false);
+                        ACIA.UpdateJoystick(ACIA.JOY_DOWN, false);
+                        ACIA.UpdateJoystick(ACIA.JOY_LEFT, false);
+                        ACIA.UpdateJoystick(ACIA.JOY_RIGHT, false);
+                        ACIA.UpdateJoystick(ACIA.JOY_FIRE, false);
+
+                        ColoredConsole.WriteLine("[[yellow]]Gamepad disconnected![[/yellow]]");
+                    }
+                }
                 return;
             }
 
@@ -474,7 +549,6 @@ namespace ASE
                     if (e.button.button == SDL.SDL_BUTTON_RIGHT)
                         ACIA._mouseButtons &= ~0x01; // Apagar Bit 0
 
-                    // Fuerza la actualización del ratón en el ST
                     ACIA.SendMousePacket(0, 0);
                 }
             }

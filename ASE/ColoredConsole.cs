@@ -75,10 +75,14 @@ namespace ASE
         /// <remarks>This method is useful for outputting text with a newline, making it suitable for
         /// logging or console output.</remarks>
         /// <param name="text">The text to write to the output. This parameter cannot be null.</param>
-        public static void WriteLine(string text)
-        { 
-            Write(text);
-            Write(Environment.NewLine);
+        /// <param name="DebugMode">Print in debug mode only.</param>
+        public static void WriteLine(string text, bool DebugMode = false)
+        {
+            if (!DebugMode || Config.ConfigOptions.RunninConfig.DebugMode)
+            {
+                Write(text);
+                Write(Environment.NewLine);
+            }
         }
     }
 }

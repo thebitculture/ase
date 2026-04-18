@@ -26,6 +26,7 @@ using SDL2;
 using System.Diagnostics;
 using TinyDialogsNet;
 using Avalonia;
+using Avalonia.Native;
 using ReactiveUI.Avalonia;
 using static ASE.Config;
 using static ASE.Video;
@@ -40,8 +41,12 @@ namespace ASE
         public static AppBuilder BuildAvaloniaApp()
             => AppBuilder.Configure<App>()
                 .UsePlatformDetect()
+                .With(new AvaloniaNativePlatformOptions
+                {
+                    RenderingMode = new[] { AvaloniaNativeRenderingMode.OpenGl }
+                })
                 .LogToTrace()
-                .UseReactiveUI();
+                .UseReactiveUI(_ => { });
 
 
         [STAThread]
@@ -49,6 +54,11 @@ namespace ASE
         {
             Config = new Config();
             Config.LoadConfig(args);
+
+            ReleaseChecker.IsNewVersionAvailableAsync().Wait();
+
+            if (ReleaseChecker.ReleaseInfo.ExistsNewVersion)
+                ColoredConsole.WriteLine($"⭐⭐ New release [[yellow]]{ReleaseChecker.ReleaseInfo.TagName}[[/yellow]] available!! from [[magenta]]{ReleaseChecker.ReleaseInfo.HtmlUrl}[[/magenta]] ⭐⭐");
 
             SDL.SDL_SetHint(SDL.SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");
             SDL.SDL_SetHint(SDL.SDL_HINT_MAC_BACKGROUND_APP, "1");

@@ -1,14 +1,14 @@
 <Window xmlns="https://github.com/avaloniaui"
 		xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-		xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
 		xmlns:svg="clr-namespace:Avalonia.Svg;assembly=Svg.Controls.Avalonia"
 		xmlns:local="clr-namespace:ASE"
 		x:Class="ASE.ConfigurationWindow"
+		x:DataType="local:Config+ConfigOptions"
 		Title="Configuration"
 		CanResize="False"
 		WindowStartupLocation="CenterScreen"
 		UseLayoutRounding="True"
-		mc:Ignorable="d" Width="600" Height="470"
+		Width="600" Height="470"
 		>
 
 	<Grid RowDefinitions="Auto,*,Auto" Margin="14">
@@ -27,16 +27,14 @@
 				<StackPanel Orientation="Vertical" Margin="0,10,0,0" Spacing="6" >
 					<Separator Margin="0,10"/>
 					<StackPanel Orientation="Horizontal" Margin="10,0,10,0" Spacing="8">
-						<!--
 						<Label VerticalAlignment="Center">Atari model</Label>
-						<ComboBox MaxDropDownHeight="100" Width="180" SelectedIndex="{Binding STModel, Mode=TwoWay}">
+						<ComboBox MaxDropDownHeight="100" Width="180" SelectedIndex="{Binding STModel, Mode=TwoWay}" SelectionChanged="Model_SelectionChanged" >
 							<ComboBoxItem>Atari STF/FM</ComboBoxItem>
 							<ComboBoxItem>Atari STF/FM + Blitter</ComboBoxItem>
-							<ComboBoxItem>Atari STE</ComboBoxItem>
+							<!--  <ComboBoxItem>Atari STE</ComboBoxItem> -->
 						</ComboBox>
-						-->
 						<Label VerticalAlignment="Center">Memory</Label>
-						<ComboBox MaxDropDownHeight="100" Width="180" SelectedIndex="{Binding RAMConfiguration, Mode=TwoWay}">
+						<ComboBox MaxDropDownHeight="100" Width="180" SelectedIndex="{Binding RAMConfiguration, Mode=TwoWay}" SelectionChanged="Memory_SelectionChanged">
 							<ComboBoxItem>512KB</ComboBoxItem>
 							<ComboBoxItem>1MB</ComboBoxItem>
 							<ComboBoxItem>2MB</ComboBoxItem>
@@ -50,15 +48,6 @@
 							<Button Grid.Column="1" Content="Browse…" Click="OnBrowseTOSImageClick" />
 						</Grid>
 					</StackPanel>
-					<Border
-						Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
-						BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
-						BorderThickness="2"
-						CornerRadius="4"
-						Padding="6"
-						Margin="6">
-						<TextBlock TextWrapping="Wrap">ℹ️ Atari ST F/FM: 512 colors, mono YM sound, no blitter. TOS 1.00 to 1.04</TextBlock>
-					</Border>
 				</StackPanel>
 		    </TabItem>
 			<TabItem>
@@ -115,7 +104,6 @@
 					<Separator Margin="0,10"/>
 				</StackPanel>
 			</TabItem>
-			<!--
 			<TabItem>
 				<TabItem.Header>
 					<Grid ColumnDefinitions="Auto,Auto" VerticalAlignment="Center">
@@ -130,9 +118,146 @@
 				</TabItem.Header>
 				<StackPanel Orientation="Vertical" Margin="0,10,0,0" Spacing="6" >
 					<Separator Margin="0,10"/>
+					<StackPanel>
+						<TextBlock Text="{Binding #SliderMouseSensitivity.Value, StringFormat={}Mouse sensitivity adjustment : {0:0.0}}" VerticalAlignment="Center"/>
+						<Grid ColumnDefinitions="32,*,32">
+							<Svg Path="/Assets/Icons/mousecursorfast.svg"
+							 Width="24" Height="24" Grid.Column="0"
+							 VerticalAlignment="Center"/>
+							<Slider x:Name="SliderMouseSensitivity" Value="{Binding MouseSensitivity, Mode=TwoWay}" Minimum="0.5" Maximum="5.0" TickFrequency="0.5" IsSnapToTickEnabled="True" Grid.Column="1" />
+							<Svg Path="/Assets/Icons/mousecursorslow.svg"
+							 Width="24" Height="24" Grid.Column="2"
+							 VerticalAlignment="Center"/>
+						</Grid>
+					</StackPanel>
+					<Separator />
+					<UniformGrid Columns="2">
+						<Border 
+							BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+							BorderThickness="1"
+							CornerRadius="12"
+							Margin="4" Padding="8">
+							<StackPanel Spacing="8">
+								<TextBlock HorizontalAlignment="Center">🕹️ Joystick mapped to keys</TextBlock>
+								<Grid ColumnDefinitions="auto,auto,auto" RowDefinitions="auto,auto,auto,auto,auto" ColumnSpacing="10" HorizontalAlignment="Center">
+									<TextBlock VerticalAlignment="Center" Grid.Column="0" Grid.Row="0">Up</TextBlock>
+									<TextBlock VerticalAlignment="Center" x:Name="TextUp" FontWeight="Bold" Grid.Column="1" Grid.Row="0">8</TextBlock>
+									<Button x:Name="btnRedefineUp" VerticalAlignment="Center" Grid.Column="2" Grid.Row="0" Click="OnRedefine">Redefine</Button>
+
+									<TextBlock VerticalAlignment="Center" Grid.Column="0" Grid.Row="1">Down</TextBlock>
+									<TextBlock VerticalAlignment="Center" x:Name="TextDown" FontWeight="Bold" Grid.Column="1" Grid.Row="1">8</TextBlock>
+									<Button x:Name="btnRedefineDown" VerticalAlignment="Center" Grid.Column="2" Grid.Row="1" Click="OnRedefine">Redefine</Button>
+
+									<TextBlock VerticalAlignment="Center" Grid.Column="0" Grid.Row="2">Left</TextBlock>
+									<TextBlock VerticalAlignment="Center" x:Name="TextLeft" FontWeight="Bold" Grid.Column="1" Grid.Row="2">8</TextBlock>
+									<Button x:Name="btnRedefineLeft" VerticalAlignment="Center" Grid.Column="2" Grid.Row="2" Click="OnRedefine">Redefine</Button>
+
+									<TextBlock VerticalAlignment="Center" Grid.Column="0" Grid.Row="3">Right</TextBlock>
+									<TextBlock VerticalAlignment="Center" x:Name="TextRight" FontWeight="Bold" Grid.Column="1" Grid.Row="3">8</TextBlock>
+									<Button x:Name="btnRedefineRight" VerticalAlignment="Center" Grid.Column="2" Grid.Row="3" Click="OnRedefine">Redefine</Button>
+
+									<TextBlock VerticalAlignment="Center" Grid.Column="0" Grid.Row="4">Fire</TextBlock>
+									<TextBlock VerticalAlignment="Center" x:Name="TextFire" FontWeight="Bold" Grid.Column="1" Grid.Row="4">8</TextBlock>
+									<Button x:Name="btnRedefineFire" VerticalAlignment="Center" Grid.Column="2" Grid.Row="4" Click="OnRedefine">Redefine</Button>
+								</Grid>
+							</StackPanel>
+						</Border>
+						<Border 
+							BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+							BorderThickness="1"
+							CornerRadius="12"
+							Margin="2" Padding="8">
+							<StackPanel Spacing="8">
+								<TextBlock HorizontalAlignment="Center">🎮 Gamepad buttons mapping</TextBlock>
+								<Grid ColumnDefinitions="auto,auto,auto,auto" RowDefinitions="auto,auto,auto,auto" ColumnSpacing="10" RowSpacing="8" HorizontalAlignment="Center">
+									<!-- Column 1 -->
+									<TextBlock VerticalAlignment="Center" Grid.Column="0" Grid.Row="0">Y</TextBlock>
+									<ComboBox Name="ComboY" Grid.Column="1" Grid.Row="0" Width="80">
+										<ComboBoxItem>None</ComboBoxItem>
+										<ComboBoxItem>Fire</ComboBoxItem>
+										<ComboBoxItem>Space</ComboBoxItem>
+										<ComboBoxItem>Up</ComboBoxItem>
+										<ComboBoxItem>Y</ComboBoxItem>
+										<ComboBoxItem>N</ComboBoxItem>
+										<ComboBoxItem>T</ComboBoxItem>
+									</ComboBox>
+									<TextBlock VerticalAlignment="Center" Grid.Column="0" Grid.Row="1">X</TextBlock>
+									<ComboBox Name="ComboX" Grid.Column="1" Grid.Row="1" Width="80">
+										<ComboBoxItem>None</ComboBoxItem>
+										<ComboBoxItem>Fire</ComboBoxItem>
+										<ComboBoxItem>Space</ComboBoxItem>
+										<ComboBoxItem>Up</ComboBoxItem>
+										<ComboBoxItem>Y</ComboBoxItem>
+										<ComboBoxItem>N</ComboBoxItem>
+										<ComboBoxItem>T</ComboBoxItem>
+									</ComboBox>
+									<TextBlock VerticalAlignment="Center" Grid.Column="0" Grid.Row="2">B</TextBlock>
+									<ComboBox Name="ComboB" Grid.Column="1" Grid.Row="2" Width="80">
+										<ComboBoxItem>None</ComboBoxItem>
+										<ComboBoxItem>Fire</ComboBoxItem>
+										<ComboBoxItem>Space</ComboBoxItem>
+										<ComboBoxItem>Up</ComboBoxItem>
+										<ComboBoxItem>Y</ComboBoxItem>
+										<ComboBoxItem>N</ComboBoxItem>
+										<ComboBoxItem>T</ComboBoxItem>
+									</ComboBox>
+									<TextBlock VerticalAlignment="Center" Grid.Column="0" Grid.Row="3">A</TextBlock>
+									<ComboBox Name="ComboA" Grid.Column="1" Grid.Row="3" Width="80">
+										<ComboBoxItem>None</ComboBoxItem>
+										<ComboBoxItem>Fire</ComboBoxItem>
+										<ComboBoxItem>Space</ComboBoxItem>
+										<ComboBoxItem>Up</ComboBoxItem>
+										<ComboBoxItem>Y</ComboBoxItem>
+										<ComboBoxItem>N</ComboBoxItem>
+										<ComboBoxItem>T</ComboBoxItem>
+									</ComboBox>
+									<!-- Column 2 -->
+									<TextBlock VerticalAlignment="Center" Grid.Column="2" Grid.Row="0">LB</TextBlock>
+									<ComboBox Name="ComboLB" Grid.Column="3" Grid.Row="0" Width="80">
+										<ComboBoxItem>None</ComboBoxItem>
+										<ComboBoxItem>Fire</ComboBoxItem>
+										<ComboBoxItem>Space</ComboBoxItem>
+										<ComboBoxItem>Up</ComboBoxItem>
+										<ComboBoxItem>Y</ComboBoxItem>
+										<ComboBoxItem>N</ComboBoxItem>
+										<ComboBoxItem>T</ComboBoxItem>
+									</ComboBox>
+									<TextBlock VerticalAlignment="Center" Grid.Column="2" Grid.Row="1">RB</TextBlock>
+									<ComboBox Name="ComboRB" Grid.Column="3" Grid.Row="1" Width="80">
+										<ComboBoxItem>None</ComboBoxItem>
+										<ComboBoxItem>Fire</ComboBoxItem>
+										<ComboBoxItem>Space</ComboBoxItem>
+										<ComboBoxItem>Up</ComboBoxItem>
+										<ComboBoxItem>Y</ComboBoxItem>
+										<ComboBoxItem>N</ComboBoxItem>
+										<ComboBoxItem>T</ComboBoxItem>
+									</ComboBox>
+									<TextBlock VerticalAlignment="Center" Grid.Column="2" Grid.Row="2">LS</TextBlock>
+									<ComboBox Name="ComboLS" Grid.Column="3" Grid.Row="2" Width="80">
+										<ComboBoxItem>None</ComboBoxItem>
+										<ComboBoxItem>Fire</ComboBoxItem>
+										<ComboBoxItem>Space</ComboBoxItem>
+										<ComboBoxItem>Up</ComboBoxItem>
+										<ComboBoxItem>Y</ComboBoxItem>
+										<ComboBoxItem>N</ComboBoxItem>
+										<ComboBoxItem>T</ComboBoxItem>
+									</ComboBox>
+									<TextBlock VerticalAlignment="Center" Grid.Column="2" Grid.Row="3">RS</TextBlock>
+									<ComboBox Name="ComboRS" Grid.Column="3" Grid.Row="3" Width="80">
+										<ComboBoxItem>None</ComboBoxItem>
+										<ComboBoxItem>Fire</ComboBoxItem>
+										<ComboBoxItem>Space</ComboBoxItem>
+										<ComboBoxItem>Up</ComboBoxItem>
+										<ComboBoxItem>Y</ComboBoxItem>
+										<ComboBoxItem>N</ComboBoxItem>
+										<ComboBoxItem>T</ComboBoxItem>
+									</ComboBox>
+								</Grid>
+							</StackPanel>
+						</Border>
+					</UniformGrid>
 				</StackPanel>
 			</TabItem>
-			-->
 		</TabControl>
 
 		<StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="10" Spacing="8" Grid.Row="2">

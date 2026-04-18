@@ -14,7 +14,7 @@
 
 	<PropertyGroup>
 		<Major>1</Major>
-		<Minor>5</Minor>
+		<Minor>6</Minor>
 	</PropertyGroup>
 
 	<PropertyGroup>
@@ -53,14 +53,15 @@
 	</ItemGroup>
 
 	<ItemGroup>
-		<PackageReference Include="Avalonia" Version="11.3.11" />
-		<PackageReference Include="Avalonia.Desktop" Version="11.3.11" />
-		<PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.11" />
-		<PackageReference Include="ReactiveUI.Avalonia" Version="11.3.8" />
+		<PackageReference Include="Avalonia" Version="12.0.0" />
+		<PackageReference Include="Avalonia.Desktop" Version="12.0.0" />
+		<PackageReference Include="Avalonia.Themes.Fluent" Version="12.0.0" />
+		<PackageReference Include="ReactiveUI.Avalonia" Version="11.4.12" />
 		<PackageReference Include="sdl2" Version="2.0.5" />
 		<PackageReference Include="Silk.NET.OpenGL" Version="2.23.0" />
-		<PackageReference Include="Svg.Controls.Skia.Avalonia" Version="11.3.9.2" />
+		<PackageReference Include="Svg.Controls.Skia.Avalonia" Version="12.0.0.2" />
 		<PackageReference Include="TinyDialogsNet" Version="2.0.0" />
+		<PackageReference Include="Tmds.DBus.Protocol" Version="0.92.0" />
   </ItemGroup>
 
 	<ItemGroup>

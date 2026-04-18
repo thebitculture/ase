@@ -31,22 +31,39 @@ namespace ASE
 
             public static uint StColorToArgb8888(ushort stColor)
             {
-                // STFM/F palette, for the STE, this should be 16 tones of every primary color
-                // but I have not implemented :-/
-                int red3 = (stColor >> 8) & 0x07;  // Bits 8-6
-                int green3 = (stColor >> 4) & 0x07;  // Bits 5-3
-                int blue3 = (stColor >> 0) & 0x07;  // Bits 2-0
+                int red8, green8, blue8;
 
-                int red8 = (red3 << 5) | (red3 << 2) | (red3 >> 1);
-                int green8 = (green3 << 5) | (green3 << 2) | (green3 >> 1);
-                int blue8 = (blue3 << 5) | (blue3 << 2) | (blue3 >> 1);
+                if (Config.ConfigOptions.RunninConfig.STModel == Config.ConfigOptions.STModels.STE)
+                {
+                    // STE palette: 4 bits per component, 4096 colors.
+                    // The upper 3 bits of each component occupy the same positions as the ST (bits 10-8, 6-4, 2-0).
+                    // The new LSB for each component is stored at bits 11 (red), 7 (green) and 3 (blue).
+                    int red4   = (((stColor >>  8) & 0x07) << 1) | ((stColor >> 11) & 0x01);
+                    int green4 = (((stColor >>  4) & 0x07) << 1) | ((stColor >>  7) & 0x01);
+                    int blue4  = (((stColor >>  0) & 0x07) << 1) | ((stColor >>  3) & 0x01);
+
+                    red8   = (red4   << 4) | red4;
+                    green8 = (green4 << 4) | green4;
+                    blue8  = (blue4  << 4) | blue4;
+                }
+                else
+                {
+                    // ST / STFM / Mega palette: 3 bits per component, 512 colors.
+                    int red3   = (stColor >> 8) & 0x07;  // Bits 10-8
+                    int green3 = (stColor >> 4) & 0x07;  // Bits 6-4
+                    int blue3  = (stColor >> 0) & 0x07;  // Bits 2-0
+
+                    red8   = (red3 << 5) | (red3 << 2) | (red3 >> 1);
+                    green8 = (green3 << 5) | (green3 << 2) | (green3 >> 1);
+                    blue8  = (blue3 << 5) | (blue3 << 2) | (blue3 >> 1);
+                }
 
                 // ARGB8888: Alpha | red | green | blue
                 uint argb = 0xFF000000 |
-                            ((uint)red8 << 0) |
-                            ((uint)green8 << 8) | 
-                            ((uint)blue8 << 16);
-                
+                            ((uint)red8   <<  0) |
+                            ((uint)green8 <<  8) |
+                            ((uint)blue8  << 16);
+
                 return argb;
             }
 

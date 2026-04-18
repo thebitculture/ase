@@ -44,7 +44,6 @@ namespace ASE
         // Envelope (Hatari logic: 32-step blocks)
         private int _envShape;
         private int _envPos;      // Global position in the envelope (0..95)
-        private bool _envPhase;   // Not used directly, implicit in envPos
 
         // Oversampling / Downsampling variables
         private uint _resamplePos;
