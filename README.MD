@@ -3,31 +3,28 @@
 
 ![Logo.](Images/logo.png "Logo.")
 
-**Atari System Emulator** or **ASE** is an **Atari ST** emulator that, for the moment, only emulates the F/FM versions. It is written in C# and utilizes the great **Motorola 68000 Moira** emulator created by **Dr. Dirk Hoffmann**.
+**Atari System Emulator** or **ASE** is an **Atari ST** emulator that, for the moment, emulates the F/FM versions with, or without Blitter. It is written in C# and utilizes the great **Motorola 68000 Moira** emulator created by **Dr. Dirk Hoffmann**.
 
 This emulator has been partly ported from an old emulator that I started writing in C and assembly language in the late 90s, although in this released version, there is a bit of everything. Most of it has been rewritten, and other parts have been ported from **Hatari**, one of the best **Atari ST** emulators currently available.
 
-The idea behind writing this emulator was mainly to demonstrate how an emulator works on my **YouTube** channel, _**The Bit Culture**_. There is no ambition beyond that, although I hope to make the emulator somewhat more functional, such as adding STE elements like the Blitter, and above all, improving compatibility.
+The initial idea behind this emulator was for it to serve as a simple example to experiment with and study how an emulator works, as I explain on my **YouTube** channel, _**The Bit Culture**_. However, with later updates it has gained more complexity and is now more than just an easy-to-understand emulator. Even so, I invite you to check out the video on YouTube and follow the project comments if you’re curious about how an emulator really works.
 
 Check out my channel, we won't only talk about emulators there, but we'll also look at some hardware and classic games.
 
 👉 https://youtube.com/@thebitculture?si=2s4M5Iu4QbIdq_hn
 
-![Xenon](Images/xenon.png "Xenon")
-![Gods](Images/gods.png "Gods")
-![The Secret of Monkey Island](Images/monkey.png "The Secret of Monkey Island")
+
+![IK+](Images/ikplus.png "IK+")
 
 ## Using the Emulator
 
 At the moment, the emulator is not compatible with some games and programs, and some of them will _blow up_ at some point, as the emulator is in a very early stage of development. I hope to add new features and improve compatibility over time.
 
-Whether some games work depends largely on how they were cracked/unprotected; sometimes it might work simply by using another floppy image with a different crack. By the way, **ASE** currently only handles disk images in **.ST** or **.MSA** format.
-
-To **load** a disk image, use **F11**, and to capture the mouse, use **F12**. When you select a disk image, the emulator will ask if you want to reset the **Atari ST**.
+Whether some games work depends largely on how they were cracked/unprotected; sometimes it might work simply by using another floppy image with a different crack. Currently, **ASE** supports disk images in **.ST** and **.MSA** formats, as well as these compressed in **ZIP** format. A **ZIP** file can contain more than one disk image, which is ideal for games that require multiple disks, as they can be quickly swapped from the emulator’s menu.
 
 The **ST** **Help** key is mapped to the **period/dot** key on the numeric keypad.
 
-The emulator supports _gamepads_ and emulates the _joystick_ using the following keys on the numeric keypad:
+**ASE** supports gamepads and can emulate the joystick in a fully configurable way, allowing you to assign _"Up"_ to any gamepad button, as well as _"Space"_ or other commonly used keys in compilation game menus from that era. The keys used to emulate the joystick can be configured from the settings window, but by default, the configuration is as follows:
 
 | Joystick | Numeric Keypad |
 | :--- | :---: |
