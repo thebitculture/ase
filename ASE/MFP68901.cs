@@ -2,15 +2,11 @@
  * 
  * Functions to emulate the Motorola MFP 68901 chip.
  * 
- * This file is a total mess! It contains code snippets ported directly from the MS-DOS version of ASE,
- * as well as others rewritten based on bits of documentation I found along the way.
- * It needs a complete refactor and cleanup. I also need to review the documentation again, as there are still 
- * incompatibilities with some programs.
- * 
- * http://www.bitsavers.org/components/motorola/68000/MC68901_Multi-Function_Peripheral_Jan84.pdf
- * 
  * This is one of the more important chips in the Atari ST, as it handles timers, interrupts and GPIO, and
  * should be correctly emulated for better compatibility.
+ * 
+ * References:
+ * http://www.bitsavers.org/components/motorola/68000/MC68901_Multi-Function_Peripheral_Jan84.pdf
  * 
  * Official repository 👉 https://github.com/thebitculture/ase
  * 
@@ -77,7 +73,7 @@ namespace ASE
             public const byte ACIA = 0x40;      // GPIP 4 (Joystick/Kbd)
             public const byte TimerC = 0x20;
             public const byte TimerD = 0x10;
-            public const byte Blitter = 0x08;   // Not used on ASE.. by now
+            public const byte Blitter = 0x08;
             public const byte GPIP2 = 0x04;
             public const byte GPIP1 = 0x02;
             public const byte GPIP0 = 0x01;
@@ -89,7 +85,8 @@ namespace ASE
         const int CPU_HZ = 8000000;      // ST
         const int MFP_HZ = 2457600;      // MFP clock
 
-        long mfpAcc = 0; // accumulator in "Hz*cycles"
+        long mfpAcc = 0; // accumulator in Hz*cycles
+        long _lastUpdateClock = 0; // CPU clock through which the timers have been advanced (for live counter reads)
 
         public bool SoftwareEOI => (VR & 0x08) != 0; // S bit
         int Reload(byte dr) => dr == 0 ? 256 : dr;
@@ -104,6 +101,7 @@ namespace ASE
         public void Reset()
         {
             mfpAcc = 0;
+            _lastUpdateClock = 0;
             AER = 0x00;
             GPIP = 0xFF; // Inputs por defecto a pull-up
             VR = 0x40;   // Vector base 64 ($40)
@@ -275,6 +273,10 @@ namespace ASE
 
         public void UpdateTimers(int cpuCycles)
         {
+            // The timers are now accurate up to the current CPU clock; remember it so timer
+            // data-register reads can be projected forward to the exact moment of the read.
+            _lastUpdateClock = CPU._moira.Clock;
+
             mfpAcc += (long)cpuCycles * MFP_HZ;
             int mfpTicks = (int)(mfpAcc / CPU_HZ);
             mfpAcc %= CPU_HZ;
@@ -387,6 +389,93 @@ namespace ASE
             }
         }
 
+        /// <summary>
+        /// Returns a timer's data register (its down-counter) projected to the *current* CPU
+        /// clock. The counters are only stepped at the slice boundaries (see
+        /// <c>ASEMain.RunCpuSliced</c>), so a tight loop polling $FFFA1F/21/23/25 for an exact
+        /// value would otherwise read a frozen value and could miss the value it waits for.
+        /// This advances the latched counter by the cycles elapsed since the last update without
+        /// mutating any state — exactly how the live Video Address Pointer is computed on read.
+        /// </summary>
+        /// <param name="timer">0 = Timer A, 1 = Timer B, 2 = Timer C, 3 = Timer D.</param>
+        public byte ReadTimerCounter(int timer)
+        {
+            int mode, counter, prediv;
+            byte dr;
+            switch (timer)
+            {
+                case 0:  mode = TACR & 0x0F;         counter = timerACounter; prediv = timerAPredivAcc; dr = TADR; break;
+                case 1:  mode = TBCR & 0x0F;         counter = timerBCounter; prediv = timerBPredivAcc; dr = TBDR; break;
+                case 2:  mode = (TCDCR >> 4) & 0x07; counter = timerCCounter; prediv = timerCPredivAcc; dr = TCDR; break;
+                default: mode = TCDCR & 0x07;        counter = timerDCounter; prediv = timerDPredivAcc; dr = TDDR; break;
+            }
+
+            // Only delay mode (1..7) free-runs from the MFP clock. Stopped (0), event-count (8)
+            // and pulse-extension (9..15) modes are not driven from here, so return the latched
+            // value unchanged.
+            if (mode < 1 || mode > 7)
+                return (byte)counter;
+
+            long projDelta = CPU._moira.Clock - _lastUpdateClock;
+            if (projDelta > 0)
+            {
+                int div = GetPrescaler(mode);
+                long projAcc = mfpAcc + projDelta * MFP_HZ;
+                int projTicks = (int)(projAcc / CPU_HZ);
+                int dec = (prediv + projTicks) / div;
+                if (dec > 0)
+                {
+                    counter -= dec;
+                    int reload = Reload(dr);
+                    while (counter <= 0) counter += reload;
+                }
+            }
+
+            return (byte)counter;
+        }
+
+        // Snapshot
+
+        public void SaveState(Snapshot.Writer w)
+        {
+            w.U8(GPIP); w.U8(AER); w.U8(DDR);
+            w.U8(IERA); w.U8(IERB);
+            w.U8(IPRA); w.U8(IPRB);
+            w.U8(ISRA); w.U8(ISRB);
+            w.U8(IMRA); w.U8(IMRB);
+            w.U8(VR);
+            w.U8(TACR); w.U8(TBCR); w.U8(TCDCR);
+            w.U8(TADR); w.U8(TBDR); w.U8(TCDR); w.U8(TDDR);
+
+            w.I32(timerACounter); w.I32(timerBCounter); w.I32(timerCCounter); w.I32(timerDCounter);
+            w.I32(timerAPredivAcc); w.I32(timerBPredivAcc); w.I32(timerCPredivAcc); w.I32(timerDPredivAcc);
+
+            w.I64(mfpAcc);
+            w.I64(_lastUpdateClock);
+
+            irqController.SaveState(w);
+        }
+
+        public void LoadState(Snapshot.Reader r)
+        {
+            GPIP = r.U8(); AER = r.U8(); DDR = r.U8();
+            IERA = r.U8(); IERB = r.U8();
+            IPRA = r.U8(); IPRB = r.U8();
+            ISRA = r.U8(); ISRB = r.U8();
+            IMRA = r.U8(); IMRB = r.U8();
+            VR = r.U8();
+            TACR = r.U8(); TBCR = r.U8(); TCDCR = r.U8();
+            TADR = r.U8(); TBDR = r.U8(); TCDR = r.U8(); TDDR = r.U8();
+
+            timerACounter = r.I32(); timerBCounter = r.I32(); timerCCounter = r.I32(); timerDCounter = r.I32();
+            timerAPredivAcc = r.I32(); timerBPredivAcc = r.I32(); timerCPredivAcc = r.I32(); timerDPredivAcc = r.I32();
+
+            mfpAcc = r.I64();
+            _lastUpdateClock = r.I64();
+
+            irqController.LoadState(r);
+        }
+
         public void SetGPIOBit(int bit, bool active)
         {
             // GPIP bit logic: 0 = Input active (Low), 1 = Inactive (High) usually?
@@ -418,6 +507,10 @@ namespace ASE
                 if (bit == 4) SetInterruptPending(RegB.ACIA, true);
                 // Bit 5 = FDC (RegB Bit 7)
                 else if (bit == 5) SetInterruptPending(RegB.FDC, true);
+                // Bit 6 = RS232 ring indicator (RegA Bit 6)
+                else if (bit == 6) SetInterruptPending(RegA.GPIP6, false);
+                // Bit 7 = Monochrome detect / STE DMA sound XSINT (RegA Bit 7)
+                else if (bit == 7) SetInterruptPending(RegA.GPIP7, false);
 
                 // (Se podrían añadir el resto de bits si se emularan)
             }

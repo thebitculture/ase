@@ -129,7 +129,7 @@ namespace ASE
 
         public void TriggerBusError(uint ErrorAdress, bool IsWrite)
         {
-            if (Config.ConfigOptions.RunninConfig.DebugMode)
+            if (Config.ConfigOptions.RunninConfig.DebugMode >= Config.ConfigOptions.DebugModes.Information)
                 ColoredConsole.WriteLine($"Moira: Triggering bus error at address [[red]]{ErrorAdress:X}[[/red]] (isWrite=[[magenta]]{IsWrite}[[/magenta]])");
 
             Native.moira_triggerBusError(_h, ErrorAdress, IsWrite);

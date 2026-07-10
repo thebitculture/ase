@@ -1,34 +1,20 @@
-﻿/*
- * 
+/*
+ *
  * Render routines for Atari ST video modes.
- * By now, only low and medium resolutions are supported.
- * 
+ * Low and medium resolutions, now including the screen borders (overscan) so the
+ * border-removal tricks become visible. The visible window, the Display Enable span and
+ * the per-line shifter address all come from VideoTiming.
+ *
  * Official repository 👉 https://github.com/thebitculture/ase
- * 
+ *
  */
-
-using SDL2;
 
 namespace ASE
 {
     public class Video
     {
-        unsafe public static void SetPixel(IntPtr pixels, int pitch, int x, int y, uint argb)
-        {
-            uint* row = (uint*)((byte*)pixels + y * pitch);
-            row[x] = argb;
-        }
-
         public static class AtariStRenderer
         {
-            public enum StVideoMode
-            {
-                Low320x200x16,
-                Med640x200x4,
-                High640x400x2,
-                Auto = 99
-            }
-
             public static uint StColorToArgb8888(ushort stColor)
             {
                 int red8, green8, blue8;
@@ -67,44 +53,68 @@ namespace ASE
                 return argb;
             }
 
-            private static uint[] StPalTo8888()
+            // Reusable scratch for one line's palette (avoids a per-line allocation). Rendering
+            // runs only on the emulation thread, so static buffers are safe.
+            private static readonly uint[] _pal = new uint[16];   // ARGB, updated live by palette writes
+            private static readonly byte[] _work = new byte[32];  // raw $FF8240 bytes, mutated as events apply
+
+            /// <summary>
+            /// Renders one full texture row (border + active display) for the given line.
+            /// The whole row is first filled with the background colour (palette entry 0, the
+            /// real border colour); the active display, whose horizontal span comes from the
+            /// resolved Display Enable window, is then drawn on top. Opened borders extend the
+            /// DE window and therefore spill naturally into the border area.
+            ///
+            /// The palette starts from the snapshot VideoTiming took at the start of the line and
+            /// is updated *while the row is drawn*, replaying the palette-register writes that
+            /// happened during the line at their captured horizontal position. That is what makes
+            /// the Spectrum 512 trick (and ordinary mid-line palette splits) appear: a single
+            /// scanline can show more than 16 colours.
+            /// </summary>
+            public static void BlitLineWithBorders(uint[] buffer, VideoTiming.LineInfo li)
             {
-                uint[] pal = new uint[16];
-                int palCount = 16;
+                int ty = li.Line - VideoTiming.VISIBLE_TOP_LINE;
+                if (ty < 0 || ty >= VideoTiming.BUFFER_HEIGHT)
+                    return;
 
-                for (int i = 0; i < palCount; i++)
-                    pal[i] = StColorToArgb8888(ASEMain._mem.Read16((uint)(Memory.STPortAdress.ST_PALLETE + (i * 2))));
+                int width = VideoTiming.BUFFER_WIDTH;
+                int rowBase = ty * width;
 
-                return pal;
-            }
+                // Start from the palette as it was at the beginning of the line. _work keeps the
+                // raw bytes so each mid-line write can be applied and its colour recomputed.
+                byte[] raw = VideoTiming.LineStartPalette;
+                Array.Copy(raw, _work, 32);
+                for (int i = 0; i < 16; i++)
+                    _pal[i] = StColorToArgb8888((ushort)((_work[i * 2] << 8) | _work[i * 2 + 1]));
 
+                int palCount = VideoTiming.PaletteEventCount;
+                VideoTiming.PalEvent[] palEv = VideoTiming.PaletteEvents;
+                int evIdx = 0;
 
-            public static void BlitStLineToBuffer(uint[] buffer, uint StAddr = 0, int scanlineSrc = 0, int scanlineDst = 0, StVideoMode mode = StVideoMode.Auto)
-            {
-                mode = GetModeInfo(mode, out int w, out int h, out int planes, out int wordsPerLine);
-                
-                uint[] pal = StPalTo8888();
+                uint border = _pal[0];
+                for (int x = 0; x < width; x++)
+                    buffer[rowBase + x] = border;
 
-                int bytesPerLine = wordsPerLine * planes * 2;
+                if (!li.HasDisplay)
+                    return;
 
-                uint vramBase;
+                // Low resolution (4 planes, pixel-doubled into the texture) vs medium (2 planes, 1:1).
+                bool low = (li.Res & 0x03) == 0;
+                int planes = low ? 4 : 2;
+                int bytesPerGroup = planes * 2;     // bytes consumed per 16-pixel group
 
-                if (StAddr == 0)
-                {
-                    uint vramBaseHigh = ASEMain._mem.Read8(Memory.STPortAdress.ST_SCRHIGHADDR);
-                    uint vramBaseMid = ASEMain._mem.Read8(Memory.STPortAdress.ST_SCRMIDADDR);
+                int bytes = (li.DeStop - li.DeStart) / 2;
+                if (bytes < bytesPerGroup)
+                    return;
+                int groups = bytes / bytesPerGroup;
 
-                    vramBase = (vramBaseHigh * 0x10000) + (vramBaseMid * 0x100);
-                }
-                else
-                {
-                    vramBase = StAddr;
-                }
+                // Texture X of the first displayed pixel. May be negative when the left border
+                // is opened; out-of-range writes are simply clipped below.
+                int tx = (li.DeStart - VideoTiming.VISIBLE_LEFT_CYCLE) * 2;
+                uint srcLine = li.VideoAddr;
 
-                uint srcLine = vramBase + (uint)(scanlineSrc * bytesPerLine);
-                int dstPixel = scanlineDst * 640;
-
-                for (int group = 0; group < wordsPerLine; group++)
+                int dePixel = 0;   // shifter pixel index since DE start (low: 1/cycle, medium: 2/cycle)
+                for (int group = 0; group < groups; group++)
                 {
                     ushort w0 = ReadBEWord(srcLine, group, planes, 0);
                     ushort w1 = planes > 1 ? ReadBEWord(srcLine, group, planes, 1) : (ushort)0;
@@ -113,43 +123,41 @@ namespace ASE
 
                     for (int bit = 15; bit >= 0; bit--)
                     {
-                        int idx = 0;
-                        idx |= ((w0 >> bit) & 1) << 0;
-                        idx |= ((w1 >> bit) & 1) << 1;
-                        idx |= ((w2 >> bit) & 1) << 2;
-                        idx |= ((w3 >> bit) & 1) << 3;
-
-                        buffer[dstPixel++] = pal[idx];
-
-                        if (mode == StVideoMode.Low320x200x16)
-                            buffer[dstPixel++] = pal[idx];
-                    }
-                }
-            }
-
-            public static unsafe void BufferToTexture(IntPtr texture, uint[] buffer)
-            {
-                // Lock texture
-                IntPtr pixels;
-                int pitch;
-                if (SDL.SDL_LockTexture(texture, IntPtr.Zero, out pixels, out pitch) != 0)
-                    throw new Exception(SDL.SDL_GetError());
-                try
-                {
-                    byte* dstBase = (byte*)pixels;
-                    for (int y = 0; y < 200; y++)
-                    {
-                        uint* dstRow = (uint*)(dstBase + y * pitch);
-                        int srcPixel = y * 640;
-                        for (int x = 0; x < 640; x++)
+                        // Apply any palette writes that land at or before this pixel's DE cycle.
+                        // Cheap no-op for ordinary frames, where the line has no mid-line writes.
+                        if (evIdx < palCount)
                         {
-                            dstRow[x] = buffer[srcPixel++];
+                            int cyc = li.DeStart + (low ? dePixel : (dePixel >> 1));
+                            while (evIdx < palCount && palEv[evIdx].Cycle <= cyc)
+                            {
+                                int off = palEv[evIdx].ByteOffset;
+                                _work[off] = palEv[evIdx].Val;
+                                int ci = off >> 1;
+                                _pal[ci] = StColorToArgb8888((ushort)((_work[ci * 2] << 8) | _work[ci * 2 + 1]));
+                                evIdx++;
+                            }
                         }
+
+                        int idx = ((w0 >> bit) & 1)
+                                | (((w1 >> bit) & 1) << 1)
+                                | (((w2 >> bit) & 1) << 2)
+                                | (((w3 >> bit) & 1) << 3);
+                        uint color = _pal[idx];
+
+                        if (low)
+                        {
+                            if ((uint)tx < (uint)width) buffer[rowBase + tx] = color;
+                            int tx1 = tx + 1;
+                            if ((uint)tx1 < (uint)width) buffer[rowBase + tx1] = color;
+                            tx += 2;
+                        }
+                        else
+                        {
+                            if ((uint)tx < (uint)width) buffer[rowBase + tx] = color;
+                            tx += 1;
+                        }
+                        dePixel++;
                     }
-                }
-                finally
-                {
-                    SDL.SDL_UnlockTexture(texture);
                 }
             }
 
@@ -157,24 +165,6 @@ namespace ASE
             {
                 uint offsetBytes = (uint)((group * planes + plane) * 2);
                 return BigEndian.Read16(srcLine + offsetBytes);
-            }
-
-            private static StVideoMode GetModeInfo(StVideoMode mode, out int w, out int h, out int planes, out int wordsPerLine)
-            {
-                if(mode == StVideoMode.Auto)
-                    mode = ASEMain._mem.Read8(Memory.STPortAdress.ST_RES) == 0 ? AtariStRenderer.StVideoMode.Low320x200x16 : AtariStRenderer.StVideoMode.Med640x200x4;
-
-                switch (mode)
-                {
-                    case StVideoMode.Low320x200x16:
-                        w = 320; h = 200; planes = 4; wordsPerLine = 20; return mode;
-                    case StVideoMode.Med640x200x4:
-                        w = 640; h = 200; planes = 2; wordsPerLine = 40; return mode;
-                    case StVideoMode.High640x400x2:
-                        w = 640; h = 400; planes = 1; wordsPerLine = 40; return mode;
-                    default:
-                        throw new ArgumentOutOfRangeException(nameof(mode));
-                }
             }
         }
     }

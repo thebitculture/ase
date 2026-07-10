@@ -48,6 +48,17 @@ namespace ASE
             }
 
             /// <summary>
+            /// Console debug verbosity. Each level is a superset of the previous one.
+            /// </summary>
+            public enum DebugModes
+            {
+                None = 0,           // No debug output (equivalent to the old 'false')
+                Quiet = 1,          // Only initialization messages and important warnings (TOS load, ROM write attempts, ...)
+                Information = 2,    // Adds operational detail (e.g. commands reaching the ACIA)
+                Full = 3            // Everything, including low-level data traffic (every ACIA byte, joystick packets, ...)
+            }
+
+            /// <summary>
             /// Holds the active configuration
             /// </summary>
             public static ConfigOptions RunninConfig = new ConfigOptions();
@@ -55,14 +66,53 @@ namespace ASE
             public string TOSPath { get; set; } = "tos.rom";
 
             // Hardware flags
-            public STModels STModel { get; set; } = STModels.ST; // Only STFM/F by now
+            public STModels STModel { get; set; } = STModels.ST;
             public RAMConfigurations RAMConfiguration { get; set; } = RAMConfigurations.RAM_1MB;
             public  bool MaxSpeed { get; set; } = false;
             public string FloppyImagePath { get; set; } = "";
             public float MouseSensitivity { get; set; } = 2;
             public int SampleRate { get; set; } = 44100;
 
+            // Granularity (in CPU cycles) at which the CPU is interleaved with the MFP timers and
+            // the interrupt controller. Lower values deliver timer interrupts (e.g. the 200 Hz
+            // Timer C) and update the timer data registers more promptly, at a slight throughput
+            // cost; higher values are faster but coarser. Clamped to [1, 512] where it is used.
+            // 4 = Maximun compatibility; 16 = Balanced; 64 = Faster but less precise.
+            public int CpuSyncSliceCycles { get; set; } = 4;
+
             // Screen flags
+
+            public bool ShowBorders { get; set; } = true;   // show the screen borders (overscan) around the 320x200 display
+
+            // Default directories. Screenshots (Shift+F11) and snapshots (F11) default to
+            // subfolders next to config.json; an empty value falls back to that default.
+            // DiskImagesPath and TOSRomsPath preset the corresponding file dialogs (empty = none).
+            public string ScreenshotsPath { get; set; } = Path.Combine(GetAppDefaultConfigsFilePath(), "Screenshots");
+            public string SnapshotsPath { get; set; } = Path.Combine(GetAppDefaultConfigsFilePath(), "Snapshots");
+            public string DiskImagesPath { get; set; } = "";
+            public string TOSRomsPath { get; set; } = "";
+
+            // The ST MMU shares RAM between the CPU and the video shifter in a 2-cycle round-robin,
+            // forcing every CPU bus access onto a 4-cycle grid: a misaligned access waits 2 cycles
+            // for its slot. ROM is exempt (no wait states); the MFP/ACIA add fixed extra waits.
+            // Moira (with MOIRA_PRECISE_TIMING) places each bus access at its exact in-instruction
+            // cycle, so we can reproduce these waits. This is what keeps free-running cycle-counted
+            // raster code (Spectrum 512, fullscreen demos) locked to the video instead of drifting.
+            // I've tried different combinations by reproducing these waits in the emulator, leaving
+            // only the most accurate timing in Moira, and I've gotten mixed results. I couldn't say
+            // which combination works best.
+            public bool CycleExactBus { get; set; } = true;
+
+            // Phase of the 4-cycle MMU bus grid the CPU aligns to (0..3, effectively 0 or 2 since
+            // the 68000 clock is even). Calibrated so cycle-counted rasters stay vertically stable.
+            public int BusPhase { get; set; } = 0;
+
+            // Fixed extra wait cycles for the MFP, added on top of bus alignment (~4 cycles is
+            // the accepted approximation). The ACIAs are not configurable: they are 6800-type
+            // (VPA) peripherals, so each access synchronizes with the E clock (CPU/10) — a
+            // variable, self-stabilising wait modelled directly in Memory.ApplyBusWait.
+            public int MfpWaitCycles { get; set; } = 4;
+
             public float Curvature { get; set; } = 0.01f;
             public float Vignette { get; set; } = 0.18f;
             public float Scanline { get; set; } = 1.0f;
@@ -89,12 +139,48 @@ namespace ASE
             public GamepadButtonsMapping GamepadButtonRB { get; set; } = GamepadButtonsMapping.Space;
 
             // Debug flags
-            [JsonIgnore(Condition = JsonIgnoreCondition.WhenWriting)]
+            [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
             public bool DiskDump { get; set; } = false;  // Not exposed, only for my testing
-            public bool DebugMode { get; set; } = false;
+            [JsonConverter(typeof(DebugModeJsonConverter))]
+            public DebugModes DebugMode { get; set; } = DebugModes.None;
+        }
+
+        /// <summary>
+        /// Serializes <see cref="ConfigOptions.DebugModes"/> as a readable string and, on read, also
+        /// accepts the legacy boolean form (<c>true</c> -> <see cref="ConfigOptions.DebugModes.Full"/>,
+        /// <c>false</c> -> <see cref="ConfigOptions.DebugModes.None"/>) so existing config files keep working.
+        /// </summary>
+        public class DebugModeJsonConverter : JsonConverter<ConfigOptions.DebugModes>
+        {
+            public override ConfigOptions.DebugModes Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+            {
+                switch (reader.TokenType)
+                {
+                    case JsonTokenType.True:
+                        return ConfigOptions.DebugModes.Full;
+                    case JsonTokenType.False:
+                        return ConfigOptions.DebugModes.None;
+                    case JsonTokenType.Number:
+                        int n = reader.GetInt32();
+                        return Enum.IsDefined(typeof(ConfigOptions.DebugModes), n) ? (ConfigOptions.DebugModes)n : ConfigOptions.DebugModes.None;
+                    case JsonTokenType.String:
+                        return (Enum.TryParse(reader.GetString(), true, out ConfigOptions.DebugModes v) && Enum.IsDefined(typeof(ConfigOptions.DebugModes), v)) ? v : ConfigOptions.DebugModes.None;
+                    default:
+                        return ConfigOptions.DebugModes.None;
+                }
+            }
+
+            public override void Write(Utf8JsonWriter writer, ConfigOptions.DebugModes value, JsonSerializerOptions options)
+            {
+                writer.WriteStringValue(value.ToString());
+            }
         }
 
         public static string Version = "";
+
+        // Snapshot to restore on the first power-on (--snapshot=<path>). Launch-only
+        // argument: it is never persisted to the config file.
+        public static string StartupSnapshot = "";
 
         const string AppName = "ASE";
         const string DefaultConfigFileName = "config.json";
@@ -109,6 +195,7 @@ namespace ASE
             PathToDefaultConfig = Path.Combine(AppDataConfigPath, DefaultConfigFileName);
 
             Version = Assembly.GetEntryAssembly()?.GetName().Version?.ToString();
+            Version = Regex.Replace(Version, @"^(\d+\.\d+).*", "$1");
 
             ColoredConsole.WriteLine($"[[white]]ATARI SYSTEM EMULATOR[[/white]] v{Version} - The Bit Culture {DateTime.Now.Year}");
             ColoredConsole.WriteLine("👉 [[magenta]]https://github.com/thebitculture/ase[[/magenta]]");
@@ -130,7 +217,25 @@ namespace ASE
                             ConfigOptions.RunninConfig.TOSPath = parts[1];
                         break;
                     case "--debug":
-                        ConfigOptions.RunninConfig.DebugMode = true;
+                        if (parts.Length > 1)
+                        {
+                            if (Enum.TryParse(parts[1], true, out ConfigOptions.DebugModes lvl)
+                                && Enum.IsDefined(typeof(ConfigOptions.DebugModes), lvl))
+                            {
+                                ConfigOptions.RunninConfig.DebugMode = lvl;
+                            }
+                            else
+                            {
+                                ColoredConsole.WriteLine($"Invalid debug level [[red]]{parts[1]}[[/red]]. Use none|quiet|information|full.");
+                                ColoredConsole.WriteLine("Defaulting to [[cyan]]Quiet[[/cyan]].");
+                                ConfigOptions.RunninConfig.DebugMode = ConfigOptions.DebugModes.Full;
+                            }
+                        }
+                        else
+                        {
+                            // Bare '--debug' enables full verbosity (most useful default for debugging).
+                            ConfigOptions.RunninConfig.DebugMode = ConfigOptions.DebugModes.Full;
+                        }
                         break;
                     case "--maxspeed":
                         if (parts.Length > 1 && bool.TryParse(parts[1], out bool _maxs))
@@ -153,6 +258,18 @@ namespace ASE
                             ColoredConsole.WriteLine($"Using default sensitivity [[cyan]]{ConfigOptions.RunninConfig.MouseSensitivity}[[/cyan]].");
                         }
                         break;
+                    case "--cycleexact":
+                        ConfigOptions.RunninConfig.CycleExactBus =
+                            parts.Length < 2 || !bool.TryParse(parts[1], out bool _ce) || _ce;
+                        break;
+                    case "--busphase":
+                        if (parts.Length > 1 && int.TryParse(parts[1], out int _bp))
+                            ConfigOptions.RunninConfig.BusPhase = _bp;
+                        break;
+                    case "--mfpwait":
+                        if (parts.Length > 1 && int.TryParse(parts[1], out int _mw))
+                            ConfigOptions.RunninConfig.MfpWaitCycles = _mw;
+                        break;
                     case "--altconfig":
                         if (parts.Length > 1)
                         {
@@ -160,15 +277,30 @@ namespace ASE
                             LoadJsonConfig(parts[1]);
                         }
                         break;
+                    case "--snapshot":
+                        if (parts.Length > 1)
+                            StartupSnapshot = parts[1];
+                        break;
+                    case "--snapshots-dir":
+                        if (parts.Length > 1)
+                            ConfigOptions.RunninConfig.SnapshotsPath = parts[1];
+                        break;
+                    case "--screenshots-dir":
+                        if (parts.Length > 1)
+                            ConfigOptions.RunninConfig.ScreenshotsPath = parts[1];
+                        break;
 
                     default:
                         Console.WriteLine("Usage: ASE [options]");
                         Console.WriteLine("Options:");
                         Console.WriteLine("  --tos=<path>                  Path to the TOS ROM file (default: tos100.rom)");
                         Console.WriteLine("  --altconfig=<path>            Loads alternative config");
-                        Console.WriteLine("  --debug                       Debug mode");
+                        Console.WriteLine("  --debug[=level]               Debug verbosity: none|quiet|information|full (bare --debug = full)");
                         Console.WriteLine("  --maxspeed=[true/false]       Run at max speed or ST speed");
                         Console.WriteLine("  --floppy=[image file]         Starts with floppy image inserted");
+                        Console.WriteLine("  --snapshot=<path>             Restores a machine snapshot (.snap) on startup");
+                        Console.WriteLine("  --snapshots-dir=<path>        Directory where F11 saves machine snapshots");
+                        Console.WriteLine("  --screenshots-dir=<path>      Directory where Shift+F11 saves PNG screenshots");
                         Console.WriteLine("  --mouse-sensitivity=N         Set mouse sensitivity (default: 2)");
                         Console.WriteLine("  --help, -h                    Show this help message");
                         Environment.Exit(0);
@@ -189,6 +321,27 @@ namespace ASE
 
             return appFolderPath;
         }
+
+        /// <summary>Directory where Shift+F11 saves PNG screenshots (configured value, or the
+        /// default "Screenshots" folder next to config.json when unset).</summary>
+        public static string ScreenshotsDir => DirOrDefault(ConfigOptions.RunninConfig.ScreenshotsPath, "Screenshots");
+
+        /// <summary>Directory where F11 saves machine snapshots (configured value, or the
+        /// default "Snapshots" folder next to config.json when unset).</summary>
+        public static string SnapshotsDir => DirOrDefault(ConfigOptions.RunninConfig.SnapshotsPath, "Snapshots");
+
+        static string DirOrDefault(string configured, string defaultSubfolder)
+            => string.IsNullOrWhiteSpace(configured)
+                ? Path.Combine(GetAppDefaultConfigsFilePath(), defaultSubfolder)
+                : configured;
+
+        /// <summary>Initial location for a tinyfiledialogs dialog: the given directory with a
+        /// trailing separator (which is how tinyfd tells folders from files), or "" when the
+        /// directory is unset or missing so the dialog keeps its own default.</summary>
+        public static string DialogStartFolder(string dir)
+            => !string.IsNullOrWhiteSpace(dir) && Directory.Exists(dir)
+                ? dir.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar
+                : "";
 
         public void LoadJsonConfig(string ConfigFile = "")
         {

@@ -2,6 +2,8 @@
 #include "Moira_dotnet.h"
 
 #include "Moira.h"
+#include <cstdio>
+#include <cstdlib>
 
 #if MOIRA_VIRTUAL_API != true
 #error "This wrapper requires MOIRA_VIRTUAL_API == true"
@@ -71,6 +73,44 @@ public:
 
     uint16_t readIrqUserVector(uint8_t level) const override {
         return cb.readIrqUserVector ? cb.readIrqUserVector(cb.user, level) : 0;
+    }
+
+    // ---- Diagnostic hooks (enabled with the MOIRA_TRACE_EXC environment variable) ----
+    // Logs CPU fault exceptions (address/bus error, illegal, privilege, line-A/F) with the
+    // full register context, plus the interrupt level when a fault is preceded by an IRQ.
+    // Normal OS service calls (TRAP, TRAPV, CHK, divide-by-zero, trace) are not logged.
+    void willExecute(moira::M68kException exc, uint16_t vector) override {
+        using E = moira::M68kException;
+        if (!std::getenv("MOIRA_TRACE_EXC")) return;
+        if (exc != E::BUS_ERROR && exc != E::ADDRESS_ERROR && exc != E::ILLEGAL &&
+            exc != E::PRIVILEGE && exc != E::LINEA && exc != E::LINEF &&
+            exc != E::FORMAT_ERROR && exc != E::IRQ_SPURIOUS) return;
+
+        fprintf(stderr, "[MOIRA-EXC] vec=%u PC=%06X PC0=%06X SR=%04X SP=%06X IRD=%04X IRC=%04X\n",
+                vector, getPC(), getPC0(), getSR(), getSP(), getIRD(), getIRC());
+        fprintf(stderr, "   D0-7:");
+        for (int i = 0; i < 8; i++) fprintf(stderr, " %08X", getD(i));
+        fprintf(stderr, "\n   A0-7:");
+        for (int i = 0; i < 8; i++) fprintf(stderr, " %08X", getA(i));
+        fprintf(stderr, "\n");
+
+        if (exc == E::ADDRESS_ERROR && std::getenv("MOIRA_DUMP_MEM")) {
+            uint32_t base = (getPC0() & ~0xFFu);   // 256-byte window around the faulting instruction
+            for (uint32_t row = 0; row < 0x100; row += 16) {
+                fprintf(stderr, "   %06X:", base + row);
+                for (uint32_t c = 0; c < 16; c++)
+                    fprintf(stderr, " %02X", read8(base + row + c));
+                fprintf(stderr, "\n");
+            }
+        }
+        fflush(stderr);
+    }
+
+    void willInterrupt(uint8_t level) override {
+        if (!std::getenv("MOIRA_TRACE_IRQ")) return;
+        fprintf(stderr, "[MOIRA-IRQ] level=%u PC=%06X SR=%04X SP=%06X clock=%lld\n",
+                level, getPC(), getSR(), getSP(), (long long)getClock());
+        fflush(stderr);
     }
 
     void scheduleBusError(uint32_t faultaddress, bool isWrite) {

@@ -3,12 +3,16 @@
  * ASE Main loop
  * 
  * Official repository 👉 https://github.com/thebitculture/ase
+ * 
  */
 
 using SDL2;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
+using Avalonia;
+using Avalonia.Media.Imaging;
+using Avalonia.Platform;
 using Avalonia.Threading;
-using TinyDialogsNet;
 using static ASE.Config;
 using static ASE.Video;
 using static SDL2.SDL;
@@ -17,9 +21,11 @@ namespace ASE
 {
     public static class ASEMain
     {
-        public const int ScreenWidth = 640;
-        public const int ScreenHeight = 400;
-        public const int ScreenViewSize = ScreenWidth * ScreenHeight;
+        // The texture handed to OpenGL is BUFFER_WIDTH x BUFFER_HEIGHT (display + borders).
+        // ScreenHeight is the *visual* height: each ST scanline is shown at double height, so the window aspect ratio and GLControl's
+        public const int ScreenWidth = VideoTiming.BUFFER_WIDTH;
+        public const int ScreenHeight = VideoTiming.BUFFER_HEIGHT * 2;
+        public const int ScreenViewSize = VideoTiming.BUFFER_WIDTH * VideoTiming.BUFFER_HEIGHT;
 
         public static Memory _mem;
         public static MFP68901 _mfp;
@@ -30,16 +36,61 @@ namespace ASE
         static nint GamepadController;
         const int GamepadDeadzone = 8000;
 
+        // SDL input plumbing. SDL_PumpEvents may only run on the thread that initialised the
+        // video subsystem (the UI thread), so a dispatcher timer keeps the queue fed at Input
+        // priority — this is what polls the gamepad everywhere and translates keyboard/mouse on
+        // macOS/Linux (on Windows those enter SDL's queue straight from the subclassed window
+        // procedure). The emulation thread then CONSUMES the queue with SDL_PeepEvents, which
+        // only takes the queue lock and never pumps, so it is thread-safe off the video thread.
+        // Handling used to happen once per emulated frame via InvokeAsync at Background
+        // priority, which the continuously-rendering GL control starved for several frames at a
+        // time.
+        static DispatcherTimer _sdlPumpTimer;
+        const int MaxEventsPerDrain = 64;
+        static readonly SDL_Event[] _drainBuffer = new SDL_Event[MaxEventsPerDrain];
+
+        // The CPU is advanced in short slices of this many cycles so the MFP timers — and
+        // therefore the interrupt level fed to the 68000 — are re-evaluated many times per
+        // scanline instead of only twice. Running the whole ~448-cycle active part in one go
+        // meant a timer that came due early in the chunk was not delivered until the end of it;
+        // code that busy-waits on the 200 Hz Timer C ($114) or polls a timer data register
+        // could miss the transition entirely and hang. Configurable via Config.CpuSyncSliceCycles
+        // (default 64 ≈ a couple of instructions); clamped to a sane range so a bad config value
+        // can never stall or degenerate the loop.
+        static int CpuSliceCycles
+        {
+            get
+            {
+                int s = ConfigOptions.RunninConfig.CpuSyncSliceCycles;
+                if (s < 1) s = 1;
+                if (s > VideoTiming.CYCLES_PER_LINE) s = VideoTiming.CYCLES_PER_LINE;
+                return s;
+            }
+        }
+
         public static FloppyImage driveA = new FloppyImage();
         public static FloppyImage driveB = new FloppyImage();
 
+        // Double buffer: the emulation thread renders into _renderBuffer (no contention); at the
+        // end of each frame it is copied into ScreenBuffer under _syncLock, which the GL thread
+        // reads through SnapshotScreen. This prevents the GL thread from ever sampling a
+        // half-drawn frame (which showed up as flickering scanlines).
         public static uint[] ScreenBuffer = new uint[ScreenViewSize];
+        static readonly uint[] _renderBuffer = new uint[ScreenViewSize];
         public static bool IsMouseCaptured = false;
         public static MainWindow MainWindow;
 
         static readonly object _syncLock = new object();
         static Thread _thread;
         static bool _isRunning;
+        public static bool IsPaused = false;
+
+        // Freeze rendezvous used by RunWhilePaused: _freezeRequest asks the emulation thread to
+        // park at the next frame boundary and _frozen is its acknowledgment. Unlike IsPaused the
+        // parked loop does not drain SDL events either — HandleEvents mutates ACIA/IKBD state,
+        // which must not change under a snapshot writer.
+        static volatile bool _freezeRequest;
+        static volatile bool _frozen;
 
         static public event Action OnFrameComplete;
 
@@ -55,7 +106,7 @@ namespace ASE
                 {
                     GamepadController = SDL.SDL_GameControllerOpen(i);
                     SDL_GameControllerOpen(i);
-                    ColoredConsole.WriteLine("[[green]]Gamepad found![[/green]]");
+                    ColoredConsole.WriteLine("[[green]]Gamepad found![[/green]]", ConfigOptions.DebugModes.Quiet);
                     break;
                 }
             }
@@ -84,13 +135,54 @@ namespace ASE
 
             if (have.freq != ConfigOptions.RunninConfig.SampleRate)
             {
-                ColoredConsole.WriteLine($"Warning: Sample rate [[yellow]]{ConfigOptions.RunninConfig.SampleRate}[[/yellow]] not supported, got [[green]]{have.freq}[[/green]] instead.");
+                ColoredConsole.WriteLine($"Warning: Sample rate [[yellow]]{ConfigOptions.RunninConfig.SampleRate}[[/yellow]] not supported, got [[green]]{have.freq}[[/green]] instead.", ConfigOptions.DebugModes.Quiet);
                 ConfigOptions.RunninConfig.SampleRate = have.freq;
             }
 
-            SDL.SDL_PauseAudioDevice(_audiodev, 0); // Turn on sound
+            // Init runs on the UI thread (MainWindow.OnOpened), the SDL video thread.
+            _sdlPumpTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(4), DispatcherPriority.Input,
+                                                (_, _) => SDL_PumpEvents());
+            _sdlPumpTimer.Start();
 
-            TurnOn();
+            // Arranque desde snapshot si se pidió por línea de comandos (--snapshot=<path>);
+            // la máquina se enciende directamente con el estado restaurado, sin arrancar TOS.
+            string startupSnapshot = Config.StartupSnapshot;
+            Config.StartupSnapshot = "";    // sólo aplica al primer encendido, no a los resets
+
+            if (string.IsNullOrEmpty(startupSnapshot))
+            {
+                TurnOn();
+            }
+            else
+            {
+                Snapshot.SnapshotFile snap = null;
+                string error = null;
+
+                try
+                {
+                    snap = Snapshot.ReadFile(startupSnapshot);
+                }
+                catch (Exception ex)
+                {
+                    error = ex.Message;
+                }
+
+                // Con un archivo inválido (o si aplicar falla a medias, con fallback interno)
+                // se sigue con un arranque limpio: el emulador siempre queda encendido.
+                if (snap != null && StartWithSnapshot(snap, out error))
+                    ColoredConsole.WriteLine($"Snapshot restored from [[green]]{startupSnapshot}[[/green]]", ConfigOptions.DebugModes.Quiet);
+                else
+                {
+                    ColoredConsole.WriteLine($"Could not restore startup snapshot [[red]]{startupSnapshot}[[/red]]: {error}");
+
+                    if (snap == null)
+                        TurnOn();
+                }
+            }
+
+            // Unpause only after TurnOn() has created _ym: the moment the device is unpaused
+            // the SDL audio thread starts firing YM2149.AudioCallback, which reads ASEMain._ym.
+            SDL.SDL_PauseAudioDevice(_audiodev, 0); // Turn on sound
         }
 
         public static void EmulatorLoop()
@@ -103,153 +195,343 @@ namespace ASE
 
             while (_isRunning)
             {
+                // Freeze rendezvous (snapshot/screenshot): park at the frame boundary until the
+                // writer finishes, so no machine state mutates under it.
+                if (_freezeRequest)
+                {
+                    _frozen = true;
+                    while (_freezeRequest && _isRunning)
+                        Thread.Sleep(1);
+                    _frozen = false;
+                    continue;
+                }
+
                 uint frameStart = SDL_GetTicks();
+
+                bool isSTE = ConfigOptions.RunninConfig.STModel == ConfigOptions.STModels.STE;
 
                 uint baseHigh = _mem.Read8(Memory.STPortAdress.ST_SCRHIGHADDR);
                 uint baseMid = _mem.Read8(Memory.STPortAdress.ST_SCRMIDADDR);
-                uint videoBase = (baseHigh << 16) | (baseMid << 8);  // low byte 0 en ST
-                uint videoCounter = videoBase;
+                uint baseLow = isSTE ? (uint)(_mem.Read8(Memory.STPortAdress.ST_SCRLOWADDR) & 0xFE) : 0;  // low byte is STE only
+                uint videoBase = (baseHigh << 16) | (baseMid << 8) | baseLow;
 
-                _mem.Write8(Memory.STPortAdress.ST_HIVADRPOINT, (byte)baseHigh);
-                _mem.Write8(Memory.STPortAdress.ST_MIVADRPOINT, (byte)baseMid);
-                _mem.Write8(Memory.STPortAdress.ST_LOVADRPOINT, (byte)0);
+                // Reload the shifter address from the video base for the new frame. From here on
+                // the Video Address Pointer is computed live by VideoTiming (read back through
+                // $FF8205/07/09), so it no longer has to be written into the port array.
+                VideoTiming.StartFrame(videoBase);
 
-                /*
-                 * The PAL Color Atari ST has 313 full scanlines per vertical synchronization (vsync), 
-                 * of which 200 are visible lines and 112 belong to the top and bottom borders. 
-                 * In monochrome mode, there would be 400 visible and 100 non-visible lines, 
-                 * but in this emulator we will only support color mode.
-                 */
-                for (int scanline = 0; scanline < 313; scanline++)
+                if (!IsPaused)
                 {
-                    int ElapsedCycles = 0;
-
-                    // Each scanline lasts 512 CPU cycles at 8 MHz = 15.66 kHz, or 64 microseconds.
-
                     /*
-                     * This is how screen synchronization is handled in this emulator. It is not the most accurate method, 
-                     * but it is sufficient for the vast majority of ST games and programs. I ported this loop directly 
-                     * from the MS-DOS version of ASE, and it would need to be rewritten in order to also synchronize what 
-                     * happens in the screen borders in some demos and games.
-                     * 
-                     *              448 cycles active display + 64 cycles H-Blank (right border)
-                     *              -------------------+++
-                     *              ********************** <- Top border (not rendered)
-                     *              **********************
-                     *              ***                *** <- Active display starts here (scanline 63)
-                     *              ***                ***
-                     *              ***                ***
-                     *              ***                ***
-                     *              ***                *** <- Active display ends here (scanline 262)
-                     *              **********************
-                     *              ********************** <- Bottom border (not rendered), Vsync
+                     * The PAL Atari ST has 313 scanlines per frame. Each lasts 512 CPU cycles at
+                     * 8 MHz (64 us): 448 active + 64 H-Blank. Sync ($FF820A) and resolution
+                     * ($FF8260) writes are timestamped by their CPU clock as the chunks run, so
+                     * VideoTiming can resolve the Display Enable window — and therefore the
+                     * top/bottom/left/right borders and the live Video Address Pointer — per line.
                      */
+                    // Absolute clock at the start of the frame. Every line's run target is taken
+                    // from this base (lineBase + N*512), so RunForCycles' per-instruction overshoot
+                    // is absorbed line to line instead of accumulating — the video boundaries stay
+                    // locked to 512 cycles/line, which Spectrum 512's screen-wide cycle-counted
+                    // palette routine relies on (otherwise its colours drift down the picture).
+                    long frameClockBase = CPU._moira.Clock;
 
-                    // Active display
-                    int cyclesDuringScreenActive = 448; // 512 (total cycles/scanline) - 64 (right border) cycles;
-                    CPU._moira.RunForCycles(cyclesDuringScreenActive);
-                    ElapsedCycles += cyclesDuringScreenActive;
-
-                    // Sync audio
-                    _ym.Sync(cyclesDuringScreenActive);
-                    // Sync interrupts
-                    _mfp.UpdateTimers(cyclesDuringScreenActive);
-                    // Sync FDC index pulse counter
-                    WD1772.TickCycles(cyclesDuringScreenActive);
-
-                    // Actives H-Blank (right border)
-                    int cyclesDuringHBL = 64;
-                    CPU._moira.RunForCycles(cyclesDuringHBL);
-                    ElapsedCycles += cyclesDuringHBL;
-
-                    // Sync audio again
-                    _ym.Sync(cyclesDuringHBL);
-                    // Sync interrupts again when outscreen
-                    _mfp.irqController.RaiseHBL();
-                    _mfp.UpdateTimers(cyclesDuringHBL);
-                    
-                    // Sync ACIA
-                    ACIA.Sync(ElapsedCycles);
-
-                    if (scanline > 62 && scanline < 263)
+                    for (int scanline = 0; scanline < 313; scanline++)
                     {
-                        _mem.Write8(Memory.STPortAdress.ST_HIVADRPOINT, (byte)(videoCounter >> 16));
-                        _mem.Write8(Memory.STPortAdress.ST_MIVADRPOINT, (byte)(videoCounter >> 8));
-                        _mem.Write8(Memory.STPortAdress.ST_LOVADRPOINT, (byte)(videoCounter));
+                        // Input first: consume whatever the UI thread has pumped into SDL's
+                        // queue and feed it to the IKBD at scanline granularity, so a key or
+                        // gamepad change lands mid-frame like on a real ST instead of waiting
+                        // for the next frame boundary.
+                        DrainSdlEvents();
 
-                        // Render scanline
-                        lock (_syncLock)
+                        long lineBase = frameClockBase + (long)scanline * VideoTiming.CYCLES_PER_LINE;
+                        VideoTiming.StartLine(scanline, lineBase);
+
+                        int ElapsedCycles = 0;
+
+                        // Correr la CPU hasta que cae la señal Display Enable (DE).
+                        // En 50Hz, DE cae en el ciclo 376. Aquí es donde DEBEN saltar el Timer B y el HBL.
+                        int cyclesToDEStop = 376;
+                        RunCpuUntil(lineBase + cyclesToDEStop);
+                        ElapsedCycles += cyclesToDEStop;
+
+                        // Disparar Timer B exactamente al caer Display Enable (como el hardware real).
+                        // Comprobamos si es una línea visible (en PAL estándar va de la 63 a la 262).
+                        bool isVisibleLine = (scanline >= 63 && scanline < 263);
+                        if (isVisibleLine)
                         {
-                            AtariStRenderer.BlitStLineToBuffer(ScreenBuffer, videoCounter, 0, scanline - 63);
+                            _mfp.TickTimerA_EventCount();
+                            _mfp.TickTimerB_EventCount();
                         }
 
-                        // Next line: +160 bytes
-                        videoCounter = (videoCounter + 160u) & 0xFFFFFFu;
+                        // Disparar HBL justo al inicio del H-Blank
+                        _mfp.irqController.RaiseHBL();
 
-                        _mfp.TickTimerA_EventCount();
-                        _mfp.TickTimerB_EventCount();   // Timer B updates on every scanline
+                        // Correr el resto de la scanline (los 136 ciclos restantes del H-Blank / Borde derecho)
+                        int cyclesToLineEnd = VideoTiming.CYCLES_PER_LINE - cyclesToDEStop;
+                        RunCpuUntil(lineBase + VideoTiming.CYCLES_PER_LINE);
+                        ElapsedCycles += cyclesToLineEnd;
+
+                        // Sincronizar el resto de periféricos (el WD1772 se sincroniza por
+                        // slice dentro de RunCpuUntil: la entrega DMA de los discos STX
+                        // necesita granularidad de pocos ciclos)
+                        ACIA.Sync(ElapsedCycles);
+
+                        // Resolver la línea (bordes abiertos, etc.)
+                        VideoTiming.LineInfo line = VideoTiming.ResolveLine();
+
+                        if (line.Visible)
+                            AtariStRenderer.BlitLineWithBorders(_renderBuffer, line);
+                    }
+
+                    // Publish the finished frame to the GL thread atomically.
+                    lock (_syncLock)
+                        Array.Copy(_renderBuffer, ScreenBuffer, ScreenViewSize);
+
+                    // Vsync completed
+                    _mfp.irqController.RaiseVBL();
+
+                    // For future use: recording, etc.
+                    OnFrameComplete?.Invoke();
+
+                    MainWindow.RefreshDriveLed();
+
+                    next += frame;
+
+                    if (!ConfigOptions.RunninConfig.MaxSpeed)
+                    {
+                        // Dynamic wait loop. It combines longer waits using SDL_Delay, which do not block the process,
+                        // and then performs a fine-grained adjustment during the last few microseconds using SpinWait,
+                        // which does block but is more precise. The longer waits allow SDL to keep collecting events in
+                        // the meantime, making the emulator feel smoother.
+                        while (true)
+                        {
+                            double now = (double)sw.ElapsedTicks / Stopwatch.Frequency;
+                            double remaining = next - now;
+                            if (remaining <= 0) break;
+
+                            if (remaining > 0.002) // > 2 ms, delay - sleep thread
+                                SDL_Delay(1);
+                            else
+                                Thread.SpinWait(10); // < 2 ms, active wait
+                        }
+
+                        // Check if we are late
+                        double late = (double)sw.ElapsedTicks / Stopwatch.Frequency - next;
+                        if (late > 0.1)
+                            next = (double)sw.ElapsedTicks / Stopwatch.Frequency;
                     }
                 }
-
-                // Vsync completed
-                _mfp.irqController.RaiseVBL();
-
-                Dispatcher.UIThread.InvokeAsync(() => 
+                else
                 {
-                    SDL_PumpEvents();
-                    
-                    while (SDL_PollEvent(out var ev) == 1)
-                    {
-                        HandleEvents(ev);
-                    }
-                }, DispatcherPriority.Background);
-
-                // For future use: Screenshot, recording, etc.
-                OnFrameComplete?.Invoke();
-
-                MainWindow.RefreshDriveLed();
-
-                next += frame;
-
-                if (!ConfigOptions.RunninConfig.MaxSpeed)
-                {
-                    // Dynamic wait loop. It combines longer waits using SDL_Delay, which do not block the process,
-                    // and then performs a fine-grained adjustment during the last few microseconds using SpinWait,
-                    // which does block but is more precise. The longer waits allow SDL to keep collecting events in
-                    // the meantime, making the emulator feel smoother.
-                    while (true)
-                    {
-                        double now = (double)sw.ElapsedTicks / Stopwatch.Frequency;
-                        double remaining = next - now;
-                        if (remaining <= 0) break;
-
-                        if (remaining > 0.002) // > 2 ms, delay - sleep thread
-                            SDL_Delay(1);
-                        else
-                            Thread.SpinWait(10); // < 2 ms, active wait
-                    }
-
-                    // Check if we are late
-                    double late = (double)sw.ElapsedTicks / Stopwatch.Frequency - next;
-                    if (late > 0.1)
-                        next = (double)sw.ElapsedTicks / Stopwatch.Frequency;
+                    // Paused: keep consuming input (F12 capture toggle, gamepad hot-plug)
+                    // without busy-spinning a whole core.
+                    DrainSdlEvents();
+                    SDL_Delay(5);
                 }
             }
         }
 
-        public static bool TurnOn()
+        /// <summary>
+        /// Runs the CPU until the emulated clock reaches the ABSOLUTE <paramref name="targetClock"/>,
+        /// split into short slices (<see cref="CpuSliceCycles"/>). After each slice the MFP timers,
+        /// the PSG and the STE sound are advanced by the cycles actually executed, so:
+        ///   * the interrupt level handed to the 68000 tracks the timers throughout the scanline
+        ///     (not just at the chunk boundaries) — timer interrupts, e.g. the 200 Hz Timer C, are
+        ///     taken promptly; and
+        ///   * a digi sample a timer interrupt writes to the PSG is captured within one slice.
+        ///
+        /// The target is ABSOLUTE on purpose: RunForCycles overshoots by up to one instruction, so
+        /// taking each line's target from a fixed per-frame base (rather than "current clock + n")
+        /// makes every line absorb the previous line's overshoot instead of accumulating it. The
+        /// video line boundaries therefore stay locked to 512 cycles/line. Cycle-counted raster
+        /// code (Spectrum 512 rewrites the palette across the whole screen from a single top-of-
+        /// frame sync) depends on this: with accumulating overshoot the palette drifted a little
+        /// further off on every line, which showed up as horizontal stripes worsening downwards.
+        /// </summary>
+
+        static void RunCpuUntil(long targetClock)
+        {
+            bool isSTE = ConfigOptions.RunninConfig.STModel == ConfigOptions.STModels.STE;
+
+            while (CPU._moira.Clock < targetClock)
+            {
+                long before = CPU._moira.Clock;
+                long want = targetClock - before;
+                if (want > CpuSliceCycles) want = CpuSliceCycles;
+
+                CPU._moira.RunForCycles(want);
+
+                int elapsed = (int)(CPU._moira.Clock - before);
+                if (elapsed <= 0) break;   // no progress (e.g. a swallowed exception): never spin forever
+
+                _mfp.UpdateTimers(elapsed);
+                _ym.Sync(elapsed);
+                if (isSTE) STEDmaSound.Tick(elapsed);
+                WD1772.Tick();
+            }
+        }
+
+        /// <summary>
+        /// Consumes every event currently in SDL's queue and forwards it to
+        /// <see cref="HandleEvents"/>. Runs on the emulation thread: SDL_PeepEvents(GETEVENT)
+        /// only takes the queue lock — it never pumps the platform event loop, which stays on
+        /// the UI thread (<see cref="_sdlPumpTimer"/>).
+        /// </summary>
+        static void DrainSdlEvents()
+        {
+            while (true)
+            {
+                int n = SDL_PeepEvents(_drainBuffer, MaxEventsPerDrain, SDL_eventaction.SDL_GETEVENT,
+                                       SDL_EventType.SDL_FIRSTEVENT, SDL_EventType.SDL_LASTEVENT);
+                if (n <= 0) break;    // empty (0) or SDL error (-1, e.g. mid-shutdown)
+
+                for (int i = 0; i < n; i++)
+                    HandleEvents(_drainBuffer[i]);
+
+                if (n < MaxEventsPerDrain) break;
+            }
+        }
+
+        /// <summary>Copies the latest published frame into <paramref name="dest"/> under the
+        /// frame lock, so the GL thread never reads a frame that is still being drawn.</summary>
+        public static void SnapshotScreen(byte[] dest)
+        {
+            lock (_syncLock)
+                System.Buffer.BlockCopy(ScreenBuffer, 0, dest, 0, dest.Length);
+        }
+
+        /// <summary>
+        /// Parks the emulation thread at the next frame boundary, runs <paramref name="action"/>
+        /// (writing a snapshot or a screenshot) and resumes it. Must NOT be called from the
+        /// emulation thread itself — it would wait for its own acknowledgment.
+        /// </summary>
+        public static bool RunWhilePaused(Action action, out string error)
+        {
+            error = null;
+
+            _freezeRequest = true;
+            try
+            {
+                // The loop acknowledges within one frame (~20 ms); the timeout only covers the
+                // thread not running at all (shutdown, failed init).
+                var sw = Stopwatch.StartNew();
+                while (!_frozen && _thread != null && _thread.IsAlive && sw.ElapsedMilliseconds < 1000)
+                    Thread.Sleep(1);
+
+                action();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                return false;
+            }
+            finally
+            {
+                _freezeRequest = false;
+            }
+        }
+
+        /// <summary>Saves a full machine snapshot (same format as the Debug window's Snapshot
+        /// button) into the configured snapshots directory with a timestamped name, pausing the
+        /// emulation while the file is written. Bound to F11 and File > Save snapshot.</summary>
+        public static bool SaveSnapshot(out string path, out string error)
+        {
+            string dir = Config.SnapshotsDir;
+            string file = NewTimestampedPath(dir, "ase_snapshot", "snap");
+            path = file;
+
+            return RunWhilePaused(() =>
+            {
+                Directory.CreateDirectory(dir);
+                Snapshot.Save(file);
+            }, out error);
+        }
+
+        /// <summary>Saves the current ST screen as a PNG into the configured screenshots
+        /// directory with a timestamped name, pausing the emulation while the file is written.
+        /// Bound to Shift+F11.</summary>
+        public static bool SaveScreenshot(out string path, out string error)
+        {
+            string dir = Config.ScreenshotsDir;
+            string file = NewTimestampedPath(dir, "ase_screenshot", "png");
+            path = file;
+
+            return RunWhilePaused(() =>
+            {
+                Directory.CreateDirectory(dir);
+                WriteScreenshotPng(file);
+            }, out error);
+        }
+
+        static string NewTimestampedPath(string dir, string prefix, string extension)
+        {
+            string stamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+            string path = Path.Combine(dir, $"{prefix}_{stamp}.{extension}");
+
+            // Several captures within the same second: append a counter
+            for (int n = 2; File.Exists(path); n++)
+                path = Path.Combine(dir, $"{prefix}_{stamp}_{n}.{extension}");
+
+            return path;
+        }
+
+        /// <summary>
+        /// Writes the last published frame as a PNG. Follows ShowBorders (full overscan buffer or
+        /// just the 640x200 display area) and doubles each scanline vertically — the framebuffer
+        /// is already horizontally doubled, so the image keeps the on-screen aspect ratio.
+        /// </summary>
+        static void WriteScreenshotPng(string path)
+        {
+            bool borders = ConfigOptions.RunninConfig.ShowBorders;
+            int srcX = borders ? 0 : VideoTiming.DISPLAY_ORIGIN_X;
+            int srcY = borders ? 0 : VideoTiming.DISPLAY_ORIGIN_Y;
+            int width = borders ? VideoTiming.BUFFER_WIDTH : VideoTiming.DISPLAY_TEX_WIDTH;
+            int height = borders ? VideoTiming.BUFFER_HEIGHT : VideoTiming.DISPLAY_TEX_HEIGHT;
+
+            // ScreenBuffer pixels are RGBA in memory (0xAABBGGRR), same layout the GL texture uses
+            byte[] row = new byte[width * 4];
+
+            using var bmp = new WriteableBitmap(new PixelSize(width, height * 2), new Vector(96, 96),
+                                                PixelFormats.Rgba8888, AlphaFormat.Opaque);
+            using (var fb = bmp.Lock())
+            {
+                lock (_syncLock)
+                {
+                    for (int y = 0; y < height; y++)
+                    {
+                        System.Buffer.BlockCopy(ScreenBuffer,
+                            ((srcY + y) * VideoTiming.BUFFER_WIDTH + srcX) * 4, row, 0, row.Length);
+                        Marshal.Copy(row, 0, fb.Address + (2 * y) * fb.RowBytes, row.Length);
+                        Marshal.Copy(row, 0, fb.Address + (2 * y + 1) * fb.RowBytes, row.Length);
+                    }
+                }
+            }
+
+            bmp.Save(path);
+        }
+
+        /// <summary>
+        /// Powers on the emulated machine and starts the emulation thread.
+        /// </summary>
+        /// <param name="afterInit">Optional hook that runs after the CPU/chips have been
+        /// initialized but BEFORE the emulation thread starts — used to apply a snapshot
+        /// over the freshly initialized machine without any thread contention.</param>
+        public static bool TurnOn(Action afterInit = null)
         {
             // Starts with mouse uncaptured
             CaptureMouse(false);
 
-            _isRunning = true;
             _ym = new YM2149(sampleRate: Config.ConfigOptions.RunninConfig.SampleRate, chipClockHz: 2000000.0);
 
-            CPU.InitCpu();
+            // TOS missing or invalid: leave the machine off (black screen). The user can pick a
+            // TOS in the Configuration window, whose OK triggers a HardReset and lands here again.
+            if (!CPU.InitCpu())
+                return false;
 
-            // Init ok?
-            if (!_isRunning)
-                return false;         // No, just exit
+            _isRunning = true;
+            afterInit?.Invoke();
 
             _thread = new Thread(EmulatorLoop);
             _thread.Start();
@@ -259,15 +541,88 @@ namespace ASE
 
         public static void HardReset()
         {
-            _isRunning = false;
-            _thread.Join();
-
+            StopEmulationThread();
             TurnOn();
+        }
+
+        /// <summary>Stops the emulation thread, waiting until it exits. Safe to call when the
+        /// machine never powered on (e.g. first launch without a TOS ROM).</summary>
+        static void StopEmulationThread()
+        {
+            _isRunning = false;
+
+            if (_thread != null && _thread.IsAlive)
+                _thread.Join();
+        }
+
+        /// <summary>
+        /// Restores a machine snapshot: stops the emulation thread (like a hard reset), switches
+        /// the running configuration to the snapshot's ST model and RAM size, re-initializes the
+        /// machine and applies the saved state before restarting the thread. The persisted user
+        /// config file is not touched. If the file is invalid the running machine is left
+        /// untouched; if applying fails midway it falls back to a clean boot.
+        /// </summary>
+        public static bool RestoreSnapshot(string path, out string error)
+        {
+            Snapshot.SnapshotFile snap;
+            try
+            {
+                snap = Snapshot.ReadFile(path);
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                return false;
+            }
+
+            StopEmulationThread();
+
+            return StartWithSnapshot(snap, out error);
+        }
+
+        /// <summary>
+        /// Powers on the machine from an already-parsed snapshot. The emulation thread must NOT
+        /// be running. On failure it reverts to the previous configuration and boots clean, so
+        /// the machine is always left running.
+        /// </summary>
+        static bool StartWithSnapshot(Snapshot.SnapshotFile snap, out string error)
+        {
+            error = null;
+
+            var prevModel = ConfigOptions.RunninConfig.STModel;
+            var prevRam = ConfigOptions.RunninConfig.RAMConfiguration;
+
+            ConfigOptions.RunninConfig.STModel = snap.Model;
+            ConfigOptions.RunninConfig.RAMConfiguration = snap.RamConfig;
+
+            try
+            {
+                return TurnOn(() => Snapshot.Apply(snap));
+            }
+            catch (Exception ex)
+            {
+                // Estado a medio aplicar: volver a un arranque limpio con la config anterior
+                error = ex.Message;
+                ConfigOptions.RunninConfig.STModel = prevModel;
+                ConfigOptions.RunninConfig.RAMConfiguration = prevRam;
+
+                TurnOn();
+                return false;
+            }
         }
 
         public static void Shutdown()
         {
             _isRunning = false;
+
+            // Wait for the emulation thread before tearing SDL down: it reads the event queue
+            // (SDL_PeepEvents) every scanline and must not race SDL_Quit. It never blocks on
+            // the UI thread (all its dispatcher calls are fire-and-forget), so joining from
+            // here cannot deadlock.
+            if (_thread != null && _thread != Thread.CurrentThread)
+                _thread.Join();
+
+            _sdlPumpTimer?.Stop();
 
             if (_audiodev != 0)
             {
@@ -282,13 +637,35 @@ namespace ASE
             SDL.SDL_Quit();
         }
 
+        // Middle mouse button toggles input capture, like F12. The same physical press can be
+        // reported twice — through the SDL queue and through the Avalonia overlay, depending on
+        // platform — so the toggle fires only on the press edge and re-arms on release.
+        static volatile bool _middleButtonPressed;
+
+        public static void MiddleButtonDown()
+        {
+            if (_middleButtonPressed)
+                return;
+
+            _middleButtonPressed = true;
+            CaptureMouse(!IsMouseCaptured);
+        }
+
+        public static void MiddleButtonUp() => _middleButtonPressed = false;
+
         public static void CaptureMouse(bool capture = true)
         {
             IsMouseCaptured = capture;
-            SDL_SetRelativeMouseMode(capture ? SDL.SDL_bool.SDL_TRUE : SDL.SDL_bool.SDL_FALSE);
-            
-            MainWindow.Cursor = capture ? new Avalonia.Input.Cursor(Avalonia.Input.StandardCursorType.None) : null;
-            MainWindow.ShowMenu(!capture);
+
+            // Also reached from the emulation thread (F12 in HandleEvents): the SDL video call
+            // and the Avalonia properties must run on the UI thread.
+            Dispatcher.UIThread.Post(() =>
+            {
+                SDL_SetRelativeMouseMode(capture ? SDL.SDL_bool.SDL_TRUE : SDL.SDL_bool.SDL_FALSE);
+
+                MainWindow.Cursor = capture ? new Avalonia.Input.Cursor(Avalonia.Input.StandardCursorType.None) : null;
+                MainWindow.ShowMenu(!capture);
+            }, DispatcherPriority.Input);
         }
 
         public static void GamepadButton(ConfigOptions.GamepadButtonsMapping buttonMapping, bool pressed)
@@ -398,7 +775,7 @@ namespace ASE
                 if (GamepadController == nint.Zero && SDL.SDL_IsGameController(deviceIndex) == SDL.SDL_bool.SDL_TRUE)
                 {
                     GamepadController = SDL.SDL_GameControllerOpen(deviceIndex);
-                    ColoredConsole.WriteLine("[[green]]Gamepad connected![[/green]]");
+                    ColoredConsole.WriteLine("[[green]]Gamepad connected![[/green]]", ConfigOptions.DebugModes.Quiet);
                 }
                 return;
             }
@@ -423,7 +800,7 @@ namespace ASE
                         ACIA.UpdateJoystick(ACIA.JOY_RIGHT, false);
                         ACIA.UpdateJoystick(ACIA.JOY_FIRE, false);
 
-                        ColoredConsole.WriteLine("[[yellow]]Gamepad disconnected![[/yellow]]");
+                        ColoredConsole.WriteLine("[[yellow]]Gamepad disconnected![[/yellow]]", ConfigOptions.DebugModes.Quiet);
                     }
                 }
                 return;
@@ -472,24 +849,29 @@ namespace ASE
             {
                 var key = e.key.keysym;
 
-                // Pressing F12 disables the menu so it doesn’t interfere with keyboard input and captures
-                // the mouse in the window. Pressing Ctrl+F12 disassembles the code near the PC in the
-                // console window. I’m using this to inspect what’s happening in the emulator;
-                // it’s only there for testing and debugging. I’d need to build a more complete debugger
-                // for it to be truly useful beyond my own experiments.
+                // Pressing F12 disables the menu so it doesn't interfere with keyboard input and captures
+                // the mouse in the window.
                 if (e.key.keysym.scancode == SDL.SDL_Scancode.SDL_SCANCODE_F12)
                 {
-                    if ((e.key.keysym.mod & SDL.SDL_Keymod.KMOD_LCTRL) != 0)
-                    {
-                        IgnoreCtlrKeyUp = true;
-
-                        if (ConfigOptions.RunninConfig.DebugMode)
-                            Debug.DisassembleRunningPC();
-
-                        return;
-                    }
-
                     CaptureMouse(!IsMouseCaptured);
+                    return;
+                }
+
+                // F11 saves a machine snapshot; Shift+F11 saves a PNG screenshot. Posted to the
+                // UI thread because the save parks the emulation thread at a frame boundary
+                // (RunWhilePaused) and this handler runs on that very thread.
+                if (key.scancode == SDL.SDL_Scancode.SDL_SCANCODE_F11)
+                {
+                    bool shift = (key.mod & SDL.SDL_Keymod.KMOD_SHIFT) != 0;
+
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        if (shift)
+                            MainWindow.DoSaveScreenshot();
+                        else
+                            MainWindow.DoSaveSnapshot();
+                    }, DispatcherPriority.Input);
+
                     return;
                 }
 
@@ -523,6 +905,20 @@ namespace ASE
                         // Scancode | 0x80 -> Scancode que se ha soltado en el ST
                         ACIA.PushIkbd((byte)(ACIA.AtariScancodes[scancode] | 0x80));
                 }
+            }
+
+            // Middle button toggles capture regardless of the current state (that is how you
+            // capture in the first place), so it is handled outside the IsMouseCaptured block.
+            if (e.type == SDL.SDL_EventType.SDL_MOUSEBUTTONDOWN && e.button.button == SDL.SDL_BUTTON_MIDDLE)
+            {
+                MiddleButtonDown();
+                return;
+            }
+
+            if (e.type == SDL.SDL_EventType.SDL_MOUSEBUTTONUP && e.button.button == SDL.SDL_BUTTON_MIDDLE)
+            {
+                MiddleButtonUp();
+                return;
             }
 
             if (IsMouseCaptured)

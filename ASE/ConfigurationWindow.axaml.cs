@@ -63,6 +63,13 @@ namespace ASE
 
             RebindGLSliders();
             RebindJoymap();
+
+            // Directories tab: edited locally and committed to the config on OK only,
+            // so Cancel discards the changes without needing backup fields
+            TextScreenshotsDir.Text = Config.ConfigOptions.RunninConfig.ScreenshotsPath;
+            TextSnapshotsDir.Text = Config.ConfigOptions.RunninConfig.SnapshotsPath;
+            TextDiskImagesDir.Text = Config.ConfigOptions.RunninConfig.DiskImagesPath;
+            TextTOSRomsDir.Text = Config.ConfigOptions.RunninConfig.TOSRomsPath;
         }
 
         private static string GetDisplayKeyName(SDL.SDL_Scancode scancode)
@@ -91,9 +98,10 @@ namespace ASE
             TextFire.Text = GetDisplayKeyName(Config.ConfigOptions.RunninConfig.KeyJoy1Fire);
         }
 
-        public void OnBrowseTOSImageClick(object sender, RoutedEventArgs e)
+        public async void OnBrowseTOSImageClick(object sender, RoutedEventArgs e)
         {
-            var (canceled, selpath) = TinyDialogs.OpenFileDialog("Select TOS image file", "", false, new FileFilter("TOS image", ["*.rom", "*.img", "*.tos"]));
+            var (canceled, selpath) = await Dialogs.OpenFile("Select TOS image file",
+                Config.DialogStartFolder(TextTOSRomsDir.Text), new FileFilter("TOS image", ["*.rom", "*.img", "*.tos"]));
 
             if (!canceled && selpath.Count() == 1)
             {
@@ -137,10 +145,17 @@ namespace ASE
             Config.ConfigOptions.RunninConfig.GamepadButtonLB = (Config.ConfigOptions.GamepadButtonsMapping)ComboLB.SelectedIndex;
             Config.ConfigOptions.RunninConfig.GamepadButtonRB = (Config.ConfigOptions.GamepadButtonsMapping)ComboRB.SelectedIndex;
 
+            // Save directories (empty screenshots/snapshots fall back to the defaults
+            // next to config.json at save time)
+            Config.ConfigOptions.RunninConfig.ScreenshotsPath = (TextScreenshotsDir.Text ?? "").Trim();
+            Config.ConfigOptions.RunninConfig.SnapshotsPath = (TextSnapshotsDir.Text ?? "").Trim();
+            Config.ConfigOptions.RunninConfig.DiskImagesPath = (TextDiskImagesDir.Text ?? "").Trim();
+            Config.ConfigOptions.RunninConfig.TOSRomsPath = (TextTOSRomsDir.Text ?? "").Trim();
+
             Program.Config.DumpJsonConfig();
 
             if (ForceReset)
-                CPU.InitCpu();
+                ASEMain.HardReset();
 
             Close();
         }
@@ -279,6 +294,19 @@ namespace ASE
             }
 
             return true;
+        }
+
+        public void OnBrowseScreenshotsDirClick(object sender, RoutedEventArgs e) => BrowseDirectory(TextScreenshotsDir, "Select screenshots directory");
+        public void OnBrowseSnapshotsDirClick(object sender, RoutedEventArgs e) => BrowseDirectory(TextSnapshotsDir, "Select snapshots directory");
+        public void OnBrowseDiskImagesDirClick(object sender, RoutedEventArgs e) => BrowseDirectory(TextDiskImagesDir, "Select disk images directory");
+        public void OnBrowseTOSRomsDirClick(object sender, RoutedEventArgs e) => BrowseDirectory(TextTOSRomsDir, "Select TOS ROMs directory");
+
+        void BrowseDirectory(TextBox target, string title)
+        {
+            var (canceled, path) = TinyDialogs.SelectFolderDialog(title, Config.DialogStartFolder(target.Text));
+
+            if (!canceled && !string.IsNullOrWhiteSpace(path))
+                target.Text = path;
         }
 
         private void Model_SelectionChanged(object sender, SelectionChangedEventArgs e) => ForceReset = (Config.ConfigOptions.RunninConfig.STModel != configBackup.STModel) ? true : false;

@@ -84,6 +84,15 @@ namespace ASE
             var ctrl = (Control)sender!;
             var p = e.GetCurrentPoint(ctrl);
 
+            // Middle button toggles input capture like F12 (works captured or not). The same
+            // press may also arrive through the SDL queue; ASEMain edge-guards the toggle.
+            if (p.Properties.IsMiddleButtonPressed)
+            {
+                ASEMain.MiddleButtonDown();
+                e.Handled = true;
+                return;
+            }
+
             // Transmit the button press to the ACIA mouse handling
             if (p.Properties.IsLeftButtonPressed && ASEMain.IsMouseCaptured)
             {
@@ -99,6 +108,13 @@ namespace ASE
             // I have to do it manually here and forward it to the ACIA mouse handling.
             // I’m sure there are better ways to do this, but for now it does what
             // I need it to do and that’s enough by now.
+
+            if (e.InitialPressMouseButton == MouseButton.Middle)
+            {
+                ASEMain.MiddleButtonUp();
+                e.Handled = true;
+                return;
+            }
 
             if (e.InitialPressMouseButton == MouseButton.Left && ASEMain.IsMouseCaptured)
             {
@@ -158,15 +174,24 @@ namespace ASE
             }
         }
 
-        public void DriveLed(bool On)
+        /// <summary>Turns the drive LED on/off; <paramref name="activity"/> ("A: T05 S09",
+        /// captured by the WD1772 when the command starts) is shown next to the LED and
+        /// cleared when the LED goes off.</summary>
+        public void DriveLed(bool On, string activity = "")
         {
             if (On)
             {
                 TimeLastDriveOn = DateTime.Now;
                 DriveLedImage.Source = BitmapLedDriveOn;
+
+                if (!string.IsNullOrEmpty(activity))
+                    TextBlockDriveStatus.Text = activity;
             }
             else
+            {
                 DriveLedImage.Source = BitmapLedDriveOff;
+                TextBlockDriveStatus.Text = "";
+            }
         }
 
         public void SetStatusBarText(string text)
@@ -225,6 +250,7 @@ namespace ASE
                     if (s.EndsWith(".st", StringComparison.OrdinalIgnoreCase)
                         || s.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)
                         || s.EndsWith(".msa", StringComparison.OrdinalIgnoreCase)
+                        || s.EndsWith(".stx", StringComparison.OrdinalIgnoreCase)
                         )
                     {
                         HasValidFile = true;
@@ -244,8 +270,9 @@ namespace ASE
         {
             ASEMain.CaptureMouse(false);
 
-            var (canceled, selpath) = TinyDialogs.OpenFileDialog("Select disk image file", "", false,
-                new FileFilter("ST disk images", ["*.st", "*.msa", "*.zip"]));
+            var (canceled, selpath) = await Dialogs.OpenFile("Select disk image file",
+                Config.DialogStartFolder(Config.ConfigOptions.RunninConfig.DiskImagesPath),
+                new FileFilter("ST disk images", ["*.st", "*.msa", "*.stx", "*.zip"]));
 
             if (!canceled && selpath.Count() == 1)
                 InsertDisk(selpath.ElementAt(0));
@@ -277,7 +304,7 @@ namespace ASE
 
                         if (!insertedFromZip)
                         {
-                            TinyDialogs.MessageBox("Error", message, MessageBoxDialogType.Ok, MessageBoxIconType.Error, MessageBoxButton.Ok);
+                            await Dialogs.MessageBox("Error", message, MessageBoxDialogType.Ok, MessageBoxIconType.Error, MessageBoxButton.Ok);
                             return;
                         }
 
@@ -288,7 +315,7 @@ namespace ASE
                 }
                 else
                 {
-                    TinyDialogs.MessageBox("Error", message, MessageBoxDialogType.Ok, MessageBoxIconType.Error, MessageBoxButton.Ok);
+                    await Dialogs.MessageBox("Error", message, MessageBoxDialogType.Ok, MessageBoxIconType.Error, MessageBoxButton.Ok);
                     return;
                 }
             }
@@ -297,7 +324,7 @@ namespace ASE
                 ColoredConsole.WriteLine(message);
             }
 
-            var response = TinyDialogs.MessageBox("Disk inserted", "Reboot?", MessageBoxDialogType.YesNo, MessageBoxIconType.Question, MessageBoxButton.Yes);
+            var response = await Dialogs.MessageBox("Disk inserted", "Reboot?", MessageBoxDialogType.YesNo, MessageBoxIconType.Question, MessageBoxButton.Yes);
 
             if (response == MessageBoxButton.Yes)
                 ASEMain.HardReset();
@@ -320,12 +347,63 @@ namespace ASE
             ItemMenuEjecDisk.IsEnabled = false;
         }
 
-        public void OnResetClick(object sender, RoutedEventArgs e)
+        public async void OnResetClick(object sender, RoutedEventArgs e)
         {
-            var response = TinyDialogs.MessageBox("Reset ST", "Are you sure?", MessageBoxDialogType.YesNo, MessageBoxIconType.Question, MessageBoxButton.Yes);
+            var response = await Dialogs.MessageBox("Reset ST", "Are you sure?", MessageBoxDialogType.YesNo, MessageBoxIconType.Question, MessageBoxButton.Yes);
 
+            // HardReset stops the emulation thread before re-initializing: InitCpu alone would
+            // race the running loop (flaky resets) and never starts the thread if the machine
+            // is off (first launch without TOS).
             if (response == MessageBoxButton.Yes)
-                CPU.InitCpu();
+                ASEMain.HardReset();
+        }
+
+        public void OnSaveSnapshotClick(object sender, RoutedEventArgs e) => DoSaveSnapshot();
+
+        /// <summary>Saves a machine snapshot into the configured snapshots directory. Reached
+        /// from the File menu and from F11 (posted here by ASEMain.HandleEvents). UI thread.</summary>
+        public void DoSaveSnapshot()
+        {
+            if (ASEMain.SaveSnapshot(out string path, out string error))
+                SetStatusBarText($"Snapshot saved: {Path.GetFileName(path)}");
+            else
+                SetStatusBarText($"❌ Could not save snapshot: {error}");
+        }
+
+        /// <summary>Saves the current ST screen as PNG into the configured screenshots
+        /// directory. Reached from Shift+F11. UI thread.</summary>
+        public void DoSaveScreenshot()
+        {
+            if (ASEMain.SaveScreenshot(out string path, out string error))
+                SetStatusBarText($"Screenshot saved: {Path.GetFileName(path)}");
+            else
+                SetStatusBarText($"❌ Could not save screenshot: {error}");
+        }
+
+        public async void OnRestoreSnapshotClick(object sender, RoutedEventArgs e)
+        {
+            ASEMain.CaptureMouse(false);
+
+            var (canceled, selpath) = await Dialogs.OpenFile("Restore ST snapshot",
+                Config.DialogStartFolder(Config.SnapshotsDir),
+                new FileFilter("ASE snapshot", ["*.snap"]));
+
+            if (canceled || selpath.Count() != 1)
+                return;
+
+            string path = selpath.ElementAt(0);
+
+            if (!ASEMain.RestoreSnapshot(path, out string error))
+            {
+                await Dialogs.MessageBox("Error", $"Could not restore snapshot: {error}",
+                    MessageBoxDialogType.Ok, MessageBoxIconType.Error, MessageBoxButton.Ok);
+                return;
+            }
+
+            // El snapshot puede haber reinsertado el disco que estaba en la unidad A
+            ItemMenuEjecDisk.IsEnabled = ASEMain.driveA.HasDisk;
+
+            SetStatusBarText($"Snapshot {Path.GetFileName(path)} restored");
         }
 
         public void OnConfigurationClick(object sender, RoutedEventArgs e)
@@ -334,10 +412,25 @@ namespace ASE
             configWindow.ShowDialog(this);
         }
 
+        public void OnDebugClick(object sender, RoutedEventArgs e)
+        {
+            var debugWindow = new DebugWindow();
+            debugWindow.ShowDialog(this);
+        }
+
         private void OnAboutClick(object sender, RoutedEventArgs e)
         {
             var aboutWindow = new AboutWindow();
             aboutWindow.ShowDialog(this);
+        }
+        
+        private async void OnManualClick(object sender, RoutedEventArgs e)
+        {
+            var topLevel = TopLevel.GetTopLevel(this);
+            if (topLevel is null)
+                return;
+
+            await topLevel.Launcher.LaunchUriAsync(new Uri("https://github.com/thebitculture/ase/wiki"));
         }
     }
 }

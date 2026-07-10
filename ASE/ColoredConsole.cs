@@ -75,10 +75,13 @@ namespace ASE
         /// <remarks>This method is useful for outputting text with a newline, making it suitable for
         /// logging or console output.</remarks>
         /// <param name="text">The text to write to the output. This parameter cannot be null.</param>
-        /// <param name="DebugMode">Print in debug mode only.</param>
-        public static void WriteLine(string text, bool DebugMode = false)
+        /// <param name="level">Minimum debug verbosity required for this message to be shown. The
+        /// default (<see cref="Config.ConfigOptions.DebugModes.None"/>) makes the message essential, so
+        /// it is always printed; higher levels are only printed when the configured debug level is at
+        /// least as high.</param>
+        public static void WriteLine(string text, Config.ConfigOptions.DebugModes level = Config.ConfigOptions.DebugModes.None)
         {
-            if (!DebugMode || Config.ConfigOptions.RunninConfig.DebugMode)
+            if (Config.ConfigOptions.RunninConfig.DebugMode >= level)
             {
                 Write(text);
                 Write(Environment.NewLine);

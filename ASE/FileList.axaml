@@ -17,7 +17,7 @@
     <StackPanel Orientation="Vertical" Margin="0,10,0,0" Spacing="6">
 
         <StackPanel Orientation="Horizontal">
-            <Svg Path="/Assets/Icons/disk.svg"
+            <Svg Path="avares://ASE/Assets/Icons/disk.svg"
 			    Width="18" Height="18"
 			    Margin="10,0,4,0"
 			    VerticalAlignment="Center"/>

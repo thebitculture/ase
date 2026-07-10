@@ -17,7 +17,7 @@
 			<TabItem>
 				<TabItem.Header>
 					<Grid ColumnDefinitions="Auto,Auto" VerticalAlignment="Center">
-						<Svg Path="/Assets/Icons/gear.svg"
+						<Svg Path="avares://ASE/Assets/Icons/gear.svg"
 							 Width="18" Height="18"
 							 Margin="0,4,12,0"
 							 VerticalAlignment="Center"/>
@@ -31,7 +31,7 @@
 						<ComboBox MaxDropDownHeight="100" Width="180" SelectedIndex="{Binding STModel, Mode=TwoWay}" SelectionChanged="Model_SelectionChanged" >
 							<ComboBoxItem>Atari STF/FM</ComboBoxItem>
 							<ComboBoxItem>Atari STF/FM + Blitter</ComboBoxItem>
-							<!--  <ComboBoxItem>Atari STE</ComboBoxItem> -->
+							<ComboBoxItem>Atari STE</ComboBoxItem>
 						</ComboBox>
 						<Label VerticalAlignment="Center">Memory</Label>
 						<ComboBox MaxDropDownHeight="100" Width="180" SelectedIndex="{Binding RAMConfiguration, Mode=TwoWay}" SelectionChanged="Memory_SelectionChanged">
@@ -53,7 +53,7 @@
 			<TabItem>
 				<TabItem.Header>
 					<Grid ColumnDefinitions="Auto,Auto" VerticalAlignment="Center">
-						<Svg Path="/Assets/Icons/tv.svg"
+						<Svg Path="avares://ASE/Assets/Icons/tv.svg"
 							 Width="18" Height="18"
 							 Margin="0,4,12,0"
 							 VerticalAlignment="Center"/>
@@ -107,7 +107,7 @@
 			<TabItem>
 				<TabItem.Header>
 					<Grid ColumnDefinitions="Auto,Auto" VerticalAlignment="Center">
-						<Svg Path="/Assets/Icons/joystick.svg"
+						<Svg Path="avares://ASE/Assets/Icons/joystick.svg"
 							 Width="18" Height="18"
 							 Margin="0,4,12,0"
 							 VerticalAlignment="Center"/>
@@ -121,11 +121,11 @@
 					<StackPanel>
 						<TextBlock Text="{Binding #SliderMouseSensitivity.Value, StringFormat={}Mouse sensitivity adjustment : {0:0.0}}" VerticalAlignment="Center"/>
 						<Grid ColumnDefinitions="32,*,32">
-							<Svg Path="/Assets/Icons/mousecursorfast.svg"
+							<Svg Path="avares://ASE/Assets/Icons/mousecursorfast.svg"
 							 Width="24" Height="24" Grid.Column="0"
 							 VerticalAlignment="Center"/>
 							<Slider x:Name="SliderMouseSensitivity" Value="{Binding MouseSensitivity, Mode=TwoWay}" Minimum="0.5" Maximum="5.0" TickFrequency="0.5" IsSnapToTickEnabled="True" Grid.Column="1" />
-							<Svg Path="/Assets/Icons/mousecursorslow.svg"
+							<Svg Path="avares://ASE/Assets/Icons/mousecursorslow.svg"
 							 Width="24" Height="24" Grid.Column="2"
 							 VerticalAlignment="Center"/>
 						</Grid>
@@ -258,11 +258,49 @@
 					</UniformGrid>
 				</StackPanel>
 			</TabItem>
+			<TabItem>
+				<TabItem.Header>
+					<Grid ColumnDefinitions="Auto,Auto" VerticalAlignment="Center">
+						<Svg Path="avares://ASE/Assets/Icons/folder.svg"
+							 Width="18" Height="18"
+							 Margin="0,4,12,0"
+							 VerticalAlignment="Center"/>
+						<TextBlock Grid.Column="1"
+								   Text="Directories"
+								   VerticalAlignment="Center"/>
+					</Grid>
+				</TabItem.Header>
+				<StackPanel Orientation="Vertical" Margin="0,10,0,0" Spacing="6" >
+					<Separator Margin="0,10"/>
+					<StackPanel Orientation="Vertical" Margin="10,0,10,0" Spacing="4">
+						<Label>Screenshots (Shift+F11)</Label>
+						<Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+							<TextBox Grid.Column="0" Name="TextScreenshotsDir"/>
+							<Button Grid.Column="1" Content="Browse…" Click="OnBrowseScreenshotsDirClick" />
+						</Grid>
+						<Label Margin="0,8,0,0">Snapshots (F11)</Label>
+						<Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+							<TextBox Grid.Column="0" Name="TextSnapshotsDir"/>
+							<Button Grid.Column="1" Content="Browse…" Click="OnBrowseSnapshotsDirClick" />
+						</Grid>
+						<Label Margin="0,8,0,0">Disk images</Label>
+						<Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+							<TextBox Grid.Column="0" Name="TextDiskImagesDir"/>
+							<Button Grid.Column="1" Content="Browse…" Click="OnBrowseDiskImagesDirClick" />
+						</Grid>
+						<Label Margin="0,8,0,0">TOS ROMs</Label>
+						<Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+							<TextBox Grid.Column="0" Name="TextTOSRomsDir"/>
+							<Button Grid.Column="1" Content="Browse…" Click="OnBrowseTOSRomsDirClick" />
+						</Grid>
+					</StackPanel>
+				</StackPanel>
+			</TabItem>
 		</TabControl>
 
 		<StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="10" Spacing="8" Grid.Row="2">
-			<Button Content="OK" Width="80" Click="OnOkClick" />
-			<Button Content="Cancel" Click="OnCancelClick" Width="80" />
+			<Button Content="OK" Width="80" HorizontalContentAlignment="Center" Click="OnOkClick" />
+			<Button Content="Cancel" HorizontalContentAlignment="Center" Click="OnCancelClick" Width="80" />
 		</StackPanel>
 
 	</Grid>

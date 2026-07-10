@@ -1,12 +1,6 @@
-﻿using Avalonia.Animation.Easings;
-using ShimSkiaSharp;
-using SkiaSharp;
-using System;
-using System.Collections.Generic;
-using System.IO.Compression;
-using System.Text;
+﻿using System.IO.Compression;
 using static ASE.Config;
-using static System.Runtime.InteropServices.JavaScript.JSType;
+
 
 namespace ASE
 {
@@ -25,9 +19,19 @@ namespace ASE
         public Configuration DiskConfig;
         public List<Configuration> Configurations = new List<Configuration>();
 
-        public bool WriteProtected = true;
+        // STX (Pasti) images keep their own per-track/per-sector structures instead of the
+        // linear Data buffer; the WD1772 branches on Stx != null.
+        public STXImage Stx;
 
-        public bool HasDisk => Data != null;
+        // Writes only modify the in-memory image, they are never written back to the file,
+        // so disks can be left unprotected by default (games can save, TOS can write, etc.)
+        public bool WriteProtected = false;
+
+        // Path of the currently inserted image ("volume.zip|entry" for zipped images).
+        // Stored in snapshots so the same disk can be re-inserted on restore.
+        public string ImagePath = "";
+
+        public bool HasDisk => Data != null || Stx != null;
 
         public FloppyImage()
         {
@@ -79,7 +83,7 @@ namespace ASE
             {
                 zip = ZipFile.OpenRead(path);
 
-                HashSet<string> _extensions = new(StringComparer.OrdinalIgnoreCase) { ".st", ".msa" };
+                HashSet<string> _extensions = new(StringComparer.OrdinalIgnoreCase) { ".st", ".msa", ".stx" };
                 HashSet<string> ImagesInZip = new HashSet<string>();
 
                 foreach (var entry in zip.Entries)
@@ -149,12 +153,13 @@ namespace ASE
                     Data = ms.ToArray();
                 }
 
+                Stx = null;
                 message = $"Floppy image loaded: [[green]]{path}[[/green]]";
             }
             // MSA image format
             else if (path.EndsWith(".msa", StringComparison.OrdinalIgnoreCase))
             {
-                using (Stream fileStream = (zip == null ? zip.GetEntry(path).Open() : File.OpenRead(path)))
+                using (Stream fileStream = (zip == null ? File.OpenRead(path) : zip.GetEntry(path).Open()))
                 {
                     // Header 5 words:
                     //
@@ -179,16 +184,17 @@ namespace ASE
                         SectorSize = 512,
                         SectorsPerTrack = signatureBytes[3],
                         Sides = signatureBytes[5] + 1,
-                        Tracks = signatureBytes[9] - signatureBytes[7]
+                        // Start/end track are inclusive (0..79 -> 80 tracks)
+                        Tracks = signatureBytes[9] - signatureBytes[7] + 1
                     };
 
                     int totalSectors = DiskConfig.Sides * DiskConfig.Tracks * DiskConfig.SectorsPerTrack;
                     int trackDataSize = DiskConfig.SectorsPerTrack * DiskConfig.SectorSize;
                     Data = new byte[totalSectors * DiskConfig.SectorSize];
-                        
+
                     int index = 0;
 
-                    for(int track = 0; track < DiskConfig.Tracks * DiskConfig.Sides; track++)
+                    for (int track = 0; track < DiskConfig.Tracks * DiskConfig.Sides; track++)
                     {
                         // Reads track size
                         byte[] trackSizeBytes = new byte[2];
@@ -202,7 +208,7 @@ namespace ASE
                             index += trackDataSize;
                         }
                         // If track size < track data size, read RLE compressed data
-                        else 
+                        else
                         {
                             int startindex = index;
 
@@ -232,8 +238,47 @@ namespace ASE
                             } while (index - startindex != trackDataSize);
                         }
                     }
+                    Stx = null;
                     message = $"Floppy image loaded: [[green]]{path}[[/green]]";
                 }
+            }
+            // STX (Pasti) image format
+            else if (path.EndsWith(".stx", StringComparison.OrdinalIgnoreCase))
+            {
+                byte[] file;
+                if (zip == null)
+                {
+                    file = File.ReadAllBytes(path);
+                }
+                else
+                {
+                    using Stream entryStream = zip.GetEntry(path).Open();
+                    using MemoryStream ms = new MemoryStream();
+                    entryStream.CopyTo(ms);
+                    file = ms.ToArray();
+                }
+
+                Stx = STXImage.TryLoad(file, out string error);
+                if (Stx == null)
+                {
+                    message = $"Invalid STX file ({error}): [[red]]{path}[[/red]]";
+                    Eject();
+                    return false;
+                }
+                Data = null;
+
+                // Approximate geometry for the code paths shared with .ST/.MSA (head
+                // clamping in seek/step); the actual sector layout comes from the
+                // per-track STX structures.
+                DiskConfig = new Configuration
+                {
+                    Sides = Stx.Sides,
+                    Tracks = Math.Max(80, Stx.MaxTrack + 1),
+                    SectorsPerTrack = 9,
+                    SectorSize = 512
+                };
+
+                message = $"Floppy image loaded: [[green]]{path}[[/green]]";
             }
             else
             {
@@ -243,13 +288,17 @@ namespace ASE
                 return false;
             }
 
+            ImagePath = string.IsNullOrEmpty(ZipVolume) ? path : $"{ZipVolume}|{path}";
+
             return true;
         }
 
-        public void Eject() 
+        public void Eject()
         {
             ConfigOptions.RunninConfig.FloppyImagePath = "";
-            Data = null; 
+            ImagePath = "";
+            Data = null;
+            Stx = null;
         }
 
     }

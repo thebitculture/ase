@@ -2,6 +2,8 @@
  * 
  * Atari STE BLiTTER (BLock Image Transfer) emulation.
  * 
+ * Some parts inspired in Hatari emulator created by Thomas Huth and others.
+ * 
  * The BLiTTER provides hardware-accelerated block memory transfers with
  * halftone patterns, 16 logical operations, barrel-shifting (skew), and
  * configurable endmasks. Registers are mapped at $FF8A00-$FF8A3D.
@@ -96,6 +98,66 @@ namespace ASE
             fxsr = false;
             srcBuffer = 0;
             xCountReset = 0;
+        }
+
+        // Snapshot
+
+        public static void SaveState(Snapshot.Writer w)
+        {
+            for (int i = 0; i < 16; i++)
+                w.U16(halftone[i]);
+
+            w.I16(srcXInc);
+            w.I16(srcYInc);
+            w.U32(srcAddr);
+            w.U16(endmask1);
+            w.U16(endmask2);
+            w.U16(endmask3);
+            w.I16(dstXInc);
+            w.I16(dstYInc);
+            w.U32(dstAddr);
+            w.U16(xCount);
+            w.U16(yCount);
+            w.U8(hop);
+            w.U8(op);
+            w.U8(lineNumber);
+            w.Bool(smudge);
+            w.Bool(hog);
+            w.Bool(busy);
+            w.U8(skew);
+            w.Bool(nfsr);
+            w.Bool(fxsr);
+            w.U32(srcBuffer);
+            w.U32(xCountReset);
+        }
+
+        public static void LoadState(Snapshot.Reader r)
+        {
+            for (int i = 0; i < 16; i++)
+                halftone[i] = r.U16();
+
+            srcXInc = r.I16();
+            srcYInc = r.I16();
+            srcAddr = r.U32();
+            endmask1 = r.U16();
+            endmask2 = r.U16();
+            endmask3 = r.U16();
+            dstXInc = r.I16();
+            dstYInc = r.I16();
+            dstAddr = r.U32();
+            xCount = r.U16();
+            yCount = r.U16();
+            hop = r.U8();
+            op = r.U8();
+            lineNumber = r.U8();
+            smudge = r.Bool();
+            hog = r.Bool();
+            busy = r.Bool();
+            skew = r.U8();
+            nfsr = r.Bool();
+            fxsr = r.Bool();
+            srcBuffer = r.U32();
+            xCountReset = r.U32();
         }
 
         /// <summary>
@@ -271,7 +333,7 @@ namespace ASE
             fxsr = (v & 0x80) != 0;
         }
 
-        // --- LOP need_src / need_dst tables (per Hatari) ---
+        // --- LOP need_src / need_dst tables ---
         // Indexed by op (0-15): whether the LOP formula uses source or destination
         static readonly bool[] LopNeedSrc = [
             false, true, true, true, true, false, true, true,
@@ -340,7 +402,7 @@ namespace ASE
                 if (isFirst)
                     lineFxsr = fxsr;
 
-                // Determine if source is needed (per Hatari's need_src logic)
+                // Determine if source is needed
                 bool needSrc = LopNeedSrc[op];
                 // HOP must use source: bit1==1, OR halftone(hop==1) with smudge
                 needSrc = needSrc && ((hop & 2) != 0 || (hop == 1 && smudge));
@@ -412,14 +474,14 @@ namespace ASE
 
                 mem.Write16(dstAddr, finalResult);
 
-                // Special 'weird' case for xCount=1 and NFSR=1 — after write (per Hatari)
+                // Special 'weird' case for xCount=1 and NFSR=1 — after write
                 if (nfsr && xCount == 1)
                 {
                     SourceShift();
                     SourceFetch(lastBusWord);
                 }
 
-                // --- Post-write updates (Blitter_Step continuation) ---
+                // Post-write updates (Blitter_Step continuation)
 
                 // NFSR: activate when xCount reaches 2
                 if (xCount == 2 && nfsr)
@@ -464,7 +526,7 @@ namespace ASE
 
         /// <summary>
         /// Shifts the barrel-shifter buffer. Direction depends on srcXInc sign.
-        /// Separate from fetch (per Hatari's Blitter_SourceShift).
+        /// Separate from fetch.
         /// </summary>
         static void SourceShift()
         {
@@ -476,7 +538,7 @@ namespace ASE
 
         /// <summary>
         /// Inserts a source word into the barrel-shifter buffer.
-        /// Direction depends on srcXInc sign (per Hatari's Blitter_SourceFetch).
+        /// Direction depends on srcXInc sign.
         /// </summary>
         static void SourceFetch(ushort word)
         {

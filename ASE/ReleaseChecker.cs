@@ -49,11 +49,11 @@ namespace ASE
             }
             catch (HttpRequestException httpex)
             {
-                ColoredConsole.WriteLine($"Error querying Github for new version: {httpex.Message}", true);
+                ColoredConsole.WriteLine($"Error querying Github for new version: {httpex.Message}", Config.ConfigOptions.DebugModes.Information);
             }
             catch (Exception ex)
             {
-                ColoredConsole.WriteLine($"Error checking for new version: {ex.Message}", true);
+                ColoredConsole.WriteLine($"Error checking for new version: {ex.Message}", Config.ConfigOptions.DebugModes.Information);
             }
         }
     }

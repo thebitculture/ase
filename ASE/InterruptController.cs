@@ -68,5 +68,26 @@ namespace ASE
                 CPU._moira.IPL = newLevel;
             }
         }
+
+        // Snapshot
+
+        public void SaveState(Snapshot.Writer w)
+        {
+            w.U8((byte)currentIRQLevel);
+            w.Bool(vblPending);
+            w.Bool(hblPending);
+            w.Bool(mfpPending);
+        }
+
+        public void LoadState(Snapshot.Reader r)
+        {
+            currentIRQLevel = r.U8();
+            vblPending = r.Bool();
+            hblPending = r.Bool();
+            mfpPending = r.Bool();
+
+            // Reflejar el nivel restaurado en la línea IPL de la CPU
+            CPU._moira.IPL = (byte)currentIRQLevel;
+        }
     }
 }

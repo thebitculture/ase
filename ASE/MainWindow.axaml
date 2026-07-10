@@ -16,17 +16,22 @@
 				<MenuItem Header="_Change disk from ZIP" Click="OnChangeDiskClick" Name="ItemMenuChangeDisk" IsEnabled="False" />
 				<MenuItem Header="_Ejec disk image / ZIP" Click="OnEjecImageClick" Name="ItemMenuEjecDisk" IsEnabled="False" />
 				<Separator/>
+				<MenuItem Header="_Save snapshot" Click="OnSaveSnapshotClick" InputGesture="F11" />
+				<MenuItem Header="_Restore snapshot" Click="OnRestoreSnapshotClick" />
+				<Separator/>
 				<MenuItem Header="_Quit" Click="OnExitClick"/>
 			</MenuItem>
 
 			<MenuItem Header="_Emulation">
 				<MenuItem Header="_Configuration" Click="OnConfigurationClick" />
+				<MenuItem Header="_Debug" Click="OnDebugClick" />
 				<Separator/>
 				<MenuItem Header="_Reset" Click="OnResetClick" />
 			</MenuItem>
 
 			<MenuItem Header="_Help">
 				<MenuItem Header="_About ASE..." Click="OnAboutClick" />
+				<MenuItem Header="_Manual" Click="OnManualClick" />
 			</MenuItem>
 
 		</Menu>
@@ -37,12 +42,18 @@
 				BorderBrush="#404040"
 				BorderThickness="0,1,0,0">
 			<DockPanel LastChildFill="False">
-				<Image Name="DriveLedImage" 
-				       Source="./Assets/drive_led_off.png" 
-				       DockPanel.Dock="Right" 
+				<Image Name="DriveLedImage"
+				       Source="./Assets/drive_led_off.png"
+				       DockPanel.Dock="Right"
 				       Height="16" />
+
+				<TextBlock Name="TextBlockDriveStatus"
+				           DockPanel.Dock="Right"
+				           VerticalAlignment="Center"
+				           Margin="0,0,10,0"
+				           Foreground="#A0A0A0" />
        
-				<TextBlock Name="TextBlockStatusBar" VerticalAlignment="Center">Press F12 to capture/release input.
+				<TextBlock Name="TextBlockStatusBar" VerticalAlignment="Center">Press F12/middle mouse button to capture/release input.
 					<TextBlock.Styles>
 						<Style Selector="TextBlock.fadeOut">
 							<Style.Animations>

@@ -29,22 +29,29 @@ namespace ASE
         /// <returns></returns>
         static ushort IrqAck(byte level)
         {
+            ushort vec;
             switch (level)
             {
                 case 2: // HBL
                     ASEMain._mfp.irqController.ClearHBL();
+                    vec = (ushort)(24 + level);
                     break;
 
                 case 4: // VBL
                     ASEMain._mfp.irqController.ClearVBL();
+                    vec = (ushort)(24 + level);
                     break;
 
                 case 6: // MFP
-                    ushort vector = ASEMain._mfp.GetInterruptVector();
-                    return vector;
+                    vec = ASEMain._mfp.GetInterruptVector();
+                    break;
+
+                default:
+                    vec = (ushort)(24 + level);
+                    break;
             }
 
-            return (ushort)(24 + level);
+            return vec;
         }
 
         /// <summary>
@@ -53,19 +60,23 @@ namespace ASE
         /// </summary>
         /// <remarks>Call this method before performing any CPU operations to ensure that memory and all
         /// hardware interfaces are properly set up and reset. This method must be invoked once during application
-        /// startup or before reinitializing the emulated system.</remarks>
-        public static void InitCpu()
+        /// startup or before reinitializing the emulated system. The emulation thread must NOT be
+        /// running (see ASEMain.HardReset). Returns false when the TOS ROM is missing or invalid.</remarks>
+        public static bool InitCpu()
         {
             ASEMain._mem = new Memory();
 
             if (ASEMain._mem.ROM == null)
-                return;
+                return false;
 
+            // Wire the CPU bus through the timing wrappers (CpuRead*/CpuWrite*) so the ST memory
+            // wait states are applied once per bus cycle. They fall through to the raw Read*/Write*
+            // accessors, which the rest of the emulator keeps using directly (no wait states).
             _moira = new Moira(
-                ASEMain._mem.Read8,
-                ASEMain._mem.Read16,
-                ASEMain._mem.Write8,
-                ASEMain._mem.Write16,
+                ASEMain._mem.CpuRead8,
+                ASEMain._mem.CpuRead16,
+                ASEMain._mem.CpuWrite8,
+                ASEMain._mem.CpuWrite16,
                 null,
                 IrqAck
                 );
@@ -75,9 +86,12 @@ namespace ASE
             ACIA.Reset();
             WD1772.Reset();
             Blitter.Reset();
+            STEDmaSound.Reset();
+            VideoTiming.Reset();
             ASEMain._ym.Reset();
 
             _moira.Reset();
+            return true;
         }
     }
 }

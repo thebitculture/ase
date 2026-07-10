@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net9.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>disable</Nullable>
     <PublishAot>false</PublishAot>
@@ -14,7 +14,7 @@
 
 	<PropertyGroup>
 		<Major>1</Major>
-		<Minor>6</Minor>
+		<Minor>7</Minor>
 	</PropertyGroup>
 
 	<PropertyGroup>
@@ -53,16 +53,22 @@
 	</ItemGroup>
 
 	<ItemGroup>
-		<PackageReference Include="Avalonia" Version="12.0.0" />
-		<PackageReference Include="Avalonia.Desktop" Version="12.0.0" />
-		<PackageReference Include="Avalonia.Themes.Fluent" Version="12.0.0" />
-		<PackageReference Include="ReactiveUI.Avalonia" Version="11.4.12" />
+		<PackageReference Include="Avalonia" Version="12.0.5" />
+		<PackageReference Include="Avalonia.Desktop" Version="12.0.5" />
+		<PackageReference Include="Avalonia.Themes.Fluent" Version="12.0.5" />
+		<PackageReference Include="ReactiveUI.Avalonia" Version="12.0.3" />
 		<PackageReference Include="sdl2" Version="2.0.5" />
 		<PackageReference Include="Silk.NET.OpenGL" Version="2.23.0" />
-		<PackageReference Include="Svg.Controls.Skia.Avalonia" Version="12.0.0.2" />
+		<PackageReference Include="Svg.Controls.Skia.Avalonia" Version="12.0.0.13" />
 		<PackageReference Include="TinyDialogsNet" Version="2.0.0" />
-		<PackageReference Include="Tmds.DBus.Protocol" Version="0.92.0" />
+		<PackageReference Include="Tmds.DBus.Protocol" Version="0.94.2" />
   </ItemGroup>
+
+	<ItemGroup>
+	  <Compile Update="DebugWindow.axaml.cs">
+	    <DependentUpon>DebugWindow.axaml</DependentUpon>
+	  </Compile>
+	</ItemGroup>
 
 	<ItemGroup>
 		<None Update="native/libSDL2.dylib" Condition="'$(OS)' != 'Windows_NT'">

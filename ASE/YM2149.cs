@@ -3,7 +3,6 @@
  *  
  * Some parts ported from Hatari emulator by Thomas Huth and others.
  * Adapted to work in C# with SDL2 for audio output and ASE project structure.
- * Original source: hatari/src/sound.c
  *  
  * Official repository 👉 https://github.com/thebitculture/ase
  *  
@@ -49,12 +48,16 @@ namespace ASE
         private uint _resamplePos;
         private uint _resampleStep;
 
-        // Precalculated tables (Ported from Hatari sound.c)
+        // Leftover CPU cycles not yet converted to 250 kHz ticks. Sync can now be called with any
+        // cycle count (the main loop interleaves it with the CPU in fine slices that are not
+        // necessarily multiples of 32), so the remainder must be carried over instead of dropped.
+        private int _cycleRemainder;
+
+        // Precalculated tables
         // 16 waveforms * 3 blocks * 32 steps
         private static byte[][] _envWaves;
 
         // ST non-linear volume curve (5 bits -> 16 bits amplitude)
-        // Ported from Hatari's 'ymout1c5bit'
         private static readonly ushort[] YmVolTable =
         {
             0,  369,  438,  521,  619,  735,  874, 1039,
@@ -66,7 +69,7 @@ namespace ASE
         // Volume conversion 4 bits -> 5 bits (ST Hardware)
         private static readonly byte[] Vol4to5 = { 0, 1, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31 };
 
-        // Envelope Shapes obtained from Hatari (YmEnvDef)
+        // Envelope Shapes
         // 0=Down, 1=Up, 2=StayDown, 3=StayUp
         private const int ENV_GODOWN = 0;
         private const int ENV_GOUP = 1;
@@ -160,6 +163,7 @@ namespace ASE
             _envShape = 0;
 
             _resamplePos = 0;
+            _cycleRemainder = 0;
 
             // Clear queue
             while (AudioQueue.TryDequeue(out _)) { }
@@ -167,6 +171,43 @@ namespace ASE
             // Safe default values
             _regs[7] = 0xFF; // Mixer all off
             UpdatePeriods();
+        }
+
+        // ==================== Snapshot ====================
+
+        public void SaveState(Snapshot.Writer w)
+        {
+            w.Bytes(_regs);
+            w.U8((byte)_selectedReg);
+
+            w.I32(_cntA); w.I32(_cntB); w.I32(_cntC);
+            w.I32(_cntNoise); w.I32(_cntEnv);
+
+            w.U8((byte)_outA); w.U8((byte)_outB); w.U8((byte)_outC); w.U8((byte)_outNoise);
+            w.U32(_rng);
+            w.I32(_envShape);
+            w.I32(_envPos);
+            w.I32(_cycleRemainder);
+        }
+
+        public void LoadState(Snapshot.Reader r)
+        {
+            Array.Copy(r.Bytes(16), _regs, 16);
+            _selectedReg = r.U8();
+
+            _cntA = r.I32(); _cntB = r.I32(); _cntC = r.I32();
+            _cntNoise = r.I32(); _cntEnv = r.I32();
+
+            _outA = r.U8(); _outB = r.U8(); _outC = r.U8(); _outNoise = r.U8();
+            _rng = r.U32();
+            _envShape = r.I32();
+            _envPos = r.I32();
+            _cycleRemainder = r.I32();
+
+            // Los periodos se derivan de los registros; el resampler y el filtro DC son
+            // estado del host y arrancan limpios (junto con la cola de audio)
+            UpdatePeriods();
+            while (AudioQueue.TryDequeue(out _)) { }
         }
 
         public void PSGRegisterSelect(byte val)
@@ -224,13 +265,13 @@ namespace ASE
         public void Sync(int cpuCycles)
         {
             // Convert CPU cycles (8MHz) to ticks of our internal clock (250kHz)
-            // 8MHz / 32 = 250kHz
-            // We accumulate the remainder for precision if necessary, but on ST 
-            // the ratio is exact (32 CPU cycles = 1 internal YM cycle)
+            // 8MHz / 32 = 250kHz. The remainder is carried across calls so the conversion stays
+            // exact even when Sync is fed cycle counts that are not multiples of 32.
 
-            int ymUpdates = cpuCycles / 32;
+            _cycleRemainder += cpuCycles;
+            int ymUpdates = _cycleRemainder / 32;
+            _cycleRemainder -= ymUpdates * 32;
 
-            // Simplified "Weighted Average" Resampling Algorithm from Hatari.
             // Generates at 250kHz and accumulate until completing a 44.1kHz sample.
 
             for (int i = 0; i < ymUpdates; i++)
@@ -272,6 +313,10 @@ namespace ASE
         // Simulates a cycle at 250kHz (Exact hardware)
         private void StepInternal250k()
         {
+            // The STE DMA sound engine shares the audio pipeline, advance it at the same pace
+            if (Config.ConfigOptions.RunninConfig.STModel == Config.ConfigOptions.STModels.STE)
+                STEDmaSound.Step250k();
+
             // -> Tones
             // Period 0 is treated as 1.
 
@@ -364,7 +409,17 @@ namespace ASE
             // We use the logarithmic YmVolTable which returns 0..65535
             // Sum and normalize. Theoretical max = 65535 * 3.
 
-            return (YmVolTable[volA] + YmVolTable[volB] + YmVolTable[volC]) / (65535.0f * 3.5f);
+            float ymSample = (YmVolTable[volA] + YmVolTable[volB] + YmVolTable[volC]) / (65535.0f * 3.5f);
+
+            // On the STE, mix in the DMA sound output (the LMC1992 mixing setting
+            // attenuates or mutes the PSG)
+            if (Config.ConfigOptions.RunninConfig.STModel == Config.ConfigOptions.STModels.STE)
+            {
+                ymSample *= STEDmaSound.YmMixGain;
+                ymSample += STEDmaSound.CurrentSample * 0.6f;
+            }
+
+            return ymSample;
         }
 
         private int GetChannelVolume(int ch, int mixer, int toneOut, int envVol5bit)
@@ -415,10 +470,20 @@ namespace ASE
             if (_marshalBuf == null || _marshalBuf.Length < samplesNeeded)
                 _marshalBuf = new float[samplesNeeded];
 
+            // Snapshot the instance: the audio thread can run before TurnOn() has created the
+            // chip, and HardReset() replaces it mid-flight — never read ASEMain._ym twice.
+            var ym = ASEMain._ym;
+            if (ym == null)
+            {
+                Array.Clear(_marshalBuf, 0, samplesNeeded);
+                Marshal.Copy(_marshalBuf, 0, stream, samplesNeeded);
+                return;
+            }
+
             int read = 0;
             while (read < samplesNeeded)
             {
-                if (ASEMain._ym.AudioQueue.TryDequeue(out float s))
+                if (ym.AudioQueue.TryDequeue(out float s))
                 {
                     _marshalBuf[read++] = s;
                 }
@@ -426,7 +491,7 @@ namespace ASE
                 {
                     // Underrun: Fill with last value (or silence)
                     // To avoid clicks, repeating the last sample is usually better than abrupt 0
-                    _marshalBuf[read++] = ASEMain._ym._lastOut;
+                    _marshalBuf[read++] = ym._lastOut;
                 }
             }
 

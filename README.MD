@@ -3,7 +3,9 @@
 
 ![Logo.](Images/logo.png "Logo.")
 
-**Atari System Emulator** or **ASE** is an **Atari ST** emulator that, for the moment, emulates the F/FM versions with, or without Blitter. It is written in C# and utilizes the great **Motorola 68000 Moira** emulator created by **Dr. Dirk Hoffmann**.
+**Atari System Emulator** or **ASE** is an **Atari ST** emulator that emulates the **ST F/FM**, the **Mega ST** and the **STE**. It is written in C# and utilizes the great **Motorola 68000 Moira** emulator created by **Dr. Dirk Hoffmann**.
+
+📖 **New to ASE? Read the [User Manual](https://github.com/thebitculture/ase/wiki).**
 
 This emulator has been partly ported from an old emulator that I started writing in C and assembly language in the late 90s, although in this released version, there is a bit of everything. Most of it has been rewritten, and other parts have been ported from **Hatari**, one of the best **Atari ST** emulators currently available.
 
@@ -20,7 +22,9 @@ Check out my channel, we won't only talk about emulators there, but we'll also l
 
 At the moment, the emulator is not compatible with some games and programs, and some of them will _blow up_ at some point, as the emulator is in a very early stage of development. I hope to add new features and improve compatibility over time.
 
-Whether some games work depends largely on how they were cracked/unprotected; sometimes it might work simply by using another floppy image with a different crack. Currently, **ASE** supports disk images in **.ST** and **.MSA** formats, as well as these compressed in **ZIP** format. A **ZIP** file can contain more than one disk image, which is ideal for games that require multiple disks, as they can be quickly swapped from the emulator’s menu.
+Whether some games work depends largely on how they were cracked/unprotected; sometimes it might work simply by using another floppy image with a different crack. **ASE** handles disk images in **.ST**, **.MSA** and **.STX** (Pasti) format, also inside **.ZIP** archives — STX images preserve the original copy protection, so many original, protected disks work too.
+
+To **load** a disk image, use **File ▸ Open disk image** (or just drag & drop the file onto the window), and to capture the keyboard and mouse, use **F12** or the **middle mouse button**. When you select a disk image, the emulator will ask if you want to reset the **Atari ST**.
 
 The **ST** **Help** key is mapped to the **period/dot** key on the numeric keypad.
 
@@ -36,7 +40,7 @@ The **ST** **Help** key is mapped to the **period/dot** key on the numeric keypa
 
 ## Minimum Requirements
 
-It runs on **Windows**, **Mac**, and should also work on **Linux**, although I haven't tested it. **ASE** will work with any **TOS** version up to 1.04.
+It runs on **Windows**, **Mac**, and should also work on **Linux**, although I haven't tested it. **ASE** will work with any **TOS** version from 1.00 to 1.04 on the ST/Mega models, and from 1.06 to 2.06 on the STE.
 
 ## Downloads
 

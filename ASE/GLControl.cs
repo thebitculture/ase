@@ -36,6 +36,8 @@ namespace ASE
             uniform float uBloom;
             uniform float uMask;
             uniform float uNoise;
+            uniform vec2 uTexMin;
+            uniform vec2 uTexMax;
 
             float hash12(vec2 p) {
                 vec3 p3  = fract(vec3(p.xyx) * 0.1031);
@@ -66,6 +68,10 @@ namespace ASE
                     smoothstep(0.0, feather, 1.0 - uv.x) *
                     smoothstep(0.0, feather, 1.0 - uv.y);
                 float screenMask = inside * edge;
+
+                // Optional border crop: when borders are hidden, remap the screen UVs to the
+                // 320x200 display sub-rectangle of the texture (identity when borders are shown).
+                uv = mix(uTexMin, uTexMax, uv);
 
                 float dist = sqrt(r2);
                 vec2 dir = normalize(p + vec2(1e-4));
@@ -145,6 +151,8 @@ namespace ASE
             uniform float uBloom;
             uniform float uMask;
             uniform float uNoise;
+            uniform vec2 uTexMin;
+            uniform vec2 uTexMax;
 
             float hash12(vec2 p) {
                 vec3 p3  = fract(vec3(p.xyx) * 0.1031);
@@ -175,6 +183,10 @@ namespace ASE
                     smoothstep(0.0, feather, 1.0 - uv.x) *
                     smoothstep(0.0, feather, 1.0 - uv.y);
                 float screenMask = inside * edge;
+
+                // Optional border crop: when borders are hidden, remap the screen UVs to the
+                // 320x200 display sub-rectangle of the texture (identity when borders are shown).
+                uv = mix(uTexMin, uTexMax, uv);
 
                 float dist = sqrt(r2);
                 vec2 dir = normalize(p + vec2(1e-4));
@@ -248,6 +260,8 @@ namespace ASE
         private int _uBloomLoc;
         private int _uMaskLoc;
         private int _uNoiseLoc;
+        private int _uTexMinLoc;
+        private int _uTexMaxLoc;
 
         private readonly Stopwatch _timer = new Stopwatch();
 
@@ -282,6 +296,8 @@ namespace ASE
             _uBloomLoc      = _gl.GetUniformLocation(_program, "uBloom");
             _uMaskLoc       = _gl.GetUniformLocation(_program, "uMask");
             _uNoiseLoc      = _gl.GetUniformLocation(_program, "uNoise");
+            _uTexMinLoc     = _gl.GetUniformLocation(_program, "uTexMin");
+            _uTexMaxLoc     = _gl.GetUniformLocation(_program, "uTexMax");
         }
 
         protected override unsafe void OnOpenGlInit(GlInterface gl)
@@ -293,12 +309,12 @@ namespace ASE
             string glslVer = _gl.GetStringS(GLEnum.ShadingLanguageVersion) ?? "Unknown";
             bool isES = glVersion.Contains("OpenGL ES");
             
-            if (Config.ConfigOptions.RunninConfig.DebugMode)
+            if (Config.ConfigOptions.RunninConfig.DebugMode >= Config.ConfigOptions.DebugModes.Quiet)
             {
-                ColoredConsole.WriteLine($"[GLControl] GL Version  : [[green]]{glVersion}[[/green]]", true);
-                ColoredConsole.WriteLine($"[GLControl] GL Renderer : [[green]]{glRenderer}[[/green]]", true);
-                ColoredConsole.WriteLine($"[GLControl] GLSL Version: [[green]]{glslVer}[[/green]]", true);
-                ColoredConsole.WriteLine($"[GLControl] Context     : [[green]]{(isES ? "OpenGL ES" : "Desktop OpenGL")}[[/green]]", true);
+                ColoredConsole.WriteLine($"[GLControl] GL Version  : [[green]]{glVersion}[[/green]]");
+                ColoredConsole.WriteLine($"[GLControl] GL Renderer : [[green]]{glRenderer}[[/green]]");
+                ColoredConsole.WriteLine($"[GLControl] GLSL Version: [[green]]{glslVer}[[/green]]");
+                ColoredConsole.WriteLine($"[GLControl] Context     : [[green]]{(isES ? "OpenGL ES" : "Desktop OpenGL")}[[/green]]");
             }
 
             string vertSrc = isES ? VertexShaderES   : VertexShaderDesktop;
@@ -325,13 +341,13 @@ namespace ASE
             _gl.GetProgram(_program, GLEnum.LinkStatus, out int linkStatus);
             if (linkStatus == 0)
             {
-                ColoredConsole.WriteLine($"[GLControl] ERROR link: [[red]]{_gl.GetProgramInfoLog(_program)}[[/red]]", true);
+                ColoredConsole.WriteLine($"[GLControl] ERROR link: [[red]]{_gl.GetProgramInfoLog(_program)}[[/red]]", Config.ConfigOptions.DebugModes.Quiet);
                 _programValid = false;
             }
             else
             {
                 _programValid = vsOk && fsOk;
-                ColoredConsole.WriteLine($"[GLControl] [[green]]GL linked ok.[[/green]]", true);
+                ColoredConsole.WriteLine($"[GLControl] [[green]]GL linked ok.[[/green]]", Config.ConfigOptions.DebugModes.Quiet);
             }
 
             _gl.DeleteShader(vs);
@@ -369,16 +385,16 @@ namespace ASE
                     _gl.EnableVertexAttribArray(1);
 
                     _gl.BindVertexArray(0);
-                    ColoredConsole.WriteLine($"[GLControl] VAO ok id=[[yellow]]{_vao}[[/yellow]]", true);
+                    ColoredConsole.WriteLine($"[GLControl] VAO ok id=[[yellow]]{_vao}[[/yellow]]", Config.ConfigOptions.DebugModes.Quiet);
                 }
                 else
                 {
-                    ColoredConsole.WriteLine("[GLControl] GenVertexArray = [[yellow]]0[[/yellow]]", true);
+                    ColoredConsole.WriteLine("[GLControl] GenVertexArray = [[yellow]]0[[/yellow]]", Config.ConfigOptions.DebugModes.Quiet);
                 }
             }
             catch (Exception ex)
             {
-                ColoredConsole.WriteLine($"[GLControl] VAO not available -> [[red]]{ex.Message}[[/red]]", true);
+                ColoredConsole.WriteLine($"[GLControl] VAO not available -> [[red]]{ex.Message}[[/red]]", Config.ConfigOptions.DebugModes.Quiet);
                 _hasVao = false;
                 _vao = 0;
             }
@@ -400,6 +416,9 @@ namespace ASE
 
             if (_uTextureLoc >= 0)    _gl.Uniform1(_uTextureLoc, 0);
             if (_uSourceSizeLoc >= 0) _gl.Uniform2(_uSourceSizeLoc, (float)SrcW, (float)SrcH);
+            // Identity crop by default; updated each frame from ShowBorders.
+            if (_uTexMinLoc >= 0) _gl.Uniform2(_uTexMinLoc, 0f, 0f);
+            if (_uTexMaxLoc >= 0) _gl.Uniform2(_uTexMaxLoc, 1f, 1f);
 
             _timer.Restart();
         }
@@ -411,7 +430,7 @@ namespace ASE
             // Log on first frame
             if (_firstRender)
             {
-                ColoredConsole.WriteLine($"[GLControl] fb=[[yellow]]{fb}[[/yellow]], hasVao=[[yellow]]{_hasVao}[[/yellow]]", true);
+                ColoredConsole.WriteLine($"[GLControl] fb=[[yellow]]{fb}[[/yellow]], hasVao=[[yellow]]{_hasVao}[[/yellow]]", Config.ConfigOptions.DebugModes.Quiet);
                 _firstRender = false;
             }
 
@@ -468,6 +487,19 @@ namespace ASE
             if (_uMaskLoc      >= 0) _gl.Uniform1(_uMaskLoc,      Config.ConfigOptions.RunninConfig.Mask);
             if (_uNoiseLoc     >= 0) _gl.Uniform1(_uNoiseLoc,     Config.ConfigOptions.RunninConfig.Noise);
 
+            // Border crop: identity (full texture) when borders are shown, otherwise the 320x200
+            // display sub-rectangle so the picture fills the window as before.
+            if (_uTexMinLoc >= 0 || _uTexMaxLoc >= 0)
+            {
+                bool showBorders = Config.ConfigOptions.RunninConfig.ShowBorders;
+                float xMin = showBorders ? 0f : (float)VideoTiming.DISPLAY_ORIGIN_X / SrcW;
+                float yMin = showBorders ? 0f : (float)VideoTiming.DISPLAY_ORIGIN_Y / SrcH;
+                float xMax = showBorders ? 1f : (float)(VideoTiming.DISPLAY_ORIGIN_X + VideoTiming.DISPLAY_TEX_WIDTH) / SrcW;
+                float yMax = showBorders ? 1f : (float)(VideoTiming.DISPLAY_ORIGIN_Y + VideoTiming.DISPLAY_TEX_HEIGHT) / SrcH;
+                if (_uTexMinLoc >= 0) _gl.Uniform2(_uTexMinLoc, xMin, yMin);
+                if (_uTexMaxLoc >= 0) _gl.Uniform2(_uTexMaxLoc, xMax, yMax);
+            }
+
             // upload to framebuffer
             byte[] pixelData = ObtenerPixelesRGBA();
             fixed (void* pData = pixelData)
@@ -493,7 +525,7 @@ namespace ASE
 
         private byte[] ObtenerPixelesRGBA()
         {
-            System.Buffer.BlockCopy(ASEMain.ScreenBuffer, 0, pixels, 0, pixels.Length);
+            ASEMain.SnapshotScreen(pixels);
             return pixels;
         }
     }

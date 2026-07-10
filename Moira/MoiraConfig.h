@@ -19,7 +19,7 @@
  *
  * Enable to improve accuracy, disable it to enhance performance.
  */
-#define MOIRA_PRECISE_TIMING false
+#define MOIRA_PRECISE_TIMING true
 
 /* Set to true to implement the CPU interface as virtual functions.
  *
