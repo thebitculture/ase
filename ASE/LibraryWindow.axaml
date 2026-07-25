@@ -1,0 +1,282 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:ASE"
+        mc:Ignorable="d"
+        CanResize="False"
+        WindowStartupLocation="CenterScreen"
+        UseLayoutRounding="True"
+        Width="1024" Height="800"
+        x:Class="ASE.LibraryWindow"
+        x:DataType="local:LibraryWindow"
+        KeyDown="OnWindowKeyDown"
+        Title="Library">
+
+        <Window.Styles>
+                <!-- The tile Border draws hover/selection itself: keep the ListBoxItem chrome invisible -->
+                <Style Selector="ListBox#GamesList ListBoxItem">
+                        <Setter Property="Padding" Value="0"/>
+                        <Setter Property="Margin" Value="8"/>
+                        <Setter Property="Background" Value="Transparent"/>
+                        <!-- Hover zoom lives on the whole item, not the inner Border: anything
+                             below the item clips its content, which cut off the scaled tile's
+                             rounded corners and highlight ring -->
+                        <Setter Property="ClipToBounds" Value="False"/>
+                        <Setter Property="RenderTransformOrigin" Value="50%,50%"/>
+                        <Setter Property="RenderTransform" Value="scale(1)"/>
+                        <Setter Property="Transitions">
+                                <Transitions>
+                                        <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.12" Easing="CubicEaseOut"/>
+                                </Transitions>
+                        </Setter>
+                </Style>
+                <Style Selector="ListBox#GamesList ListBoxItem:pointerover">
+                        <Setter Property="RenderTransform" Value="scale(1.04)"/>
+                        <!-- Raise the zoomed tile over its neighbours so the glow isn't overdrawn -->
+                        <Setter Property="ZIndex" Value="1"/>
+                </Style>
+                <Style Selector="ListBox#GamesList ListBoxItem /template/ ContentPresenter#PART_ContentPresenter">
+                        <Setter Property="Background" Value="Transparent"/>
+                </Style>
+                <Style Selector="ListBox#GamesList ListBoxItem:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+                        <Setter Property="Background" Value="Transparent"/>
+                </Style>
+                <Style Selector="ListBox#GamesList ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
+                        <Setter Property="Background" Value="Transparent"/>
+                </Style>
+                <Style Selector="ListBox#GamesList ListBoxItem:selected:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+                        <Setter Property="Background" Value="Transparent"/>
+                </Style>
+                <Style Selector="ListBox#GamesList ListBoxItem:selected:focus /template/ ContentPresenter#PART_ContentPresenter">
+                        <Setter Property="Background" Value="Transparent"/>
+                </Style>
+
+                <Style Selector="Border.tile">
+                        <Setter Property="Width" Value="180"/>
+                        <Setter Property="Padding" Value="8"/>
+                        <Setter Property="CornerRadius" Value="10"/>
+                        <Setter Property="BorderThickness" Value="2"/>
+                        <Setter Property="BoxShadow" Value="{DynamicResource TileShadow}"/>
+                        <Setter Property="BorderBrush" Value="Transparent"/>
+                        <Setter Property="Background" Value="{DynamicResource CardBackgroundBrush}"/>
+                        <Setter Property="Transitions">
+                                <Transitions>
+                                        <BrushTransition Property="BorderBrush" Duration="0:0:0.1"/>
+                                </Transitions>
+                        </Setter>
+                </Style>
+                <Style Selector="Border.tile:pointerover">
+                        <Setter Property="BorderBrush" Value="#80EE7326"/>
+                        <Setter Property="BoxShadow" Value="{DynamicResource TileShadowHover}"/>
+                </Style>
+                <!-- Atari Fuji orange ring + glow on the selected game -->
+                <Style Selector="Border.tile.sel">
+                        <Setter Property="BorderBrush" Value="#EE7326"/>
+                        <Setter Property="BoxShadow" Value="{DynamicResource TileShadowSel}"/>
+                </Style>
+
+                <!-- "Details" ribbon: hidden until the tile is hovered, then it fades in
+                     while sliding down from the top edge of the cover (and back out on exit).
+                     Hit-testing is disabled while hidden so it can't swallow tile clicks -->
+                <Style Selector="Border.tile Border.details">
+                        <Setter Property="Opacity" Value="0"/>
+                        <Setter Property="IsHitTestVisible" Value="False"/>
+                        <Setter Property="RenderTransform" Value="translateY(-28px)"/>
+                        <Setter Property="Transitions">
+                                <Transitions>
+                                        <DoubleTransition Property="Opacity" Duration="0:0:0.15"/>
+                                        <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.15" Easing="CubicEaseOut"/>
+                                </Transitions>
+                        </Setter>
+                </Style>
+                <Style Selector="Border.tile:pointerover Border.details">
+                        <Setter Property="Opacity" Value="1"/>
+                        <Setter Property="IsHitTestVisible" Value="True"/>
+                        <Setter Property="RenderTransform" Value="translateY(0px)"/>
+                </Style>
+                <Style Selector="Button.detailbtn">
+                        <Setter Property="Effect" Value="drop-shadow(0 2 5 #C0000000)" />
+                </Style>
+                
+                <!-- Game detail overlay: the backdrop fades while the card slides up into place.
+                     IsVisible is toggled in code around the fade (class "open") -->
+                <Style Selector="Grid#DetailOverlay">
+                        <Setter Property="Opacity" Value="0"/>
+                        <Setter Property="Transitions">
+                                <Transitions>
+                                        <DoubleTransition Property="Opacity" Duration="0:0:0.18"/>
+                                </Transitions>
+                        </Setter>
+                </Style>
+                <Style Selector="Grid#DetailOverlay.open">
+                        <Setter Property="Opacity" Value="1"/>
+                </Style>
+                <Style Selector="Grid#DetailOverlay Border#DetailCard">
+                        <Setter Property="RenderTransform" Value="translateY(24px)"/>
+                        <Setter Property="Transitions">
+                                <Transitions>
+                                        <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.22" Easing="CubicEaseOut"/>
+                                </Transitions>
+                        </Setter>
+                </Style>
+                <Style Selector="Grid#DetailOverlay.open Border#DetailCard">
+                        <Setter Property="RenderTransform" Value="translateY(0px)"/>
+                </Style>
+
+        </Window.Styles>
+
+        <Grid RowDefinitions="Auto,*" Margin="0">
+                <!-- Filter panel -->
+                <Border Grid.Row="0" Padding="0,10"
+                        Background="{DynamicResource LibraryBarBrush}"
+                        BoxShadow="{DynamicResource LibraryBarShadow}" ZIndex="1">
+                        <TextBox x:Name="SearchBox" Width="400" PlaceholderText="🔎 Filter games..." TextChanged="OnSearchChanged"/>
+                </Border>
+                <!-- Library panel -->
+                <Grid Grid.Row="1">
+                        <Border Background="{DynamicResource LibraryBackgroundBrush}" >
+                                <ListBox  x:Name="GamesList"
+                                         ItemsSource="{Binding Games}"
+                                         SelectionMode="Single"
+                                         Background="Transparent"
+                                         Padding="0,10,0,0"
+                                         BorderThickness="0"
+                                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                         Tapped="OnGamesTapped">
+                                        <ListBox.ItemsPanel>
+                                                <ItemsPanelTemplate>
+                                                        <WrapPanel Orientation="Horizontal" HorizontalAlignment="Center"/>
+                                                </ItemsPanelTemplate>
+                                        </ListBox.ItemsPanel>
+
+                                        <ListBox.ItemTemplate>
+                                                <DataTemplate x:DataType="local:LibraryWindow+GameEntry">
+                                                        <Border Classes="tile"
+                                                                Classes.sel="{Binding $parent[ListBoxItem].IsSelected}"
+                                                                ToolTip.Tip="{Binding Details}"
+                                                                PointerEntered="OnTilePointerEntered"
+                                                                PointerExited="OnTilePointerExited"
+                                                                PointerPressed="OnTilePointerPressed">
+                                                                <!-- Right-click (or Ctrl+click on macOS, opened from code) -->
+                                                                <Border.ContextMenu>
+                                                                        <ContextMenu>
+                                                                                <MenuItem Header="Play" InputGesture="Enter" Click="OnContextPlayClick">
+                                                                                        <MenuItem.Icon>
+                                                                                                <Svg Path="avares://ASE/Assets/Icons/play-fill.svg" Width="16" Height="16"/>
+                                                                                        </MenuItem.Icon>
+                                                                                </MenuItem>
+                                                                                <MenuItem Header="Details…" InputGesture="Space" Click="OnContextDetailsClick">
+                                                                                        <MenuItem.Icon>
+                                                                                                <Svg Path="avares://ASE/Assets/Icons/card-text.svg" Width="16" Height="16"/>
+                                                                                        </MenuItem.Icon>
+                                                                                </MenuItem>
+                                                                        </ContextMenu>
+                                                                </Border.ContextMenu>
+                                                                <StackPanel Spacing="8">
+                                                                        <Panel Height="210">
+                                                                                <Border CornerRadius="6" ClipToBounds="True"
+                                                                                        Background="{DynamicResource CardBorderBrush}"
+                                                                                        IsVisible="{Binding !HasCover}">
+                                                                                        <TextBlock Text="💾" FontSize="42"
+                                                                                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                                                                   Opacity="0.4"/>
+                                                                                </Border>
+                                                                                <!-- ClipToBounds so the ribbon slides out from behind the cover's top edge -->
+                                                                                <Grid ClipToBounds="True">
+                                                                                        <Image Source="{Binding Cover}"
+                                                                                               Stretch="Uniform"
+                                                                                               IsVisible="{Binding HasCover}"/>
+                                                                                        <Border Classes="details" Height="28" Background="#EE7326"
+                                                                                                VerticalAlignment="Top" CornerRadius="4,4,0,0"
+                                                                                                BoxShadow="0 10 10 0 #80000000"
+                                                                                                ToolTip.Tip="Also: right-click or Space"
+                                                                                                Cursor="Hand" Tapped="OnDetailsTapped">
+                                                                                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="4">
+                                                                                                        <Svg Path="avares://ASE/Assets/Icons/card-text.svg" Width="16" Height="16" VerticalAlignment="Center"/>
+                                                                                                        <TextBlock VerticalAlignment="Center">Details…</TextBlock>
+                                                                                                </StackPanel>
+                                                                                        </Border>                                                                                                
+                                                                                </Grid>
+                                                                        </Panel>
+                                                                        <TextBlock Text="{Binding Name}"
+                                                                                   TextAlignment="Center"
+                                                                                   TextWrapping="Wrap"
+                                                                                   TextTrimming="CharacterEllipsis"
+                                                                                   MaxLines="2"
+                                                                                   Height="36"
+                                                                                   FontSize="13"/>
+                                                                        <!-- GameMenu compilation -->
+                                                                        <TextBlock Text="{Binding Item.GameMenuGroupRelease}"
+                                                                                   TextAlignment="Center"
+                                                                                   TextTrimming="CharacterEllipsis"
+                                                                                   Height="14"
+                                                                                   Margin="0,-12,0,0"
+                                                                                   FontSize="11"
+                                                                                   Foreground="{DynamicResource AccentTextBrush}" />
+                                                                </StackPanel>
+                                                        </Border>
+                                                </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                </ListBox>
+                        </Border>
+                </Grid>
+                
+                <!-- Shown when the library is empty or the search has no matches -->
+                <TextBlock Grid.Row="1" x:Name="EmptyMessage"
+                           IsVisible="False"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                           Opacity="0.6" FontSize="18"/>
+
+                <!-- Game detail: modal overlay with the title, downloaded synopsis and video preview -->
+                <Grid x:Name="DetailOverlay" Grid.Row="0" Grid.RowSpan="2" ZIndex="100" IsVisible="False">
+                        <!-- Click outside the card closes it -->
+                        <Border Background="#B0000000" Tapped="OnDetailBackdropTapped"/>
+                        <Border x:Name="DetailCard" Width="720" MaxHeight="700"
+                                HorizontalAlignment="Center" VerticalAlignment="Center"
+                                Background="{DynamicResource CardBackgroundBrush}"
+                                CornerRadius="12" ClipToBounds="True"
+                                BoxShadow="{DynamicResource TileShadowHover}">
+                                <Grid RowDefinitions="Auto,Auto,*">
+                                        <!-- Scraped title screen as the card backdrop behind the header
+                                             and video area, fading into the card colour where the video
+                                             ends so the synopsis sits on a solid background -->
+                                        <Panel Grid.Row="0" Grid.RowSpan="2" IsHitTestVisible="False">
+                                                <Image x:Name="DetailBackdrop" Stretch="UniformToFill"/>
+                                                <Border Background="{DynamicResource DetailBackdropFade}"/>
+                                        </Panel>
+                                        <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto" Margin="24,24,24,0">
+                                                <!-- Drop shadow keeps the header readable over bright title screens -->
+                                                <StackPanel Grid.Column="0" Spacing="2" Effect="drop-shadow(0 2 10 #C0000000)">
+                                                        <TextBlock x:Name="DetailTitle" FontSize="30" FontWeight="Bold" TextWrapping="Wrap"/>
+                                                        <TextBlock x:Name="DetailRelease" FontSize="13"
+                                                                   Foreground="{DynamicResource AccentTextBrush}"/>
+                                                </StackPanel>
+                                                <Button Grid.Column="1" Classes="detailbtn" Click="OnDetailPlayClick"
+                                                         CornerRadius="4" FontSize="16" VerticalAlignment="Top" Padding="8,4">
+                                                        <StackPanel Orientation="Horizontal" Spacing="4">
+                                                                <Svg Path="avares://ASE/Assets/Icons/play-fill.svg" Width="16" Height="16" VerticalAlignment="Center"/>
+                                                                <TextBlock VerticalAlignment="Center">Play</TextBlock>
+                                                        </StackPanel>
+                                                </Button>
+                                                <Button Grid.Column="2" Classes="detailbtn" Content="X" Click="OnDetailCloseClick"
+                                                         CornerRadius="4" FontSize="16" VerticalAlignment="Top" Margin="4,0,0,0" Padding="8,4"/>
+                                        </Grid>
+                                        <!-- Video preview; the screenshot/box art shows behind it until the
+                                             video starts, and stays when there is no video or no libvlc -->
+                                        <Border Grid.Row="1" Height="340" Margin="24,16" CornerRadius="8"
+                                                ClipToBounds="True" Background="#80101010">
+                                                <Panel>
+                                                        <Image x:Name="DetailFallback" Stretch="Uniform" Margin="8"/>
+                                                        <local:VlcVideoHost x:Name="DetailVideo" IsVisible="False"/>
+                                                </Panel>
+                                        </Border>
+                                        <ScrollViewer Grid.Row="2" Margin="24,0,24,24">
+                                                <TextBlock x:Name="DetailSynopsis" TextWrapping="Wrap" FontSize="14" Opacity="0.9"/>
+                                        </ScrollViewer>
+                                </Grid>
+                        </Border>
+                </Grid>
+        </Grid>
+
+</Window>

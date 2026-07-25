@@ -30,7 +30,7 @@ namespace ASE
         public static void Write(string text)
         {
             var defaultColor = Console.ForegroundColor;
-            var pattern = @"\[\[(\w+)\]\](.*?)\[\[/\1\]\]";
+            var pattern = @"\[\[(\w+)\]\]([\s\S]*?)\[\[/\1\]\]";
             var lastIndex = 0;
 
             Console.OutputEncoding = System.Text.Encoding.UTF8;
@@ -67,6 +67,31 @@ namespace ASE
             }
 
             Console.ForegroundColor = defaultColor;
+        }
+
+        /// <summary>
+        /// Removes the color markup from the specified text, returning plain text suitable for
+        /// contexts that cannot render colors (e.g. operating-system alerts/message boxes).
+        /// </summary>
+        /// <remarks>Color tags in the format [[ColorName]]Content[[/ColorName]] are replaced by their
+        /// inner content when ColorName is a recognized <see cref="ConsoleColor"/>; unrecognized tags are
+        /// left untouched, matching the behavior of <see cref="Write"/>.</remarks>
+        /// <param name="text">The text that may contain color tags. If null, an empty string is returned.</param>
+        /// <returns>The text without any recognized color markup.</returns>
+        public static string Strip(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+                return text ?? string.Empty;
+
+            var pattern = @"\[\[(\w+)\]\]([\s\S]*?)\[\[/\1\]\]";
+
+            return Regex.Replace(text, pattern, match =>
+            {
+                var colorName = match.Groups[1].Value;
+                return Enum.TryParse(colorName, true, out ConsoleColor _)
+                    ? match.Groups[2].Value
+                    : match.Value;
+            });
         }
 
         /// <summary>

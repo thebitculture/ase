@@ -8,138 +8,139 @@
 		CanResize="False"
 		WindowStartupLocation="CenterScreen"
 		UseLayoutRounding="True"
-		Width="600" Height="470"
+		Width="620" Height="580"
 		>
 
-	<Grid RowDefinitions="Auto,*,Auto" Margin="14">
+	<Grid RowDefinitions="*,Auto" Margin="16,12,16,12">
 
-		<TabControl Grid.Row="1">
+		<TabControl Grid.Row="0">
 			<TabItem>
 				<TabItem.Header>
-					<Grid ColumnDefinitions="Auto,Auto" VerticalAlignment="Center">
-						<Svg Path="avares://ASE/Assets/Icons/gear.svg"
-							 Width="18" Height="18"
-							 Margin="0,4,12,0"
-							 VerticalAlignment="Center"/>
-						<TextBlock Grid.Column="1" Text="Setup" VerticalAlignment="Center"/>
-					</Grid>
-				</TabItem.Header>
-				<StackPanel Orientation="Vertical" Margin="0,10,0,0" Spacing="6" >
-					<Separator Margin="0,10"/>
-					<StackPanel Orientation="Horizontal" Margin="10,0,10,0" Spacing="8">
-						<Label VerticalAlignment="Center">Atari model</Label>
-						<ComboBox MaxDropDownHeight="100" Width="180" SelectedIndex="{Binding STModel, Mode=TwoWay}" SelectionChanged="Model_SelectionChanged" >
-							<ComboBoxItem>Atari STF/FM</ComboBoxItem>
-							<ComboBoxItem>Atari STF/FM + Blitter</ComboBoxItem>
-							<ComboBoxItem>Atari STE</ComboBoxItem>
-						</ComboBox>
-						<Label VerticalAlignment="Center">Memory</Label>
-						<ComboBox MaxDropDownHeight="100" Width="180" SelectedIndex="{Binding RAMConfiguration, Mode=TwoWay}" SelectionChanged="Memory_SelectionChanged">
-							<ComboBoxItem>512KB</ComboBoxItem>
-							<ComboBoxItem>1MB</ComboBoxItem>
-							<ComboBoxItem>2MB</ComboBoxItem>
-							<ComboBoxItem>4MB</ComboBoxItem>
-						</ComboBox>
+					<StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+						<Svg Path="avares://ASE/Assets/Icons/gear.svg" Width="18" Height="18" VerticalAlignment="Center" />
+						<TextBlock Text="Setup" VerticalAlignment="Center"/>
 					</StackPanel>
-					<StackPanel Orientation="Vertical" Margin="10,0,10,20" Spacing="8">
-						<Label>TOS image</Label>
-						<Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
-							<TextBox Grid.Column="0" IsReadOnly="True" Text="{Binding TOSPath}"/>
-							<Button Grid.Column="1" Content="Browse…" Click="OnBrowseTOSImageClick" />
-						</Grid>
-					</StackPanel>
-				</StackPanel>
-		    </TabItem>
-			<TabItem>
-				<TabItem.Header>
-					<Grid ColumnDefinitions="Auto,Auto" VerticalAlignment="Center">
-						<Svg Path="avares://ASE/Assets/Icons/tv.svg"
-							 Width="18" Height="18"
-							 Margin="0,4,12,0"
-							 VerticalAlignment="Center"/>
-						<TextBlock Grid.Column="1"
-								   Text="Video"
-								   VerticalAlignment="Center"/>
-					</Grid>
 				</TabItem.Header>
-				<StackPanel Orientation="Vertical" Margin="0,10,0,0" Spacing="6" >
-					<Separator Margin="0,10"/>
-					<Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto,Auto" Margin="10,0,10,0">
-						
-						<StackPanel Grid.Column="0" Grid.Row="0" Orientation="Vertical" Margin="0,0,10,0">
-							<TextBlock Text="{Binding #SliderCurvature.Value, StringFormat={}Curvature : {0:0.000}}" VerticalAlignment="Center"/>
-							<Slider x:Name="SliderCurvature" Minimum="0" Maximum="0.05" ValueChanged="SliderCurvature_OnValueChanged" />							
+				<StackPanel Orientation="Vertical" Margin="0,14,0,0" Spacing="12">
+					<Border Classes="card">
+						<StackPanel Spacing="10">
+							<TextBlock Classes="section" Text="Machine"/>
+							<Grid ColumnDefinitions="110,*" RowDefinitions="Auto,Auto" RowSpacing="10">
+								<TextBlock Grid.Row="0" Grid.Column="0" VerticalAlignment="Center" Text="Atari model"/>
+								<ComboBox Grid.Row="0" Grid.Column="1" MaxDropDownHeight="140" HorizontalAlignment="Stretch"
+										  SelectedIndex="{Binding STModel, Mode=TwoWay}" SelectionChanged="Model_SelectionChanged">
+									<ComboBoxItem>Atari STF/FM</ComboBoxItem>
+									<ComboBoxItem>Atari STF/FM + Blitter</ComboBoxItem>
+									<ComboBoxItem>Atari STE</ComboBoxItem>
+								</ComboBox>
+								<TextBlock Grid.Row="1" Grid.Column="0" VerticalAlignment="Center" Text="Memory"/>
+								<ComboBox Grid.Row="1" Grid.Column="1" MaxDropDownHeight="180" HorizontalAlignment="Stretch"
+										  SelectedIndex="{Binding RAMConfiguration, Mode=TwoWay}" SelectionChanged="Memory_SelectionChanged">
+									<ComboBoxItem>512KB</ComboBoxItem>
+									<ComboBoxItem>1MB</ComboBoxItem>
+									<ComboBoxItem>2MB</ComboBoxItem>
+									<ComboBoxItem>4MB</ComboBoxItem>
+								</ComboBox>
+							</Grid>
 						</StackPanel>
-						<StackPanel Grid.Column="1" Grid.Row="0" Orientation="Vertical" Margin="10,0,0,0">
-							<TextBlock Text="{Binding #SliderVignette.Value, StringFormat={}Vignette : {0:0.000}}" VerticalAlignment="Center"/>
-							<Slider Minimum="0" Maximum="1.0" x:Name="SliderVignette" ValueChanged="SliderVignette_OnValueChanged" />							
+					</Border>
+					<Border Classes="card">
+						<StackPanel Spacing="10">
+							<TextBlock Classes="section" Text="TOS ROM"/>
+							<Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+								<TextBox Grid.Column="0" x:Name="TextTOSImage" IsReadOnly="True" Text="{Binding TOSPath}"/>
+								<Button Grid.Column="1" Content="Browse…" Click="OnBrowseTOSImageClick" />
+							</Grid>
 						</StackPanel>
-						
-						<StackPanel Grid.Column="0" Grid.Row="1" Orientation="Vertical" Margin="0,0,10,0">
-							<TextBlock Text="{Binding #SliderScanline.Value, StringFormat={}Scanline : {0:0.000}}" VerticalAlignment="Center"/>
-							<Slider Minimum="-5.0" Maximum="5.0" x:Name="SliderScanline" ValueChanged="SliderScanline_OnValueChanged" />							
-						</StackPanel>
-						<StackPanel Grid.Column="1" Grid.Row="1" Orientation="Vertical" Margin="10,0,0,0">
-							<TextBlock Text="{Binding #SliderAberration.Value, StringFormat={}Aberration : {0:0.000}}" VerticalAlignment="Center"/>
-							<Slider Minimum="0.0" Maximum="2.0" x:Name="SliderAberration" ValueChanged="SliderAberration_OnValueChanged" />							
-						</StackPanel>
-						
-						<StackPanel Grid.Column="0" Grid.Row="2" Orientation="Vertical" Margin="0,0,10,0">
-							<TextBlock Text="{Binding #SliderBloom.Value, StringFormat={}Bloom : {0:0.000}}" VerticalAlignment="Center"/>
-							<Slider Minimum="0.0" Maximum="2.0" x:Name="SliderBloom" ValueChanged="SliderBloom_OnValueChanged" />							
-						</StackPanel>
-						<StackPanel Grid.Column="1" Grid.Row="2" Orientation="Vertical" Margin="10,0,0,0">
-							<TextBlock Text="{Binding #SliderMask.Value, StringFormat={}Mask : {0:0.000}}" VerticalAlignment="Center"/>
-							<Slider Minimum="0.0" Maximum="2.0" x:Name="SliderMask" ValueChanged="SliderMask_OnValueChanged" />							
-						</StackPanel>
-						
-						<StackPanel Grid.Column="0" Grid.Row="3" Orientation="Vertical" Margin="0,0,10,0">
-							<TextBlock Text="{Binding #SliderNoise.Value, StringFormat={}Noise : {0:0.000}}" VerticalAlignment="Center"/>
-							<Slider Minimum="0.0" Maximum="1.0" x:Name="SliderNoise" ValueChanged="SliderNoise_OnValueChanged" />							
-						</StackPanel>
-
-						<Button Grid.Column="1" Grid.Row="3" Name="ButtonDefaultGLValues" Click="ButtonDefaultGLValues_OnClick" Content="Set default values" VerticalAlignment="Center" HorizontalAlignment="Right"></Button>
-						
-					</Grid>
-					<Separator Margin="0,10"/>
+					</Border>
 				</StackPanel>
 			</TabItem>
+
 			<TabItem>
 				<TabItem.Header>
-					<Grid ColumnDefinitions="Auto,Auto" VerticalAlignment="Center">
-						<Svg Path="avares://ASE/Assets/Icons/joystick.svg"
-							 Width="18" Height="18"
-							 Margin="0,4,12,0"
-							 VerticalAlignment="Center"/>
-						<TextBlock Grid.Column="1"
-								   Text="Input"
-								   VerticalAlignment="Center"/>
-					</Grid>
-				</TabItem.Header>
-				<StackPanel Orientation="Vertical" Margin="0,10,0,0" Spacing="6" >
-					<Separator Margin="0,10"/>
-					<StackPanel>
-						<TextBlock Text="{Binding #SliderMouseSensitivity.Value, StringFormat={}Mouse sensitivity adjustment : {0:0.0}}" VerticalAlignment="Center"/>
-						<Grid ColumnDefinitions="32,*,32">
-							<Svg Path="avares://ASE/Assets/Icons/mousecursorfast.svg"
-							 Width="24" Height="24" Grid.Column="0"
-							 VerticalAlignment="Center"/>
-							<Slider x:Name="SliderMouseSensitivity" Value="{Binding MouseSensitivity, Mode=TwoWay}" Minimum="0.5" Maximum="5.0" TickFrequency="0.5" IsSnapToTickEnabled="True" Grid.Column="1" />
-							<Svg Path="avares://ASE/Assets/Icons/mousecursorslow.svg"
-							 Width="24" Height="24" Grid.Column="2"
-							 VerticalAlignment="Center"/>
-						</Grid>
+					<StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+						<Svg Path="avares://ASE/Assets/Icons/tv.svg" Width="18" Height="18" VerticalAlignment="Center"/>
+						<TextBlock Text="Video" VerticalAlignment="Center"/>
 					</StackPanel>
-					<Separator />
+				</TabItem.Header>
+				<StackPanel Orientation="Vertical" Margin="0,14,0,0" Spacing="12">
+					<Border Classes="card">
+						<StackPanel Spacing="10">
+							<TextBlock Classes="section" Text="CRT effects"/>
+							<Grid ColumnDefinitions="*,20,*" RowDefinitions="Auto,Auto,Auto" RowSpacing="4">
+
+								<StackPanel Grid.Column="0" Grid.Row="0" Orientation="Vertical">
+									<TextBlock Text="{Binding #SliderCurvature.Value, StringFormat={}Curvature : {0:0.000}}" VerticalAlignment="Center"/>
+									<Slider x:Name="SliderCurvature" Minimum="0" Maximum="0.05" ValueChanged="SliderCurvature_OnValueChanged" />
+								</StackPanel>
+								<StackPanel Grid.Column="2" Grid.Row="0" Orientation="Vertical">
+									<TextBlock Text="{Binding #SliderVignette.Value, StringFormat={}Vignette : {0:0.000}}" VerticalAlignment="Center"/>
+									<Slider Minimum="0" Maximum="1.0" x:Name="SliderVignette" ValueChanged="SliderVignette_OnValueChanged" />
+								</StackPanel>
+
+								<StackPanel Grid.Column="0" Grid.Row="1" Orientation="Vertical">
+									<TextBlock Text="{Binding #SliderScanline.Value, StringFormat={}Scanline : {0:0.000}}" VerticalAlignment="Center"/>
+									<Slider Minimum="-5.0" Maximum="5.0" x:Name="SliderScanline" ValueChanged="SliderScanline_OnValueChanged" />
+								</StackPanel>
+								<StackPanel Grid.Column="2" Grid.Row="1" Orientation="Vertical">
+									<TextBlock Text="{Binding #SliderAberration.Value, StringFormat={}Aberration : {0:0.000}}" VerticalAlignment="Center"/>
+									<Slider Minimum="0.0" Maximum="2.0" x:Name="SliderAberration" ValueChanged="SliderAberration_OnValueChanged" />
+								</StackPanel>
+
+								<StackPanel Grid.Column="0" Grid.Row="2" Orientation="Vertical">
+									<TextBlock Text="{Binding #SliderBloom.Value, StringFormat={}Bloom : {0:0.000}}" VerticalAlignment="Center"/>
+									<Slider Minimum="0.0" Maximum="2.0" x:Name="SliderBloom" ValueChanged="SliderBloom_OnValueChanged" />
+								</StackPanel>
+								<StackPanel Grid.Column="2" Grid.Row="2" Orientation="Vertical">
+									<TextBlock Text="{Binding #SliderMask.Value, StringFormat={}Mask : {0:0.000}}" VerticalAlignment="Center"/>
+									<Slider Minimum="0.0" Maximum="2.0" x:Name="SliderMask" ValueChanged="SliderMask_OnValueChanged" />
+								</StackPanel>
+							</Grid>
+							<Grid ColumnDefinitions="*,20,*">
+								<StackPanel Grid.Column="0" Orientation="Vertical">
+									<TextBlock Text="{Binding #SliderNoise.Value, StringFormat={}Noise : {0:0.000}}" VerticalAlignment="Center"/>
+									<Slider Minimum="0.0" Maximum="1.0" x:Name="SliderNoise" ValueChanged="SliderNoise_OnValueChanged" />
+								</StackPanel>
+								<StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Bottom" HorizontalAlignment="Right">
+									<CheckBox Name="chkShowBorders" IsCheckedChanged="ChkShowBorders_OnIsCheckedChanged">Show borders</CheckBox>
+								</StackPanel>
+							</Grid>
+							<StackPanel Spacing="8" Orientation="Horizontal" Margin="0,4,0,0">
+								<Button Name="ButtonZeroGLValues" Click="ButtonZeroGLValues_OnClick" Content="Disable all effects"/>
+								<Button Name="ButtonDefaultGLValues" Click="ButtonDefaultGLValues_OnClick" Content="Set default values"/>
+							</StackPanel>
+						</StackPanel>
+					</Border>
+				</StackPanel>
+			</TabItem>
+
+			<TabItem>
+				<TabItem.Header>
+					<StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+						<Svg Path="avares://ASE/Assets/Icons/joystick.svg" Width="18" Height="18" VerticalAlignment="Center"/>
+						<TextBlock Text="Input" VerticalAlignment="Center"/>
+					</StackPanel>
+				</TabItem.Header>
+				<StackPanel Orientation="Vertical" Margin="0,14,0,0" Spacing="12">
+					<Border Classes="card">
+						<StackPanel Spacing="6">
+							<TextBlock Text="{Binding #SliderMouseSensitivity.Value, StringFormat={}Mouse sensitivity adjustment : {0:0.0}}" VerticalAlignment="Center"/>
+							<Grid ColumnDefinitions="32,*,32">
+								<Svg Path="avares://ASE/Assets/Icons/mousecursorfast.svg"
+								 Width="24" Height="24" Grid.Column="0"
+								 VerticalAlignment="Center"/>
+								<Slider x:Name="SliderMouseSensitivity" Value="{Binding MouseSensitivity, Mode=TwoWay}" Minimum="0.5" Maximum="5.0" TickFrequency="0.5" IsSnapToTickEnabled="True" Grid.Column="1" />
+								<Svg Path="avares://ASE/Assets/Icons/mousecursorslow.svg"
+								 Width="24" Height="24" Grid.Column="2"
+								 VerticalAlignment="Center"/>
+							</Grid>
+						</StackPanel>
+					</Border>
 					<UniformGrid Columns="2">
-						<Border 
-							BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
-							BorderThickness="1"
-							CornerRadius="12"
-							Margin="4" Padding="8">
-							<StackPanel Spacing="8">
-								<TextBlock HorizontalAlignment="Center">🕹️ Joystick mapped to keys</TextBlock>
-								<Grid ColumnDefinitions="auto,auto,auto" RowDefinitions="auto,auto,auto,auto,auto" ColumnSpacing="10" HorizontalAlignment="Center">
+						<Border Classes="card" Margin="0,0,6,0">
+							<StackPanel Spacing="10">
+								<TextBlock Classes="section" HorizontalAlignment="Center">🕹️ Joystick mapped to keys</TextBlock>
+								<Grid ColumnDefinitions="auto,auto,auto" RowDefinitions="auto,auto,auto,auto,auto" ColumnSpacing="10" RowSpacing="4" HorizontalAlignment="Center">
 									<TextBlock VerticalAlignment="Center" Grid.Column="0" Grid.Row="0">Up</TextBlock>
 									<TextBlock VerticalAlignment="Center" x:Name="TextUp" FontWeight="Bold" Grid.Column="1" Grid.Row="0">8</TextBlock>
 									<Button x:Name="btnRedefineUp" VerticalAlignment="Center" Grid.Column="2" Grid.Row="0" Click="OnRedefine">Redefine</Button>
@@ -162,13 +163,9 @@
 								</Grid>
 							</StackPanel>
 						</Border>
-						<Border 
-							BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
-							BorderThickness="1"
-							CornerRadius="12"
-							Margin="2" Padding="8">
-							<StackPanel Spacing="8">
-								<TextBlock HorizontalAlignment="Center">🎮 Gamepad buttons mapping</TextBlock>
+						<Border Classes="card" Margin="6,0,0,0">
+							<StackPanel Spacing="10">
+								<TextBlock Classes="section" HorizontalAlignment="Center">🎮 Gamepad buttons mapping</TextBlock>
 								<Grid ColumnDefinitions="auto,auto,auto,auto" RowDefinitions="auto,auto,auto,auto" ColumnSpacing="10" RowSpacing="8" HorizontalAlignment="Center">
 									<!-- Column 1 -->
 									<TextBlock VerticalAlignment="Center" Grid.Column="0" Grid.Row="0">Y</TextBlock>
@@ -258,49 +255,47 @@
 					</UniformGrid>
 				</StackPanel>
 			</TabItem>
+
 			<TabItem>
 				<TabItem.Header>
-					<Grid ColumnDefinitions="Auto,Auto" VerticalAlignment="Center">
-						<Svg Path="avares://ASE/Assets/Icons/folder.svg"
-							 Width="18" Height="18"
-							 Margin="0,4,12,0"
-							 VerticalAlignment="Center"/>
-						<TextBlock Grid.Column="1"
-								   Text="Directories"
-								   VerticalAlignment="Center"/>
-					</Grid>
-				</TabItem.Header>
-				<StackPanel Orientation="Vertical" Margin="0,10,0,0" Spacing="6" >
-					<Separator Margin="0,10"/>
-					<StackPanel Orientation="Vertical" Margin="10,0,10,0" Spacing="4">
-						<Label>Screenshots (Shift+F11)</Label>
-						<Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
-							<TextBox Grid.Column="0" Name="TextScreenshotsDir"/>
-							<Button Grid.Column="1" Content="Browse…" Click="OnBrowseScreenshotsDirClick" />
-						</Grid>
-						<Label Margin="0,8,0,0">Snapshots (F11)</Label>
-						<Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
-							<TextBox Grid.Column="0" Name="TextSnapshotsDir"/>
-							<Button Grid.Column="1" Content="Browse…" Click="OnBrowseSnapshotsDirClick" />
-						</Grid>
-						<Label Margin="0,8,0,0">Disk images</Label>
-						<Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
-							<TextBox Grid.Column="0" Name="TextDiskImagesDir"/>
-							<Button Grid.Column="1" Content="Browse…" Click="OnBrowseDiskImagesDirClick" />
-						</Grid>
-						<Label Margin="0,8,0,0">TOS ROMs</Label>
-						<Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
-							<TextBox Grid.Column="0" Name="TextTOSRomsDir"/>
-							<Button Grid.Column="1" Content="Browse…" Click="OnBrowseTOSRomsDirClick" />
-						</Grid>
+					<StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+						<Svg Path="avares://ASE/Assets/Icons/folder.svg" Width="18" Height="18" VerticalAlignment="Center"/>
+						<TextBlock Text="Directories" VerticalAlignment="Center"/>
 					</StackPanel>
+				</TabItem.Header>
+				<StackPanel Orientation="Vertical" Margin="0,14,0,0" Spacing="12">
+					<Border Classes="card">
+						<StackPanel Spacing="6">
+							<TextBlock Classes="section" Text="Default directories"/>
+							<Label>Screenshots (Shift+F11)</Label>
+							<Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+								<TextBox Grid.Column="0" Name="TextScreenshotsDir"/>
+								<Button Grid.Column="1" Content="Browse…" Click="OnBrowseScreenshotsDirClick" />
+							</Grid>
+							<Label Margin="0,8,0,0">Snapshots (F11)</Label>
+							<Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+								<TextBox Grid.Column="0" Name="TextSnapshotsDir"/>
+								<Button Grid.Column="1" Content="Browse…" Click="OnBrowseSnapshotsDirClick" />
+							</Grid>
+							<Label Margin="0,8,0,0">Disk images</Label>
+							<Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+								<TextBox Grid.Column="0" Name="TextDiskImagesDir"/>
+								<Button Grid.Column="1" Content="Browse…" Click="OnBrowseDiskImagesDirClick" />
+							</Grid>
+							<Label Margin="0,8,0,0">TOS ROMs</Label>
+							<Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+								<TextBox Grid.Column="0" Name="TextTOSRomsDir"/>
+								<Button Grid.Column="1" Content="Browse…" Click="OnBrowseTOSRomsDirClick" />
+							</Grid>
+						</StackPanel>
+					</Border>
 				</StackPanel>
 			</TabItem>
 		</TabControl>
 
-		<StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="10" Spacing="8" Grid.Row="2">
-			<Button Content="OK" Width="80" HorizontalContentAlignment="Center" Click="OnOkClick" />
-			<Button Content="Cancel" HorizontalContentAlignment="Center" Click="OnCancelClick" Width="80" />
+		<StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0" Spacing="8" Grid.Row="1">
+			<Button Content="OK" Classes="accent" Width="90" HorizontalContentAlignment="Center" Click="OnOkClick" />
+			<Button Content="Cancel" HorizontalContentAlignment="Center" Click="OnCancelClick" Width="90" />
 		</StackPanel>
 
 	</Grid>

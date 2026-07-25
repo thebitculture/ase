@@ -9,157 +9,195 @@
 		CanResize="False"
 		WindowStartupLocation="CenterScreen"
 		UseLayoutRounding="True"
-		Width="800" Height="570"
+		Width="1000" Height="710"
         >
 
     <Window.Styles>
+        <!-- Breakpoint line. Declared before .marked so the PC highlight wins when both apply. -->
+        <Style Selector="Border.bp">
+            <Setter Property="Background" Value="#8B2E2E" />
+        </Style>
         <Style Selector="Border.marked">
             <Setter Property="Background" Value="#337ACC" />
         </Style>
     </Window.Styles>
 
-    <TabControl Margin="4">
+    <Grid RowDefinitions="*,Auto" Margin="16,12,16,12">
 
-        <TabItem Header="CPU">
-            <Grid
-                RowDefinitions="*,auto"
-                ColumnDefinitions="*,auto">
+        <TabControl Margin="4" Grid.Row="0">
 
-                <Border Grid.Row="0" Grid.Column="0" BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}" Margin="8" Padding="8">
-                    <ListBox x:Name="lstListing" ItemsSource="{Binding DasmListing}" ScrollViewer.HorizontalScrollBarVisibility="Hidden">
-                            <ListBox.Styles>
-                                <Style Selector="ListBoxItem">
-                                    <Setter Property="Padding" Value="0"/>
-                                    <Setter Property="Margin" Value="0"/>
-                                    <Setter Property="MinHeight" Value="0"/>
+            <TabItem>
+                <TabItem.Header>
+					<StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+						<Svg Path="avares://ASE/Assets/Icons/cpu.svg" Width="18" Height="18" VerticalAlignment="Center"/>
+						<TextBlock Text="CPU" VerticalAlignment="Center"/>
+					</StackPanel>
+				</TabItem.Header>
+                <Grid
+                    RowDefinitions="*,Auto"
+                    ColumnDefinitions="*,auto">
+
+                    <Border Grid.Row="0" Grid.Column="0" BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}" Margin="8" Padding="8">
+                        <ListBox x:Name="lstListing" ItemsSource="{Binding DasmListing}" SelectionChanged="OnListingSelectionChanged" ScrollViewer.HorizontalScrollBarVisibility="Hidden">
+                                <ListBox.Styles>
+                                    <Style Selector="ListBoxItem">
+                                        <Setter Property="Padding" Value="0"/>
+                                        <Setter Property="Margin" Value="0"/>
+                                        <Setter Property="MinHeight" Value="0"/>
+                                    </Style>
+                                </ListBox.Styles>
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Classes.bp="{Binding IsBreakpoint}" Classes.marked="{Binding IsPC}" Margin="0" Padding="2">
+                                        <TextBlock  FontFamily="Courier New" FontSize="12" Text="{Binding DasmCodeLine}" />
+                                    </Border>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </Border>
+
+                    <Border Grid.Row="0" Grid.Column="1" Classes="card"
+									    Margin="8" Padding="20">
+
+                        <StackPanel Orientation="Vertical">
+                            <TextBlock Classes="section" Text="Registers"/>
+
+                            <Grid Margin="0,20" ColumnDefinitions="30,auto,20,30,auto"
+                              RowDefinitions="auto,auto,auto,auto,auto,auto,auto,auto,auto,auto,auto"
+                              RowSpacing="10">
+
+                            <Grid.Styles>
+                                <Style Selector="CheckBox">
+                                    <Setter Property="MinWidth" Value="0"/>
+                                    <Setter Property="Padding" Value="2,0,6,0"/>
                                 </Style>
-                            </ListBox.Styles>
-                        <ListBox.ItemTemplate>
-                            <DataTemplate>
-                                <Border Classes.marked="{Binding IsPC}" Margin="0" Padding="2">
-                                    <TextBlock  FontFamily="Courier New" FontSize="12" Text="{Binding DasmCodeLine}" />
-                                </Border>
-                            </DataTemplate>
-                        </ListBox.ItemTemplate>
-                    </ListBox>
-                </Border>
+                            </Grid.Styles>
 
-                <Border Grid.Row="0" Grid.Column="1" BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
-									BorderThickness="1"
-									CornerRadius="12"
-									Margin="8" Padding="8">
+                            <TextBlock Grid.Row="0" Grid.Column="0" VerticalAlignment="Center">PC:</TextBlock>
+                            <TextBox Grid.Row="0" Grid.Column="1" x:Name="txtPC" Tag="PC" LostFocus="OnRegisterLostFocus" KeyDown="OnRegisterKeyDown">$000000</TextBox>
+                            <TextBlock Grid.Row="0" Grid.Column="3" VerticalAlignment="Center">SP:</TextBlock>
+                            <TextBox Grid.Row="0" Grid.Column="4" x:Name="txtSP" Tag="SP" LostFocus="OnRegisterLostFocus" KeyDown="OnRegisterKeyDown">$000000</TextBox>
 
-                    <Grid ColumnDefinitions="30,auto,20,30,auto"
-                          RowDefinitions="auto,auto,auto,auto,auto,auto,auto,auto,auto,auto,auto"
-                          VerticalAlignment="Top" RowSpacing="10">
+                            <TextBlock Grid.Row="1" Grid.Column="0" VerticalAlignment="Center">A0:</TextBlock>
+                            <TextBox Grid.Row="1" Grid.Column="1" x:Name="txtA0" Tag="A0" LostFocus="OnRegisterLostFocus" KeyDown="OnRegisterKeyDown">$000000</TextBox>
+                            <TextBlock Grid.Row="1" Grid.Column="3" VerticalAlignment="Center">D0:</TextBlock>
+                            <TextBox Grid.Row="1" Grid.Column="4" x:Name="txtD0" Tag="D0" LostFocus="OnRegisterLostFocus" KeyDown="OnRegisterKeyDown">$000000</TextBox>
 
-                        <Grid.Styles>
-                            <Style Selector="CheckBox">
-                                <Setter Property="MinWidth" Value="0"/>
-                                <Setter Property="Padding" Value="2,0,6,0"/>
-                            </Style>
-                        </Grid.Styles>
+                            <TextBlock Grid.Row="2" Grid.Column="0" VerticalAlignment="Center">A1:</TextBlock>
+                            <TextBox Grid.Row="2" Grid.Column="1" x:Name="txtA1" Tag="A1" LostFocus="OnRegisterLostFocus" KeyDown="OnRegisterKeyDown">$000000</TextBox>
+                            <TextBlock Grid.Row="2" Grid.Column="3" VerticalAlignment="Center">D1:</TextBlock>
+                            <TextBox Grid.Row="2" Grid.Column="4" x:Name="txtD1" Tag="D1" LostFocus="OnRegisterLostFocus" KeyDown="OnRegisterKeyDown">$000000</TextBox>
 
-                        <TextBlock Grid.Row="0" Grid.Column="0" VerticalAlignment="Center">PC:</TextBlock>
-                        <TextBox Grid.Row="0" Grid.Column="1" x:Name="txtPC" Tag="PC" LostFocus="OnRegisterLostFocus" KeyDown="OnRegisterKeyDown">$000000</TextBox>
-                        <TextBlock Grid.Row="0" Grid.Column="3" VerticalAlignment="Center">SP:</TextBlock>
-                        <TextBox Grid.Row="0" Grid.Column="4" x:Name="txtSP" Tag="SP" LostFocus="OnRegisterLostFocus" KeyDown="OnRegisterKeyDown">$000000</TextBox>
+                            <TextBlock Grid.Row="3" Grid.Column="0" VerticalAlignment="Center">A2:</TextBlock>
+                            <TextBox Grid.Row="3" Grid.Column="1" x:Name="txtA2" Tag="A2" LostFocus="OnRegisterLostFocus" KeyDown="OnRegisterKeyDown">$000000</TextBox>
+                            <TextBlock Grid.Row="3" Grid.Column="3" VerticalAlignment="Center">D2:</TextBlock>
+                            <TextBox Grid.Row="3" Grid.Column="4" x:Name="txtD2" Tag="D2" LostFocus="OnRegisterLostFocus" KeyDown="OnRegisterKeyDown">$000000</TextBox>
 
-                        <TextBlock Grid.Row="1" Grid.Column="0" VerticalAlignment="Center">A0:</TextBlock>
-                        <TextBox Grid.Row="1" Grid.Column="1" x:Name="txtA0" Tag="A0" LostFocus="OnRegisterLostFocus" KeyDown="OnRegisterKeyDown">$000000</TextBox>
-                        <TextBlock Grid.Row="1" Grid.Column="3" VerticalAlignment="Center">D0:</TextBlock>
-                        <TextBox Grid.Row="1" Grid.Column="4" x:Name="txtD0" Tag="D0" LostFocus="OnRegisterLostFocus" KeyDown="OnRegisterKeyDown">$000000</TextBox>
+                            <TextBlock Grid.Row="4" Grid.Column="0" VerticalAlignment="Center">A3:</TextBlock>
+                            <TextBox Grid.Row="4" Grid.Column="1" x:Name="txtA3" Tag="A3" LostFocus="OnRegisterLostFocus" KeyDown="OnRegisterKeyDown">$000000</TextBox>
+                            <TextBlock Grid.Row="4" Grid.Column="3" VerticalAlignment="Center">D3:</TextBlock>
+                            <TextBox Grid.Row="4" Grid.Column="4" x:Name="txtD3" Tag="D3" LostFocus="OnRegisterLostFocus" KeyDown="OnRegisterKeyDown">$000000</TextBox>
 
-                        <TextBlock Grid.Row="2" Grid.Column="0" VerticalAlignment="Center">A1:</TextBlock>
-                        <TextBox Grid.Row="2" Grid.Column="1" x:Name="txtA1" Tag="A1" LostFocus="OnRegisterLostFocus" KeyDown="OnRegisterKeyDown">$000000</TextBox>
-                        <TextBlock Grid.Row="2" Grid.Column="3" VerticalAlignment="Center">D1:</TextBlock>
-                        <TextBox Grid.Row="2" Grid.Column="4" x:Name="txtD1" Tag="D1" LostFocus="OnRegisterLostFocus" KeyDown="OnRegisterKeyDown">$000000</TextBox>
+                            <TextBlock Grid.Row="5" Grid.Column="0" VerticalAlignment="Center">A4:</TextBlock>
+                            <TextBox Grid.Row="5" Grid.Column="1" x:Name="txtA4" Tag="A4" LostFocus="OnRegisterLostFocus" KeyDown="OnRegisterKeyDown">$000000</TextBox>
+                            <TextBlock Grid.Row="5" Grid.Column="3" VerticalAlignment="Center">D4:</TextBlock>
+                            <TextBox Grid.Row="5" Grid.Column="4" x:Name="txtD4" Tag="D4" LostFocus="OnRegisterLostFocus" KeyDown="OnRegisterKeyDown">$000000</TextBox>
 
-                        <TextBlock Grid.Row="3" Grid.Column="0" VerticalAlignment="Center">A2:</TextBlock>
-                        <TextBox Grid.Row="3" Grid.Column="1" x:Name="txtA2" Tag="A2" LostFocus="OnRegisterLostFocus" KeyDown="OnRegisterKeyDown">$000000</TextBox>
-                        <TextBlock Grid.Row="3" Grid.Column="3" VerticalAlignment="Center">D2:</TextBlock>
-                        <TextBox Grid.Row="3" Grid.Column="4" x:Name="txtD2" Tag="D2" LostFocus="OnRegisterLostFocus" KeyDown="OnRegisterKeyDown">$000000</TextBox>
+                            <TextBlock Grid.Row="6" Grid.Column="0" VerticalAlignment="Center">A5:</TextBlock>
+                            <TextBox Grid.Row="6" Grid.Column="1" x:Name="txtA5" Tag="A5" LostFocus="OnRegisterLostFocus" KeyDown="OnRegisterKeyDown">$000000</TextBox>
+                            <TextBlock Grid.Row="6" Grid.Column="3" VerticalAlignment="Center">D5:</TextBlock>
+                            <TextBox Grid.Row="6" Grid.Column="4" x:Name="txtD5" Tag="D5" LostFocus="OnRegisterLostFocus" KeyDown="OnRegisterKeyDown">$000000</TextBox>
 
-                        <TextBlock Grid.Row="4" Grid.Column="0" VerticalAlignment="Center">A3:</TextBlock>
-                        <TextBox Grid.Row="4" Grid.Column="1" x:Name="txtA3" Tag="A3" LostFocus="OnRegisterLostFocus" KeyDown="OnRegisterKeyDown">$000000</TextBox>
-                        <TextBlock Grid.Row="4" Grid.Column="3" VerticalAlignment="Center">D3:</TextBlock>
-                        <TextBox Grid.Row="4" Grid.Column="4" x:Name="txtD3" Tag="D3" LostFocus="OnRegisterLostFocus" KeyDown="OnRegisterKeyDown">$000000</TextBox>
+                            <TextBlock Grid.Row="7" Grid.Column="0" VerticalAlignment="Center">A6:</TextBlock>
+                            <TextBox Grid.Row="7" Grid.Column="1" x:Name="txtA6" Tag="A6" LostFocus="OnRegisterLostFocus" KeyDown="OnRegisterKeyDown">$000000</TextBox>
+                            <TextBlock Grid.Row="7" Grid.Column="3" VerticalAlignment="Center">D6:</TextBlock>
+                            <TextBox Grid.Row="7" Grid.Column="4" x:Name="txtD6" Tag="D6" LostFocus="OnRegisterLostFocus" KeyDown="OnRegisterKeyDown">$000000</TextBox>
 
-                        <TextBlock Grid.Row="5" Grid.Column="0" VerticalAlignment="Center">A4:</TextBlock>
-                        <TextBox Grid.Row="5" Grid.Column="1" x:Name="txtA4" Tag="A4" LostFocus="OnRegisterLostFocus" KeyDown="OnRegisterKeyDown">$000000</TextBox>
-                        <TextBlock Grid.Row="5" Grid.Column="3" VerticalAlignment="Center">D4:</TextBlock>
-                        <TextBox Grid.Row="5" Grid.Column="4" x:Name="txtD4" Tag="D4" LostFocus="OnRegisterLostFocus" KeyDown="OnRegisterKeyDown">$000000</TextBox>
+                            <TextBlock Grid.Row="8" Grid.Column="3" VerticalAlignment="Center">D7:</TextBlock>
+                            <TextBox Grid.Row="8" Grid.Column="4" x:Name="txtD7" Tag="D7" LostFocus="OnRegisterLostFocus" KeyDown="OnRegisterKeyDown">$000000</TextBox>
 
-                        <TextBlock Grid.Row="6" Grid.Column="0" VerticalAlignment="Center">A5:</TextBlock>
-                        <TextBox Grid.Row="6" Grid.Column="1" x:Name="txtA5" Tag="A5" LostFocus="OnRegisterLostFocus" KeyDown="OnRegisterKeyDown">$000000</TextBox>
-                        <TextBlock Grid.Row="6" Grid.Column="3" VerticalAlignment="Center">D5:</TextBlock>
-                        <TextBox Grid.Row="6" Grid.Column="4" x:Name="txtD5" Tag="D5" LostFocus="OnRegisterLostFocus" KeyDown="OnRegisterKeyDown">$000000</TextBox>
+                            <TextBlock Grid.Row="9" Grid.Column="0" VerticalAlignment="Center">SR:</TextBlock>
+                            <StackPanel Grid.Row="9" Grid.Column="1" Grid.ColumnSpan="4" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                <TextBlock x:Name="txtSRValue" FontFamily="Courier New" VerticalAlignment="Center">$0000</TextBlock>
+                                <CheckBox x:Name="chkT"  Click="OnSRFlagClick">T</CheckBox>
+                                <CheckBox x:Name="chkS"  Click="OnSRFlagClick">S</CheckBox>
+                                <CheckBox x:Name="chkI2" Click="OnSRFlagClick">I2</CheckBox>
+                                <CheckBox x:Name="chkI1" Click="OnSRFlagClick">I1</CheckBox>
+                                <CheckBox x:Name="chkI0" Click="OnSRFlagClick">I0</CheckBox>
+                            </StackPanel>
 
-                        <TextBlock Grid.Row="7" Grid.Column="0" VerticalAlignment="Center">A6:</TextBlock>
-                        <TextBox Grid.Row="7" Grid.Column="1" x:Name="txtA6" Tag="A6" LostFocus="OnRegisterLostFocus" KeyDown="OnRegisterKeyDown">$000000</TextBox>
-                        <TextBlock Grid.Row="7" Grid.Column="3" VerticalAlignment="Center">D6:</TextBlock>
-                        <TextBox Grid.Row="7" Grid.Column="4" x:Name="txtD6" Tag="D6" LostFocus="OnRegisterLostFocus" KeyDown="OnRegisterKeyDown">$000000</TextBox>
+                            <StackPanel Grid.Row="10" Grid.Column="1" Grid.ColumnSpan="4" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                <CheckBox x:Name="chkX" Click="OnSRFlagClick">X</CheckBox>
+                                <CheckBox x:Name="chkN" Click="OnSRFlagClick">N</CheckBox>
+                                <CheckBox x:Name="chkZ" Click="OnSRFlagClick">Z</CheckBox>
+                                <CheckBox x:Name="chkV" Click="OnSRFlagClick">V</CheckBox>
+                                <CheckBox x:Name="chkC" Click="OnSRFlagClick">C</CheckBox>
+                            </StackPanel>
+                        </Grid>
 
-                        <TextBlock Grid.Row="8" Grid.Column="3" VerticalAlignment="Center">D7:</TextBlock>
-                        <TextBox Grid.Row="8" Grid.Column="4" x:Name="txtD7" Tag="D7" LostFocus="OnRegisterLostFocus" KeyDown="OnRegisterKeyDown">$000000</TextBox>
-
-                        <TextBlock Grid.Row="9" Grid.Column="0" VerticalAlignment="Center">SR:</TextBlock>
-                        <StackPanel Grid.Row="9" Grid.Column="1" Grid.ColumnSpan="4" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                            <TextBlock x:Name="txtSRValue" FontFamily="Courier New" VerticalAlignment="Center">$0000</TextBlock>
-                            <CheckBox x:Name="chkT"  Click="OnSRFlagClick">T</CheckBox>
-                            <CheckBox x:Name="chkS"  Click="OnSRFlagClick">S</CheckBox>
-                            <CheckBox x:Name="chkI2" Click="OnSRFlagClick">I2</CheckBox>
-                            <CheckBox x:Name="chkI1" Click="OnSRFlagClick">I1</CheckBox>
-                            <CheckBox x:Name="chkI0" Click="OnSRFlagClick">I0</CheckBox>
                         </StackPanel>
 
-                        <StackPanel Grid.Row="10" Grid.Column="1" Grid.ColumnSpan="4" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                            <CheckBox x:Name="chkX" Click="OnSRFlagClick">X</CheckBox>
-                            <CheckBox x:Name="chkN" Click="OnSRFlagClick">N</CheckBox>
-                            <CheckBox x:Name="chkZ" Click="OnSRFlagClick">Z</CheckBox>
-                            <CheckBox x:Name="chkV" Click="OnSRFlagClick">V</CheckBox>
-                            <CheckBox x:Name="chkC" Click="OnSRFlagClick">C</CheckBox>
-                        </StackPanel>
-                    </Grid>
+                    </Border>
 
-                </Border>
+                    <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,0,0,8" Spacing="8">
+                        <Button x:Name="btnStep" Click="OnStepClick">Step (F10)</Button>
+                        <ToggleButton x:Name="tglBreakpoint" Content="Breakpoint" Click="OnBreakpointToggle"
+                                      ToolTip.Tip="Set or clear a breakpoint on the selected instruction"/>
+                        <Button x:Name="btnRunToBp" Click="OnRunToBreakpointClick" IsEnabled="False">Run until breakpoint</Button>
+                        <Button x:Name="btnClearBreakpoint" Click="OnClearBreakpointClick">Clear breakpoints</Button>
+                        
+                        <Border Width="1" Margin="8,0" Background="#666" VerticalAlignment="Stretch" />
+                        
+                        <Button x:Name="btnSaveListing" Click="OnSaveListingClick">Save listing...</Button>
+                        
+                        <Border Width="1" Margin="8,0" Background="#666" VerticalAlignment="Stretch" />
 
-                <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="8,0,8,8" Spacing="8">
-                    <Button x:Name="btnStep" Click="OnStepClick">Step (F10)</Button>
-                    <Button x:Name="btnGotoPC" Click="OnGotoPCClick">Back to PC</Button>
-                    <Border Width="1" Margin="8,0" Background="#666" VerticalAlignment="Stretch" />
-                    <TextBox x:Name="txtGotoAddr" Width="120" PlaceholderText="Hex. address" KeyDown="OnGotoAddrKeyDown"/>
-                    <Button x:Name="btnGoto" Click="OnGotoAddrClick">Go</Button>
-                </StackPanel>
+                        <Button x:Name="btnGotoPC" Click="OnGotoPCClick">Back to PC</Button>
+                        <TextBox x:Name="txtGotoAddr" Width="120" PlaceholderText="Hex. address" KeyDown="OnGotoAddrKeyDown"/>
+                        <Button x:Name="btnGoto" Click="OnGotoAddrClick">Go</Button>
+                    </StackPanel>
 
-            </Grid>
-        </TabItem>
+                </Grid>
+            </TabItem>
 
-        <TabItem Header="Memory">
-            <Grid RowDefinitions="*,auto">
+            <TabItem>
+                <TabItem.Header>
+					<StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+						<Svg Path="avares://ASE/Assets/Icons/memory.svg" Width="18" Height="18" VerticalAlignment="Center"/>
+						<TextBlock Text="Memory" VerticalAlignment="Center"/>
+					</StackPanel>
+				</TabItem.Header>
+                <Grid RowDefinitions="*,auto">
 
-                <Border Grid.Row="0" BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
-                        BorderThickness="1"
-                        CornerRadius="12"
-                        Margin="8" Padding="8">
-                    <local:HexEditor x:Name="hexView"
-                                     ToolTip.Tip="Click a byte and type to edit RAM: hex digits in the hex column, characters in the ASCII column (Tab switches columns; ROM and I/O are read-only)"
-                                     Foreground="{DynamicResource SystemControlForegroundBaseHighBrush}"
-                                     AddressBrush="{DynamicResource SystemControlForegroundBaseMediumBrush}"
-                                     AsciiBrush="{DynamicResource SystemControlForegroundBaseMediumHighBrush}"/>
-                </Border>
+                    <Border Grid.Row="0" BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+                            BorderThickness="1"
+                            CornerRadius="12"
+                            Margin="8" Padding="8">
+                        <local:HexEditor x:Name="hexView"
+                                         ToolTip.Tip="Click a byte and type to edit RAM: hex digits in the hex column, characters in the ASCII column (Tab switches columns; ROM and I/O are read-only)"
+                                         Foreground="{DynamicResource SystemControlForegroundBaseHighBrush}"
+                                         AddressBrush="{DynamicResource SystemControlForegroundBaseMediumBrush}"
+                                         AsciiBrush="{DynamicResource SystemControlForegroundBaseMediumHighBrush}"/>
+                    </Border>
 
-                <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="8,0,8,8" Spacing="8">
-                    <TextBox x:Name="txtMemAddr" Width="120" PlaceholderText="Hex. address" KeyDown="OnMemGotoKeyDown"/>
-                    <Button x:Name="btnMemGoto" Click="OnMemGotoClick">Go</Button>
-                    <Border Width="1" Margin="8,0" Background="#666" VerticalAlignment="Stretch" />
-                    <Button x:Name="btnSnapshot" Click="OnSnapshotClick">Save snapshot...</Button>
-                    <TextBlock x:Name="txtMemStatus" VerticalAlignment="Center" FontFamily="Courier New" FontSize="12"/>
-                </StackPanel>
+                    <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="8,0,8,8" Spacing="8">
+                        <TextBox x:Name="txtMemAddr" Width="120" PlaceholderText="Hex. address" KeyDown="OnMemGotoKeyDown"/>
+                        <Button x:Name="btnMemGoto" Click="OnMemGotoClick">Go</Button>
+                        <Border Width="1" Margin="8,0" Background="#666" VerticalAlignment="Stretch" />
+                        <Button x:Name="btnSnapshot" Click="OnSnapshotClick">Save snapshot...</Button>
+                        <Border Width="1" Margin="8,0" Background="#666" VerticalAlignment="Stretch" />
+                        <TextBlock x:Name="txtMemStatus" VerticalAlignment="Center" FontFamily="Courier New" FontSize="12">Data</TextBlock>
+                    </StackPanel>
 
-            </Grid>
-        </TabItem>
+                </Grid>
+            </TabItem>
 
-    </TabControl>
+        </TabControl>
+
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="10,12,10,10" Grid.Row="1">
+		    <Button Content="Continue" Classes="accent" Width="90" HorizontalContentAlignment="Center" Click="OnContinueClick" />
+	    </StackPanel>
+
+    </Grid>
 
 </Window>

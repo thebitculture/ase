@@ -84,12 +84,15 @@ namespace ASE
 
             public bool ShowBorders { get; set; } = true;   // show the screen borders (overscan) around the 320x200 display
 
+            public bool CheckForUpdates { get; set; } = true;   // query GitHub for a newer release at startup
+
             // Default directories. Screenshots (Shift+F11) and snapshots (F11) default to
             // subfolders next to config.json; an empty value falls back to that default.
             // DiskImagesPath and TOSRomsPath preset the corresponding file dialogs (empty = none).
             public string ScreenshotsPath { get; set; } = Path.Combine(GetAppDefaultConfigsFilePath(), "Screenshots");
             public string SnapshotsPath { get; set; } = Path.Combine(GetAppDefaultConfigsFilePath(), "Snapshots");
             public string DiskImagesPath { get; set; } = "";
+            public string LibraryPath { get; set; } = "";
             public string TOSRomsPath { get; set; } = "";
 
             // The ST MMU shares RAM between the CPU and the video shifter in a 2-cycle round-robin,
@@ -119,7 +122,7 @@ namespace ASE
             public float ChromAb { get; set; } = 0.25f;
             public float Bloom { get; set; } = 0.22f;
             public float Mask { get; set; } = 0.50f;
-            public float Noise { get; set; } = 0.25f;
+            public float Noise { get; set; } = 0.05f;
 
             // Joystick emulation
             public SDL_Scancode KeyJoy1Up { get; set; } = SDL_Scancode.SDL_SCANCODE_KP_8;
@@ -137,6 +140,23 @@ namespace ASE
             public GamepadButtonsMapping GamepadButtonRS { get; set; } = GamepadButtonsMapping.N;
             public GamepadButtonsMapping GamepadButtonLB { get; set; } = GamepadButtonsMapping.T;
             public GamepadButtonsMapping GamepadButtonRB { get; set; } = GamepadButtonsMapping.Space;
+
+            // Screenscraper
+            public string ScreenScraperUser { get; set; }
+            /// <summary>Protected value; use ScreenScraperPasswordRaw to read it.</summary>
+            public string ScreenScraperPassword { get; set; }
+            [JsonIgnore]
+            public string ScreenScraperPasswordRaw
+            {
+                get => StringOfuscator.Unprotect(ScreenScraperPassword) ?? string.Empty;
+                set => ScreenScraperPassword = StringOfuscator.Protect(value);
+            }
+            public bool ScrapeMedia { get; set; } = true;
+
+            /// <summary>Windows only: custom VLC installation directory (containing libvlc.dll)
+            /// used to play game preview videos in the library without bundling libVLC with the
+            /// emulator. Empty = auto-detect the default "Program Files\VideoLAN\VLC" install.</summary>
+            public string VlcInstallPath { get; set; } = "";
 
             // Debug flags
             [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
@@ -289,7 +309,11 @@ namespace ASE
                         if (parts.Length > 1)
                             ConfigOptions.RunninConfig.ScreenshotsPath = parts[1];
                         break;
-
+                    case "--library-dir":
+                        if (parts.Length > 1)
+                            ConfigOptions.RunninConfig.LibraryPath = parts[1];
+                        break;
+                    
                     default:
                         Console.WriteLine("Usage: ASE [options]");
                         Console.WriteLine("Options:");
@@ -301,6 +325,7 @@ namespace ASE
                         Console.WriteLine("  --snapshot=<path>             Restores a machine snapshot (.snap) on startup");
                         Console.WriteLine("  --snapshots-dir=<path>        Directory where F11 saves machine snapshots");
                         Console.WriteLine("  --screenshots-dir=<path>      Directory where Shift+F11 saves PNG screenshots");
+                        Console.WriteLine("  --library-dir=<path>          Directory for the software library");
                         Console.WriteLine("  --mouse-sensitivity=N         Set mouse sensitivity (default: 2)");
                         Console.WriteLine("  --help, -h                    Show this help message");
                         Environment.Exit(0);

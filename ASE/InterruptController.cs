@@ -86,7 +86,7 @@ namespace ASE
             hblPending = r.Bool();
             mfpPending = r.Bool();
 
-            // Reflejar el nivel restaurado en la línea IPL de la CPU
+            // Reflect the restored level on the CPU's IPL line
             CPU._moira.IPL = (byte)currentIRQLevel;
         }
     }

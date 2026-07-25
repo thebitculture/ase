@@ -269,7 +269,7 @@ namespace ASE
                 // latched -- but the IKBD does NOT stop transmitting. On the real 6850 a byte
                 // that arrives while the receive register is still full is simply LOST and the
                 // OVRN flag is set. Modelling this loss is load-bearing: a program that ignores
-                // the ACIA for a while (Rodland's loader polls with $16 interrogations for
+                // the ACIA for a while (Ex. Rodland's loader polls with $16 interrogations for
                 // minutes without reading a single reply) must find FRESH data when it finally
                 // starts reading. Simply pausing the queue instead let thousands of stale reply
                 // bytes pile up, so at the title screen the game was reading joystick states

@@ -204,8 +204,8 @@ namespace ASE
             _envPos = r.I32();
             _cycleRemainder = r.I32();
 
-            // Los periodos se derivan de los registros; el resampler y el filtro DC son
-            // estado del host y arrancan limpios (junto con la cola de audio)
+            // The periods derive from the registers; the resampler and DC filter are
+            // host state and start clean (along with the audio queue)
             UpdatePeriods();
             while (AudioQueue.TryDequeue(out _)) { }
         }

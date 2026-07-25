@@ -16,21 +16,21 @@ using System.Text;
 namespace ASE;
 
 /// <summary>
-/// Monitor de memoria hexadecimal editable. Muestra 16 bytes por fila (dirección, hex y ASCII)
-/// sobre el espacio de direcciones de 24 bits del 68000. El contenido se lee y escribe a través
-/// de los delegados <see cref="Peek"/> y <see cref="Poke"/>, de modo que el control no sabe nada
-/// del bus: el llamante decide qué regiones son visibles/editables.
+/// Editable hexadecimal memory monitor. Shows 16 bytes per row (address, hex and ASCII)
+/// over the 68000's 24-bit address space. Contents are read and written through the
+/// <see cref="Peek"/> and <see cref="Poke"/> delegates, so the control knows nothing
+/// about the bus: the caller decides which regions are visible/editable.
 ///
-/// Navegación: cursores, RePág/AvPág, Inicio/Fin (Ctrl+Inicio/Fin va al principio/final de la
-/// memoria), rueda del ratón y clic sobre un byte (en la zona hex o en la ASCII).
+/// Navigation: arrow keys, PageUp/PageDown, Home/End (Ctrl+Home/End goes to the start/end
+/// of memory), mouse wheel and clicking on a byte (in the hex zone or the ASCII one).
 /// </summary>
 public class HexEditor : Control
 {
-    public const uint AddressMask = 0xFFFFFF;   // espacio de direcciones de 24 bits
+    public const uint AddressMask = 0xFFFFFF;   // 24-bit address space
 
     const int BytesPerRow = 16;
     const int AddrChars = 8;                    // "AAAAAA: "
-    const int AsciiBarCol = AddrChars + BytesPerRow * 3 + 1;    // columna del '|' inicial
+    const int AsciiBarCol = AddrChars + BytesPerRow * 3 + 1;    // column of the leading '|'
     const double PadX = 4;
     const double PadY = 2;
     const double FontSizePx = 13;
@@ -72,21 +72,21 @@ public class HexEditor : Control
         set => SetValue(CursorBrushProperty, value);
     }
 
-    /// <summary>Lectura de un byte de memoria (no debe tener efectos laterales).</summary>
+    /// <summary>Reads a byte of memory (must have no side effects).</summary>
     public Func<uint, byte> Peek { get; set; }
 
-    /// <summary>Escritura de un byte de memoria. Devuelve false si la región no es editable.</summary>
+    /// <summary>Writes a byte of memory. Returns false if the region is not editable.</summary>
     public Func<uint, byte, bool> Poke { get; set; }
 
-    /// <summary>Se dispara cuando el cursor cambia de posición o el byte bajo él se modifica.</summary>
+    /// <summary>Raised when the cursor changes position or the byte under it is modified.</summary>
     public event Action<uint, byte> CursorMoved;
 
     public uint CursorAddress => _cursor;
 
-    uint _top;          // dirección de la primera fila visible (alineada a 16)
+    uint _top;          // address of the first visible row (aligned to 16)
     uint _cursor;
-    bool _lowNibble;    // false = nibble alto, true = nibble bajo
-    bool _asciiZone;    // false = se edita en la zona hex, true = en la columna ASCII
+    bool _lowNibble;    // false = high nibble, true = low nibble
+    bool _asciiZone;    // false = editing in the hex zone, true = in the ASCII column
 
     readonly Typeface _typeface = new Typeface("Courier New");
     double _charW;
@@ -98,9 +98,9 @@ public class HexEditor : Control
         AffectsRender<HexEditor>(ForegroundProperty, AddressBrushProperty, AsciiBrushProperty, CursorBrushProperty);
     }
 
-    // -------------------- API pública --------------------
+    #region Public API
 
-    /// <summary>Salta a una dirección dejando unas filas de contexto por encima.</summary>
+    /// <summary>Jumps to an address leaving a few rows of context above.</summary>
     public void GotoAddress(uint addr)
     {
         addr &= AddressMask;
@@ -113,23 +113,25 @@ public class HexEditor : Control
         SetCursor(addr);
     }
 
-    /// <summary>Redibuja el contenido y reemite la posición del cursor (p.ej. tras un Step de CPU).</summary>
+    /// <summary>Redraws the contents and re-emits the cursor position (e.g. after a CPU Step).</summary>
     public void Refresh()
     {
         InvalidateVisual();
         RaiseCursorMoved();
     }
 
-    // -------------------- Render --------------------
+    #endregion
+
+    #region Render
 
     public override void Render(DrawingContext context)
     {
         EnsureMetrics();
 
-        // Relleno transparente para que todo el área reciba eventos de puntero
+        // Transparent fill so the whole area receives pointer events
         context.FillRectangle(Brushes.Transparent, new Rect(Bounds.Size));
 
-        // Sin delegado (diseñador de Avalonia) se pinta un patrón de ejemplo
+        // Without a delegate (Avalonia designer) a sample pattern is drawn
         var peek = Peek ?? (a => (byte)(a ^ (a >> 8)));
 
         int rows = VisibleRows;
@@ -188,8 +190,8 @@ public class HexEditor : Control
         var hexRect = new Rect(hx, y, _charW * 2, cellH);
         var asciiRect = new Rect(ax, y, _charW, cellH);
 
-        // La celda de la zona activa se pinta opaca; su reflejo en la otra zona, atenuado
-        // (el relleno semitransparente deja ver el texto ya dibujado debajo)
+        // The active zone's cell is drawn opaque; its mirror in the other zone, dimmed
+        // (the semi-transparent fill lets the already-drawn text show through)
         if (_asciiZone)
         {
             using (context.PushOpacity(0.35))
@@ -203,7 +205,7 @@ public class HexEditor : Control
             context.FillRectangle(CursorBrush, hexRect);
             context.DrawText(Format($"{val:X2}", Brushes.White), new Point(hx, y));
 
-            // Subrayado del nibble activo
+            // Underline of the active nibble
             double nx = hx + (_lowNibble ? _charW : 0);
             context.FillRectangle(Brushes.White, new Rect(nx, y + cellH - 2, _charW, 2));
 
@@ -237,7 +239,7 @@ public class HexEditor : Control
     static int HexCol(int i) => AddrChars + i * 3 + (i >= 8 ? 1 : 0);
     static int AsciiCol(int i) => AsciiBarCol + 1 + i;
 
-    // Cursor y scroll
+    // Cursor and scrolling
 
     void SetCursor(uint addr)
     {
@@ -292,7 +294,7 @@ public class HexEditor : Control
             CursorMoved?.Invoke(_cursor, Peek(_cursor));
     }
 
-    // Edición
+    // Editing
 
     void WriteNibble(int digit)
     {
@@ -304,7 +306,7 @@ public class HexEditor : Control
             ? (byte)((cur & 0xF0) | digit)
             : (byte)((digit << 4) | (cur & 0x0F));
 
-        // Región no editable (ROM, E/S, void): se ignora la pulsación
+        // Non-editable region (ROM, I/O, void): the keystroke is ignored
         if (!Poke(_cursor, value))
             return;
 
@@ -322,15 +324,15 @@ public class HexEditor : Control
     }
 
     /// <summary>
-    /// Escribe el código de un carácter tecleado en la zona ASCII y avanza el cursor.
-    /// Devuelve false si el carácter no es representable o la región no es editable.
+    /// Writes the code of a character typed in the ASCII zone and advances the cursor.
+    /// Returns false if the character is not representable or the region is not editable.
     /// </summary>
     bool WriteChar(char c)
     {
         if (Poke == null)
             return false;
 
-        // Sólo caracteres representables en un byte (se excluyen los de control)
+        // Only characters representable in one byte (control characters excluded)
         if (c < 0x20 || c > 0xFF)
             return false;
 
@@ -349,7 +351,7 @@ public class HexEditor : Control
         _ => -1
     };
 
-    // Entrada
+    // Input
 
     protected override void OnKeyDown(KeyEventArgs e)
     {
@@ -382,7 +384,7 @@ public class HexEditor : Control
                 return;
 
             case Key.Tab:
-                // Alterna la zona de edición entre las columnas hex y ASCII
+                // Toggles the editing zone between the hex and ASCII columns
                 _asciiZone = !_asciiZone;
                 _lowNibble = false;
                 InvalidateVisual();
@@ -390,7 +392,7 @@ public class HexEditor : Control
                 return;
         }
 
-        // En la zona ASCII los caracteres llegan por OnTextInput; aquí sólo se editan nibbles hex
+        // In the ASCII zone characters arrive via OnTextInput; only hex nibbles are edited here
         if (!_asciiZone && !ctrl && !e.KeyModifiers.HasFlag(KeyModifiers.Alt))
         {
             int digit = HexDigitFromKey(e.Key);
@@ -434,7 +436,7 @@ public class HexEditor : Control
         bool low = false;
         bool ascii = false;
 
-        // Zona hex: cada byte ocupa 3 columnas (XX + espacio)
+        // Hex zone: each byte takes 3 columns (XX + space)
         for (int i = 0; i < BytesPerRow; i++)
         {
             int c = HexCol(i);
@@ -446,7 +448,7 @@ public class HexEditor : Control
             }
         }
 
-        // Zona ASCII
+        // ASCII zone
         if (byteIdx < 0 && col >= AsciiCol(0) && col < AsciiCol(0) + BytesPerRow)
         {
             byteIdx = col - AsciiCol(0);
@@ -460,7 +462,7 @@ public class HexEditor : Control
         if (addr > AddressMask)
             return;
 
-        // El clic también fija la zona de edición (hex o ASCII)
+        // The click also sets the editing zone (hex or ASCII)
         _asciiZone = ascii;
         SetCursor((uint)addr);
 
@@ -496,4 +498,6 @@ public class HexEditor : Control
         if (_charW > 0)
             ClampTop();
     }
+
+    #endregion
 }

@@ -103,10 +103,10 @@ namespace ASE
             mfpAcc = 0;
             _lastUpdateClock = 0;
             AER = 0x00;
-            GPIP = 0xFF; // Inputs por defecto a pull-up
+            GPIP = 0xFF; // Inputs default to pull-up
             VR = 0x40;   // Vector base 64 ($40)
 
-            // Limpiar registros de interrupción
+            // Clear interrupt registers
             IERA = IERB = 0;
             IPRA = IPRB = 0;
             ISRA = ISRB = 0;
@@ -136,7 +136,7 @@ namespace ASE
             ushort masked = (ushort)((IMRA << 8) | IMRB);
             ushort service = (ushort)((ISRA << 8) | ISRB);
 
-            // Interrupciones candidatas
+            // Candidate interrupts
             ushort active = (ushort)(pending & enabled & masked);
 
             if (active == 0) return false;
@@ -144,7 +144,7 @@ namespace ASE
             int highestActiveBit = GetHighestBitSet(active);
             int highestServiceBit = GetHighestBitSet(service);
 
-            // Solo interrumpimos si la prioridad es mayor que la que se está sirviendo
+            // Only interrupt if the priority is higher than the one currently in service
             if (highestActiveBit > highestServiceBit)
             {
                 return true;
@@ -153,7 +153,7 @@ namespace ASE
             return false;
         }
 
-        // Método auxiliar rápido para obtener el bit más alto
+        // Fast helper to get the highest set bit
         private int GetHighestBitSet(ushort v)
         {
             if (v == 0) return -1;
@@ -172,7 +172,7 @@ namespace ASE
         {
             if (isRegisterB)
             {
-                // Solo si el bit correspondiente en IERB está activo
+                // Only if the corresponding bit in IERB is enabled
                 if ((IERB & interruptBit) != 0)
                 {
                     IPRB |= interruptBit;
@@ -181,7 +181,7 @@ namespace ASE
             }
             else
             {
-                // Solo si el bit correspondiente en IERA está activo
+                // Only if the corresponding bit in IERA is enabled
                 if ((IERA & interruptBit) != 0)
                 {
                     IPRA |= interruptBit;
@@ -198,7 +198,7 @@ namespace ASE
                 irqController.ClearMFP();
         }
 
-        // Llamado por la CPU cuando acepta la interrupción (Ciclo IACK)
+        // Called by the CPU when it acknowledges the interrupt (IACK cycle)
         public ushort GetInterruptVector()
         {
             ushort pending = (ushort)((IPRA << 8) | IPRB);
@@ -209,7 +209,7 @@ namespace ASE
             ushort active = (ushort)(pending & enabled & masked);
             int highestServiceBit = GetHighestBitSet(service);
 
-            // Buscar la ganadora (Mayor que la que está en servicio)
+            // Find the winner (higher than the one currently in service)
             int bit = -1;
             for (int i = 15; i > highestServiceBit; i--)
             {
@@ -479,11 +479,11 @@ namespace ASE
         public void SetGPIOBit(int bit, bool active)
         {
             // GPIP bit logic: 0 = Input active (Low), 1 = Inactive (High) usually?
-            // Pero en emulación simplificada: active=true -> señal activa.
-            // El bit 4 (ACIA) suele ser Active LOW en hardware real.
+            // But in this simplified emulation: active=true -> signal asserted.
+            // Bit 4 (ACIA) is usually active LOW on real hardware.
 
             bool oldValue = (GPIP & (1 << bit)) != 0;
-            bool newValue = active; // Si active es true, ponemos el bit a 1
+            bool newValue = active; // If active is true, set the bit to 1
 
             if (newValue) GPIP |= (byte)(1 << bit);
             else GPIP &= (byte)~(1 << bit);
@@ -512,7 +512,7 @@ namespace ASE
                 // Bit 7 = Monochrome detect / STE DMA sound XSINT (RegA Bit 7)
                 else if (bit == 7) SetInterruptPending(RegA.GPIP7, false);
 
-                // (Se podrían añadir el resto de bits si se emularan)
+                // (The remaining bits could be added if they were emulated)
             }
         }
 

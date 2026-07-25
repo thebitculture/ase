@@ -103,10 +103,11 @@ namespace ASE
         public void Step() => Native.moira_execute(_h);
 
         /// <summary>
-        /// Execute until at least the given number of cycles has elapsed.
+        /// Execute until at least the given number of cycles has elapsed. Stops early when a
+        /// breakpoint is reached (check <see cref="BreakpointWasHit"/> right after the call).
         /// </summary>
         /// <remarks>This method catches all exceptions thrown by the emulator loop since it executes in a different thread.</remarks>
-        public void RunForCycles(long cycles) 
+        public void RunForCycles(long cycles)
         {
             try
             {
@@ -118,8 +119,36 @@ namespace ASE
             }
         }
 
-        /// <summary>Execute until the internal clock reaches the target cycle.</summary>
+        /// <summary>Execute until the internal clock reaches the target cycle. Stops early when a
+        /// breakpoint is reached (check <see cref="BreakpointWasHit"/> right after the call).</summary>
         public void RunUntil(long cycle) => Native.moira_execute_until(_h, cycle);
+
+        // -------------------- Breakpoints --------------------
+        // Managed by Moira's built-in debugger. While at least one breakpoint is set the core
+        // checks the PC after every instruction (CHECK_BP flag); with none set there is no
+        // per-instruction overhead.
+
+        /// <summary>Sets a breakpoint at the given address (idempotent).</summary>
+        public void SetBreakpoint(uint addr) => Native.moira_bp_setAt(_h, addr);
+
+        /// <summary>Removes the breakpoint at the given address, if any.</summary>
+        public void RemoveBreakpoint(uint addr) => Native.moira_bp_removeAt(_h, addr);
+
+        /// <summary>Returns true if a breakpoint is set at the given address.</summary>
+        public bool IsBreakpoint(uint addr) => Native.moira_bp_isSetAt(_h, addr);
+
+        /// <summary>Number of breakpoints currently set.</summary>
+        public long BreakpointCount => Native.moira_bp_count(_h);
+
+        /// <summary>Removes every breakpoint.</summary>
+        public void RemoveAllBreakpoints() => Native.moira_bp_removeAll(_h);
+
+        /// <summary>
+        /// True if the last <see cref="RunForCycles"/>/<see cref="RunUntil"/> call stopped because a
+        /// breakpoint was reached. The PC is left AT the guarded instruction, which has not been
+        /// executed yet; resuming executes it normally (the check only fires on the NEXT arrival).
+        /// </summary>
+        public bool BreakpointWasHit => Native.moira_bp_wasHit(_h);
 
         /// <summary>
         /// Enables or disables supervisor mode for the 68k.
@@ -350,6 +379,28 @@ namespace ASE
             internal static extern void moira_setSupervisorMode(IntPtr h, bool s);
             [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
             internal static extern void moira_triggerBusError(IntPtr h, uint adress, bool iswrite);
+
+            // Breakpoints. The natives return C++ bool (1 byte): without MarshalAs(I1) the
+            // default marshaller would read 4 bytes (Win32 BOOL) and pick up garbage.
+            [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+            internal static extern void moira_bp_setAt(IntPtr h, uint addr);
+
+            [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+            internal static extern void moira_bp_removeAt(IntPtr h, uint addr);
+
+            [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+            [return: MarshalAs(UnmanagedType.I1)]
+            internal static extern bool moira_bp_isSetAt(IntPtr h, uint addr);
+
+            [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+            internal static extern long moira_bp_count(IntPtr h);
+
+            [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+            internal static extern void moira_bp_removeAll(IntPtr h);
+
+            [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+            [return: MarshalAs(UnmanagedType.I1)]
+            internal static extern bool moira_bp_wasHit(IntPtr h);
 
             [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
             internal static extern long moira_getClock(IntPtr h);

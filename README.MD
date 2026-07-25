@@ -16,28 +16,6 @@ Check out my channel, we won't only talk about emulators there, but we'll also l
 👉 https://youtube.com/@thebitculture?si=2s4M5Iu4QbIdq_hn
 
 
-![IK+](Images/ikplus.png "IK+")
-
-## Using the Emulator
-
-At the moment, the emulator is not compatible with some games and programs, and some of them will _blow up_ at some point, as the emulator is in a very early stage of development. I hope to add new features and improve compatibility over time.
-
-Whether some games work depends largely on how they were cracked/unprotected; sometimes it might work simply by using another floppy image with a different crack. **ASE** handles disk images in **.ST**, **.MSA** and **.STX** (Pasti) format, also inside **.ZIP** archives — STX images preserve the original copy protection, so many original, protected disks work too.
-
-To **load** a disk image, use **File ▸ Open disk image** (or just drag & drop the file onto the window), and to capture the keyboard and mouse, use **F12** or the **middle mouse button**. When you select a disk image, the emulator will ask if you want to reset the **Atari ST**.
-
-The **ST** **Help** key is mapped to the **period/dot** key on the numeric keypad.
-
-**ASE** supports gamepads and can emulate the joystick in a fully configurable way, allowing you to assign _"Up"_ to any gamepad button, as well as _"Space"_ or other commonly used keys in compilation game menus from that era. The keys used to emulate the joystick can be configured from the settings window, but by default, the configuration is as follows:
-
-| Joystick | Numeric Keypad |
-| :--- | :---: |
-| Up | 8 |
-| Down | 5 |
-| Right | 6 |
-| Left | 4 |
-| Fire | 0 |
-
 ## Minimum Requirements
 
 It runs on **Windows**, **Mac**, and should also work on **Linux**, although I haven't tested it. **ASE** will work with any **TOS** version from 1.00 to 1.04 on the ST/Mega models, and from 1.06 to 2.06 on the STE.

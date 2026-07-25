@@ -68,7 +68,7 @@ namespace ASE
                 return false;
             }
 
-            // El fichero se carga desde un volumen zip
+            // The file is loaded from a zip volume
             if (path.Contains(".zip|", StringComparison.OrdinalIgnoreCase))
             {
                 string[] FilenameParts = path.Split('|');

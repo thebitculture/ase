@@ -32,11 +32,11 @@ namespace ASE
         static bool dmaError;
         static int nextIdSector = 0;    // rotating sector index for READ ADDRESS
 
-        // Disco activo según la selección de unidad hecha a través del puerto A del YM2149
+        // Active disk according to the drive selection made through the YM2149's port A
         static FloppyImage ActiveDrive => currentDrive == 1 ? ASEMain.driveB : ASEMain.driveA;
 
-        // Posición del cabezal ("A: T05 S09"), capturada al arrancar cada comando y mostrada
-        // en la barra de estado junto al LED mientras la unidad tiene actividad.
+        // Head position ("A: T05 S09"), captured when each command starts and shown
+        // in the status bar next to the LED while the drive has activity.
         static string ActivityText =>
             $"{(currentDrive == 1 ? 'B' : 'A')}: T{headTrack:00} S{sectorRegister:00}";
 
@@ -379,7 +379,7 @@ namespace ASE
             motorStopClock = r.I64();
             stxDmaByteCount = r.I32();
 
-            // Nunca se serializa una operación STX en vuelo (se completa antes de guardar)
+            // An in-flight STX operation is never serialized (it completes before saving)
             stxOp = null;
         }
 
@@ -448,8 +448,8 @@ namespace ASE
             statusRegister |= STATUS_BUSY;
             ClearInterrupt();
 
-            // Capturado aquí (hilo de emulación) para que pista/sector correspondan al comando
-            // que enciende el LED, no al momento en que la UI procese el trabajo encolado
+            // Captured here (emulation thread) so track/sector match the command that
+            // turns on the LED, not the moment the UI processes the queued work
             string activity = ActivityText;
 
             Dispatcher.UIThread.InvokeAsync(() => {
@@ -558,7 +558,7 @@ namespace ASE
                 return;
             }
 
-            // No se reconoce el comando
+            // Unrecognized command
             statusRegister &= unchecked((byte)~STATUS_BUSY);
             PulseInterrupt();
         }

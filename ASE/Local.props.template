@@ -1,0 +1,9 @@
+<Project>
+  <PropertyGroup>
+    <SsDevApp></SsDevApp>
+    <SsDevId></SsDevId>
+    <SsDevPassword></SsDevPassword>
+    <SsDevDebugPassword></SsDevDebugPassword>
+    <CryptoSeed></CryptoSeed>
+  </PropertyGroup>
+</Project>

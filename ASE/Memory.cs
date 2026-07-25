@@ -100,6 +100,7 @@ namespace ASE
                 // so the user can pick a TOS in the Configuration window and reset.
                 string ErrorMessage = $"TOS file [[red]]{ConfigOptions.RunninConfig.TOSPath}[[/red]] not found.";
                 ColoredConsole.WriteLine(ErrorMessage);
+                TinyDialogsNet.TinyDialogs.MessageBox("TOS not found", ColoredConsole.Strip(ErrorMessage), TinyDialogsNet.MessageBoxDialogType.Ok, TinyDialogsNet.MessageBoxIconType.Warning, TinyDialogsNet.MessageBoxButton.Ok);
                 return;
             }
 
@@ -487,7 +488,7 @@ namespace ASE
                     return 0xFF;
 
                 // FDC
-                // Si es un comando de disco, se envía el comando a WD1772.cs desde donde se manejará
+                // Disk commands are forwarded to WD1772.cs, which handles them
                 if (addr >= 0xFF8604 && addr <= 0xFF860D)
                     return WD1772.ReadByte(addr);
 

@@ -97,6 +97,17 @@ extern "C" {
     MOIRA_C_API void moira_setSupervisorMode(moira_handle h, bool s);
     MOIRA_C_API void moira_triggerBusError(moira_handle h, uint32_t faultaddress, bool isWrite);
 
+    // Breakpoints (Moira's built-in debugger). moira_execute_cycles/moira_execute_until
+    // stop early when a breakpoint is reached, leaving the PC AT the guarded instruction
+    // (not yet executed); query moira_bp_wasHit() right after the call to distinguish a
+    // breakpoint stop from a normal cycle-target return.
+    MOIRA_C_API void     moira_bp_setAt(moira_handle h, uint32_t addr);
+    MOIRA_C_API void     moira_bp_removeAt(moira_handle h, uint32_t addr);
+    MOIRA_C_API bool     moira_bp_isSetAt(moira_handle h, uint32_t addr);
+    MOIRA_C_API int64_t  moira_bp_count(moira_handle h);
+    MOIRA_C_API void     moira_bp_removeAll(moira_handle h);
+    MOIRA_C_API bool     moira_bp_wasHit(moira_handle h);
+
     MOIRA_C_API int moira_disassemble(moira_handle h, char* str, uint32_t addr);
     MOIRA_C_API void moira_disassembleSR(moira_handle h, char* str);
 

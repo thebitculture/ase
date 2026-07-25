@@ -177,8 +177,8 @@ namespace ASE
             for (int i = 0; i < 8; i++) w.U32(cpu.D[i]);
             for (int i = 0; i < 8; i++) w.U32(cpu.A[i]);
 
-            // Moira sólo expone el puntero de pila ACTIVO. Para guardar los dos bancos se
-            // conmuta temporalmente el bit S del SR (setSR intercambia USP/SSP) y se restaura.
+            // Moira only exposes the ACTIVE stack pointer. To save both banks, the SR's S bit
+            // is toggled temporarily (setSR swaps USP/SSP) and then restored.
             ushort sr = cpu.SR;
             uint usp, ssp;
 
@@ -205,7 +205,7 @@ namespace ASE
             w.U16(cpu.IRC);
             w.U16(cpu.IRD);
             w.U8(cpu.IPL);
-            w.U8(0);            // reservado
+            w.U8(0);            // reserved
             w.I64(cpu.Clock);
         }
 
@@ -336,7 +336,7 @@ namespace ASE
 
             for (int i = 0; i < 8; i++) d[i] = r.U32();
 
-            // A7 se omite: es el puntero de pila activo y se reconstruye desde USP/SSP + SR
+            // A7 is skipped: it is the active stack pointer and is rebuilt from USP/SSP + SR
             for (int i = 0; i < 8; i++)
             {
                 uint v = r.U32();
@@ -351,10 +351,10 @@ namespace ASE
             ushort irc = r.U16();
             ushort ird = r.U16();
             byte ipl = r.U8();
-            r.U8();             // reservado
+            r.U8();             // reserved
             long clock = r.I64();
 
-            // Cargar los dos bancos de pila conmutando el bit S; el SR final activa el correcto
+            // Load both stack banks by toggling the S bit; the final SR activates the right one
             cpu.SR = 0x2700;
             cpu.SP = ssp;
             cpu.SR = 0x0700;

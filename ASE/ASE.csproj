@@ -1,20 +1,47 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
-  <PropertyGroup>
+	<!-- Absent on clean clones: the app then falls back to user-supplied values. -->
+	<Import Project="Local.props" Condition="Exists('Local.props')" />
+
+	<PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net9.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>disable</Nullable>
+	<LangVersion>latest</LangVersion>
     <PublishAot>false</PublishAot>
     <InvariantGlobalization>true</InvariantGlobalization>
     <Platforms>AnyCPU;x64</Platforms>
     <AllowUnsafeBlocks>True</AllowUnsafeBlocks>
-    <Description>Atari System Emulator</Description>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
+
+	<ItemGroup>
+		<AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+			<_Parameter1>SsDevApp</_Parameter1>
+			<_Parameter2>$(SsDevApp)</_Parameter2>
+		</AssemblyAttribute>
+		<AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+			<_Parameter1>SsDevId</_Parameter1>
+			<_Parameter2>$(SsDevId)</_Parameter2>
+		</AssemblyAttribute>
+		<AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+			<_Parameter1>SsDevPassword</_Parameter1>
+			<_Parameter2>$(SsDevPassword)</_Parameter2>
+		</AssemblyAttribute>
+		<AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+			<_Parameter1>SsDevDebugPassword</_Parameter1>
+			<_Parameter2>$(SsDevDebugPassword)</_Parameter2>
+		</AssemblyAttribute>
+		<AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+			<_Parameter1>CryptoSeed</_Parameter1>
+			<_Parameter2>$(CryptoSeed)</_Parameter2>
+		</AssemblyAttribute>
+	</ItemGroup>
 
 	<PropertyGroup>
 		<Major>1</Major>
-		<Minor>7</Minor>
+		<Minor>8</Minor>
 	</PropertyGroup>
 
 	<PropertyGroup>
@@ -57,11 +84,13 @@
 		<PackageReference Include="Avalonia.Desktop" Version="12.0.5" />
 		<PackageReference Include="Avalonia.Themes.Fluent" Version="12.0.5" />
 		<PackageReference Include="ReactiveUI.Avalonia" Version="12.0.3" />
+		<PackageReference Include="LibVLCSharp" Version="3.10.0" />
 		<PackageReference Include="sdl2" Version="2.0.5" />
 		<PackageReference Include="Silk.NET.OpenGL" Version="2.23.0" />
 		<PackageReference Include="Svg.Controls.Skia.Avalonia" Version="12.0.0.13" />
 		<PackageReference Include="TinyDialogsNet" Version="2.0.0" />
 		<PackageReference Include="Tmds.DBus.Protocol" Version="0.94.2" />
+		<PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.23.1" Condition="'$(OS)' == 'Windows_NT'" />
   </ItemGroup>
 
 	<ItemGroup>
@@ -71,6 +100,9 @@
 	</ItemGroup>
 
 	<ItemGroup>
+		<None Update="GameMenus.json">
+		  <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</None>
 		<None Update="native/libSDL2.dylib" Condition="'$(OS)' != 'Windows_NT'">
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 			<Link>libSDL2.dylib</Link>
@@ -88,4 +120,14 @@
 			<Link>moira.dylib</Link>
 		</None>
 	</ItemGroup>
+
+	<!-- Warn instead of failing: clean clones must still build. -->
+	<Target Name="WarnMissingSsCredentials" BeforeTargets="Build" Condition="'$(SsDevId)' == ''">
+		<Warning Text="ScreenScraper credentials not configured. Copy Local.props.template to Local.props. Scraping will be disabled in this build." />
+	</Target>
+
+	<ItemGroup>
+		<UpToDateCheckInput Include="Local.props" Condition="Exists('Local.props')" />
+	</ItemGroup>
+
 </Project>

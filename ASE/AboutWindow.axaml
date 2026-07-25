@@ -10,40 +10,45 @@
 		CanResize="False"
 		WindowStartupLocation="CenterScreen"
 		UseLayoutRounding="True"
-		Width="500" Height="320">
-  
-    <Grid RowDefinitions="Auto,*,Auto,Auto" ColumnDefinitions="*" Margin="20">
+		Width="500" Height="360">
 
-		<Border Grid.Row="0" Grid.Column="0"
-			BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
-			BorderThickness="1"
-			CornerRadius="12"
-			Padding="8" >
-			<Image Source="./Assets/logo.png" Height="48"></Image>
-		</Border>
+	<Grid RowDefinitions="Auto,*,Auto,Auto" Margin="24,20">
 
-		<Grid ColumnDefinitions="Auto,*" Grid.Row="1" Grid.Column="0" Margin="20">
-			<Image Grid.Column="0" Source="./Assets/retrodude.png" Margin="0,10,0,0" Height="100"></Image>
-			<StackPanel Grid.Column="1" Orientation="Vertical">
-				<TextBlock Name="TextVersion" TextAlignment="Right">You are using version {{version}}</TextBlock>
+		<StackPanel Grid.Row="0" HorizontalAlignment="Center" Spacing="8">
+			<Image Source="./Assets/logo.png" Height="52"/>
+			<TextBlock Name="TextVersion" HorizontalAlignment="Center" Opacity="0.7">You are using version {{version}}</TextBlock>
+		</StackPanel>
 
-				<Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto" Margin="10">
-					<Svg Margin="6,0,6,0" Grid.Column="0" Grid.Row="0" Path="avares://ASE/Assets/Icons/github.svg" Width="18" Height="18"/>
-					<HyperlinkButton Grid.Column="1" Grid.Row="0" Click="OpenLink_Click">https://github.com/thebitculture/ase</HyperlinkButton>
-					<Svg Margin="6,0,6,0" Grid.Column="0" Grid.Row="1" Path="avares://ASE/Assets/Icons/youtube.svg" Width="18" Height="18"/>
-					<HyperlinkButton Grid.Column="1" Grid.Row="1" Click="OpenLink_Click">https://youtube.com/@thebitculture</HyperlinkButton>
-				</Grid>
+		<Grid Grid.Row="1" ColumnDefinitions="Auto,24,*" Margin="0,16,0,0" VerticalAlignment="Center">
+			<Image Grid.Column="0" Source="./Assets/retrodude.png" Height="110"/>
+			<StackPanel Grid.Column="2" VerticalAlignment="Center" Spacing="6">
+				<StackPanel Orientation="Horizontal" Spacing="8">
+					<Svg Path="avares://ASE/Assets/Icons/github.svg" Width="18" Height="18" VerticalAlignment="Center"/>
+					<HyperlinkButton Click="OpenLink_Click" Padding="0" VerticalAlignment="Center">https://github.com/thebitculture/ase</HyperlinkButton>
+				</StackPanel>
+				<StackPanel Orientation="Horizontal" Spacing="8">
+					<Svg Path="avares://ASE/Assets/Icons/youtube.svg" Width="18" Height="18" VerticalAlignment="Center"/>
+					<HyperlinkButton Click="OpenLink_Click" Padding="0" VerticalAlignment="Center">https://youtube.com/@thebitculture</HyperlinkButton>
+				</StackPanel>
 			</StackPanel>
 		</Grid>
 
-		<StackPanel Name="StackNewVersion" IsVisible="false" Tapped="StackNewVersion_Tapped" Cursor="Hand" Grid.Row="2" Grid.Column="0">
-			<TextBlock Name="TextNewVersion" Padding="0,0,0,8" TextAlignment="Center">⭐⭐ New version {{version}} available! ⭐⭐</TextBlock>
+		<StackPanel Grid.Row="2" Name="StackNewVersion" IsVisible="false" Tapped="StackNewVersion_Tapped" Cursor="Hand" Margin="0,12,0,0">
+			<Border Classes="card" Padding="10">
+				<TextBlock Name="TextNewVersion" TextAlignment="Center"
+						   Foreground="{DynamicResource AccentTextBrush}">⭐ New version {{version}} available! ⭐</TextBlock>
+			</Border>
 		</StackPanel>
 
-		<StackPanel Orientation="Vertical" Grid.Row="3" Grid.Column="0">
-			<Separator></Separator>
-			<Button Content="Okay" Margin="0,10,10,0" HorizontalAlignment="Right" HorizontalContentAlignment="Center" Width="80" Name="ButtonOkay" Click="ButtonOkay_Click" />
-		</StackPanel>
-    </Grid>
+		<Grid ColumnDefinitions="*,Auto" Grid.Row="3" Margin="0,16,0,0" VerticalAlignment="Center">
+			<StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+				<ToggleSwitch Name="SwitchCheckForUpdates" OnContent="" OffContent="" VerticalAlignment="Center"/>
+				<TextBlock Text="Check for updates" VerticalAlignment="Center"/>
+			</StackPanel>
+			<Button Grid.Column="1" Classes="accent" Content="Okay" Width="90"
+			         HorizontalContentAlignment="Center"
+			         Name="ButtonOkay" Click="ButtonOkay_Click" />
+		</Grid>
+	</Grid>
 
 </Window>

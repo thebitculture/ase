@@ -1,13 +1,9 @@
-using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Interactivity;
 using SDL2;
-using System.ComponentModel;
-using System.Runtime.CompilerServices;
 using TinyDialogsNet;
 using Avalonia.Input;
-using static SDL2.SDL;
 
 namespace ASE
 {
@@ -16,7 +12,7 @@ namespace ASE
         Config.ConfigOptions configBackup;
         bool ForceReset = false;
 
-        bool _RedefineIsRunning = false;
+        bool _redefineIsRunning = false;
         Button _ButtonRedefineStarted;
         TextBlock _TextBlockJoykey;
 
@@ -37,7 +33,8 @@ namespace ASE
                 Bloom = Config.ConfigOptions.RunninConfig.Bloom,
                 Mask = Config.ConfigOptions.RunninConfig.Mask,
                 Noise = Config.ConfigOptions.RunninConfig.Noise,
-
+                ShowBorders = Config.ConfigOptions.RunninConfig.ShowBorders,
+                
                 MouseSensitivity = Config.ConfigOptions.RunninConfig.MouseSensitivity,
 
                 GamepadButtonX = Config.ConfigOptions.RunninConfig.GamepadButtonX,
@@ -64,12 +61,27 @@ namespace ASE
             RebindGLSliders();
             RebindJoymap();
 
+            chkShowBorders.IsChecked = Config.ConfigOptions.RunninConfig.ShowBorders;
+            
             // Directories tab: edited locally and committed to the config on OK only,
             // so Cancel discards the changes without needing backup fields
             TextScreenshotsDir.Text = Config.ConfigOptions.RunninConfig.ScreenshotsPath;
             TextSnapshotsDir.Text = Config.ConfigOptions.RunninConfig.SnapshotsPath;
             TextDiskImagesDir.Text = Config.ConfigOptions.RunninConfig.DiskImagesPath;
             TextTOSRomsDir.Text = Config.ConfigOptions.RunninConfig.TOSRomsPath;
+        }
+
+        // The emulator parks (and stops receiving host input) while the window is open
+        protected override void OnOpened(EventArgs e)
+        {
+            base.OnOpened(e);
+            ASEMain.EnterUiPause();
+        }
+
+        protected override void OnClosed(EventArgs e)
+        {
+            base.OnClosed(e);
+            ASEMain.ExitUiPause();
         }
 
         private static string GetDisplayKeyName(SDL.SDL_Scancode scancode)
@@ -110,6 +122,7 @@ namespace ASE
                 if (CheckTOSCompatibility(TOSImagePath))
                 {
                     Config.ConfigOptions.RunninConfig.TOSPath = TOSImagePath;
+                    TextTOSImage.Text = TOSImagePath;
                     ForceReset = true;
                 }
             }
@@ -165,14 +178,14 @@ namespace ASE
             _ButtonRedefineStarted.Content = "Redefine";
 
             this.KeyDown -= Redefine_KeyDown;
-            _RedefineIsRunning = false;
+            _redefineIsRunning = false;
 
             RebindJoymap();
         }
 
         public void OnRedefine(object sender, RoutedEventArgs e)
         {
-            if (_RedefineIsRunning)
+            if (_redefineIsRunning)
             {
                 CompleteRedefine();
             }
@@ -202,7 +215,7 @@ namespace ASE
 
                 _TextBlockJoykey.Text = "Press a key...";
 
-                _RedefineIsRunning = true;
+                _redefineIsRunning = true;
                 this.KeyDown += Redefine_KeyDown;
             }
         }
@@ -256,7 +269,8 @@ namespace ASE
             Config.ConfigOptions.RunninConfig.Scanline = configBackup.Scanline;
             Config.ConfigOptions.RunninConfig.ChromAb = configBackup.ChromAb;
             Config.ConfigOptions.RunninConfig.Bloom = configBackup.Bloom;
-
+            Config.ConfigOptions.RunninConfig.ShowBorders = configBackup.ShowBorders;
+            
             Config.ConfigOptions.RunninConfig.MouseSensitivity = configBackup.MouseSensitivity;
 
             Config.ConfigOptions.RunninConfig.GamepadButtonX = configBackup.GamepadButtonX;
@@ -267,7 +281,7 @@ namespace ASE
             Config.ConfigOptions.RunninConfig.GamepadButtonRS = configBackup.GamepadButtonRS;
             Config.ConfigOptions.RunninConfig.GamepadButtonLB = configBackup.GamepadButtonLB;
             Config.ConfigOptions.RunninConfig.GamepadButtonRB = configBackup.GamepadButtonRB;
-
+            
             Close();
         }
 
@@ -296,18 +310,10 @@ namespace ASE
             return true;
         }
 
-        public void OnBrowseScreenshotsDirClick(object sender, RoutedEventArgs e) => BrowseDirectory(TextScreenshotsDir, "Select screenshots directory");
-        public void OnBrowseSnapshotsDirClick(object sender, RoutedEventArgs e) => BrowseDirectory(TextSnapshotsDir, "Select snapshots directory");
-        public void OnBrowseDiskImagesDirClick(object sender, RoutedEventArgs e) => BrowseDirectory(TextDiskImagesDir, "Select disk images directory");
-        public void OnBrowseTOSRomsDirClick(object sender, RoutedEventArgs e) => BrowseDirectory(TextTOSRomsDir, "Select TOS ROMs directory");
-
-        void BrowseDirectory(TextBox target, string title)
-        {
-            var (canceled, path) = TinyDialogs.SelectFolderDialog(title, Config.DialogStartFolder(target.Text));
-
-            if (!canceled && !string.IsNullOrWhiteSpace(path))
-                target.Text = path;
-        }
+        public void OnBrowseScreenshotsDirClick(object sender, RoutedEventArgs e) => FileUtils.BrowseDirectory(TextScreenshotsDir, "Select screenshots directory");
+        public void OnBrowseSnapshotsDirClick(object sender, RoutedEventArgs e) => FileUtils.BrowseDirectory(TextSnapshotsDir, "Select snapshots directory");
+        public void OnBrowseDiskImagesDirClick(object sender, RoutedEventArgs e) => FileUtils.BrowseDirectory(TextDiskImagesDir, "Select disk images directory");
+        public void OnBrowseTOSRomsDirClick(object sender, RoutedEventArgs e) => FileUtils.BrowseDirectory(TextTOSRomsDir, "Select TOS ROMs directory");
 
         private void Model_SelectionChanged(object sender, SelectionChangedEventArgs e) => ForceReset = (Config.ConfigOptions.RunninConfig.STModel != configBackup.STModel) ? true : false;
         private void Memory_SelectionChanged(object sender, SelectionChangedEventArgs e) => ForceReset = (Config.ConfigOptions.RunninConfig.RAMConfiguration != configBackup.RAMConfiguration) ? true : false;
@@ -319,6 +325,19 @@ namespace ASE
         private void SliderBloom_OnValueChanged(object sender, RangeBaseValueChangedEventArgs e) => Config.ConfigOptions.RunninConfig.Bloom = (float)SliderBloom.Value;
         private void SliderMask_OnValueChanged(object sender, RangeBaseValueChangedEventArgs e) => Config.ConfigOptions.RunninConfig.Mask = (float)SliderMask.Value;
         private void SliderNoise_OnValueChanged(object sender, RangeBaseValueChangedEventArgs e) => Config.ConfigOptions.RunninConfig.Noise = (float)SliderNoise.Value;
+
+        private void ButtonZeroGLValues_OnClick(object sender, RoutedEventArgs e)
+        {
+            Config.ConfigOptions.RunninConfig.Curvature = 0.0f;
+            Config.ConfigOptions.RunninConfig.Vignette = 0.0f;
+            Config.ConfigOptions.RunninConfig.Scanline = 0.0f;
+            Config.ConfigOptions.RunninConfig.ChromAb = 0.0f;
+            Config.ConfigOptions.RunninConfig.Bloom = 0.0f;
+            Config.ConfigOptions.RunninConfig.Mask = 0.0f;
+            Config.ConfigOptions.RunninConfig.Noise = 0.0f;
+
+            RebindGLSliders();
+        }
 
         private void ButtonDefaultGLValues_OnClick(object sender, RoutedEventArgs e)
         {
@@ -432,6 +451,12 @@ namespace ASE
 
                 _ => SDL.SDL_Scancode.SDL_SCANCODE_UNKNOWN
             };
+        }
+
+        private void ChkShowBorders_OnIsCheckedChanged(object sender, RoutedEventArgs e)
+        {
+            if (((CheckBox)sender).IsChecked is bool isChecked)
+                Config.ConfigOptions.RunninConfig.ShowBorders = isChecked;
         }
     }
 }

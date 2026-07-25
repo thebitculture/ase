@@ -1,45 +1,74 @@
 <Window xmlns="https://github.com/avaloniaui"
 		xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+		xmlns:svg="clr-namespace:Avalonia.Svg;assembly=Svg.Controls.Avalonia"
 		xmlns:local="clr-namespace:ASE"
 		x:Class="ASE.MainWindow"
 		Title="Atari System Emulator"
 		WindowStartupLocation="CenterScreen"
 		UseLayoutRounding="True"
 		DragDrop.AllowDrop="True"
+		Background="#1A1A1A"
 		Width="800" Height="600">
 
 	<DockPanel LastChildFill="True">
-		<Menu DockPanel.Dock="Top" Name="MainMenu">
+		<Menu DockPanel.Dock="Top" Name="MainMenu" Background="Transparent">
 
 			<MenuItem Header="_File">
-				<MenuItem Header="_Open disk image" Click="OnOpenImageClick" />
-				<MenuItem Header="_Change disk from ZIP" Click="OnChangeDiskClick" Name="ItemMenuChangeDisk" IsEnabled="False" />
-				<MenuItem Header="_Ejec disk image / ZIP" Click="OnEjecImageClick" Name="ItemMenuEjecDisk" IsEnabled="False" />
+				<MenuItem Header="_Open disk image…" Click="OnOpenImageClick">
+					<MenuItem.Icon>
+						<Svg Path="avares://ASE/Assets/Icons/disk.svg" Width="16" Height="16"/>
+					</MenuItem.Icon>
+				</MenuItem>
+				<MenuItem Header="_Change disk from ZIP…" Click="OnChangeDiskClick" Name="ItemMenuChangeDisk" IsEnabled="False" />
+				<MenuItem Header="_Eject disk image / ZIP" Click="OnEjecImageClick" Name="ItemMenuEjectDisk" IsEnabled="False" />
 				<Separator/>
-				<MenuItem Header="_Save snapshot" Click="OnSaveSnapshotClick" InputGesture="F11" />
-				<MenuItem Header="_Restore snapshot" Click="OnRestoreSnapshotClick" />
+				<MenuItem Header="Save snapshot" Click="OnSaveSnapshotClick" InputGesture="F11" >
+					<MenuItem.Icon>
+						<Svg Path="avares://ASE/Assets/Icons/cone-striped.svg" Width="16" Height="16"/>
+					</MenuItem.Icon>
+				</MenuItem>
+				<MenuItem Header="Restore snapshot…" Click="OnRestoreSnapshotClick" />
 				<Separator/>
-				<MenuItem Header="_Quit" Click="OnExitClick"/>
+				<MenuItem Header="_Library…" Click="OnLibraryClick">
+					<MenuItem.Icon>
+						<Svg Path="avares://ASE/Assets/Icons/collection-fill.svg" Width="16" Height="16"/>
+					</MenuItem.Icon>
+				</MenuItem>
+				<MenuItem Header="Configure Library…" Click="OnConfigureLibraryClick" />
+				<Separator/>
+				<MenuItem Header="_Quit" Click="OnExitClick">
+					<MenuItem.Icon>
+						<Svg Path="avares://ASE/Assets/Icons/power.svg" Width="16" Height="16"/>
+					</MenuItem.Icon>
+				</MenuItem>
 			</MenuItem>
 
-			<MenuItem Header="_Emulation">
-				<MenuItem Header="_Configuration" Click="OnConfigurationClick" />
-				<MenuItem Header="_Debug" Click="OnDebugClick" />
+			<MenuItem Header="Emulation">
+				<MenuItem Header="Configuration…" Click="OnConfigurationClick">
+					<MenuItem.Icon>
+						<Svg Path="avares://ASE/Assets/Icons/gear.svg" Width="16" Height="16"/>
+					</MenuItem.Icon>
+				</MenuItem>
+				<MenuItem Header="Debug…" Click="OnDebugClick">
+					<MenuItem.Icon>
+						<Svg Path="avares://ASE/Assets/Icons/bug.svg" Width="16" Height="16"/>
+					</MenuItem.Icon>
+				</MenuItem>
 				<Separator/>
-				<MenuItem Header="_Reset" Click="OnResetClick" />
+				<MenuItem Header="Reset" Click="OnResetClick" />
 			</MenuItem>
 
-			<MenuItem Header="_Help">
-				<MenuItem Header="_About ASE..." Click="OnAboutClick" />
-				<MenuItem Header="_Manual" Click="OnManualClick" />
+			<MenuItem Header="Help">
+				<MenuItem Header="About ASE…" Click="OnAboutClick" />
+				<MenuItem Header="Manual…" Click="OnManualClick" />
 			</MenuItem>
 
 		</Menu>
 
 		<Border DockPanel.Dock="Bottom" Name="BottomStatusBar"
-				Background="#202020"
-				Padding="10,6"
-				BorderBrush="#404040"
+				Background="#161616"
+				Padding="12,5"
+				BorderBrush="#2C2C2C"
 				BorderThickness="0,1,0,0">
 			<DockPanel LastChildFill="False">
 				<Image Name="DriveLedImage"
@@ -51,9 +80,13 @@
 				           DockPanel.Dock="Right"
 				           VerticalAlignment="Center"
 				           Margin="0,0,10,0"
-				           Foreground="#A0A0A0" />
-       
-				<TextBlock Name="TextBlockStatusBar" VerticalAlignment="Center">Press F12/middle mouse button to capture/release input.
+				           FontSize="12"
+				           Foreground="{DynamicResource AccentTextBrush}" />
+
+				<TextBlock Name="TextBlockStatusBar"
+				           VerticalAlignment="Center"
+				           FontSize="12"
+				           Foreground="#A0A0A0">Press F12/middle mouse button to capture/release input.
 					<TextBlock.Styles>
 						<Style Selector="TextBlock.fadeOut">
 							<Style.Animations>

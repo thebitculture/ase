@@ -29,14 +29,26 @@ public partial class DebugWindow : Window
             }
         }
 
+        bool _isBreakpoint;
+        public bool IsBreakpoint
+        {
+            get => _isBreakpoint;
+            set
+            {
+                if (_isBreakpoint == value) return;
+                _isBreakpoint = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsBreakpoint)));
+            }
+        }
+
         public event PropertyChangedEventHandler PropertyChanged;
     }
 
-    // Número total de instrucciones desensambladas en cada listado
+    // Total number of instructions disassembled in each listing
     const int InstructionsToDisasm = 4096;
-    // Ventana en bytes por detrás del ancla usada para sincronizar el desensamblado
+    // Window in bytes behind the anchor used to synchronize the disassembly
     const int BackContextBytes = 1024;
-    // Líneas de contexto visibles alrededor de la instrucción actual al hacer scroll
+    // Visible context lines around the current instruction when scrolling
     const int ScrollContextLines = 5;
 
     public ObservableCollection<DasmLine> DasmListing { get; } = new();
@@ -50,26 +62,32 @@ public partial class DebugWindow : Window
 
         if (!Design.IsDesignMode)
         {
-            // El emulador entra en pausa cuando se entra en depuración. IsPaused solo se
-            // comprueba una vez por frame, así que la barrera espera a que el hilo de
-            // emulación se aparque de verdad antes de muestrear PC/registros/memoria;
-            // sin ella se mostraba un estado de mitad de frame ya desfasado.
-            ASEMain.IsPaused = true;
+            // The emulator pauses when entering the debugger. IsPaused is only checked
+            // once per frame, so the barrier waits until the emulation thread is truly
+            // parked before sampling PC/registers/memory; without it a stale mid-frame
+            // state was displayed.
+            ASEMain.EnterUiPause();
             ASEMain.RunWhilePaused(() => { }, out _);
             BuildListing(CPU._moira.PC);
             UpdateRegisters();
+            UpdateBreakpointControls();
 
-            // Monitor de memoria: accesos de depuración sin efectos laterales sobre el bus
+            // Memory monitor: debug accesses with no side effects on the bus
             hexView.Peek = a => ASEMain._mem.DebugPeek8(a);
             hexView.Poke = (a, v) => ASEMain._mem.DebugPoke8(a, v);
             hexView.CursorMoved += (addr, val) => txtMemStatus.Text = $"${addr:X6} = ${val:X2}";
             hexView.GotoAddress(0);
-            // El scroll hay que hacerlo cuando el ListBox ya tiene tamaño y ha creado los contenedores
+            // Scrolling must happen once the ListBox has a size and has created its containers
             Opened += (_, _) => Dispatcher.UIThread.Post(
                 () => ScrollToLine(IndexOfAddress(CPU._moira.PC)), DispatcherPriority.Background);
         }
         else
             BuildDesignListing();
+    }
+
+    public void OnContinueClick(object sender, RoutedEventArgs e)
+    {
+        this.Close();
     }
 
     protected override void OnClosing(WindowClosingEventArgs e)
@@ -78,10 +96,74 @@ public partial class DebugWindow : Window
 
         if (!Design.IsDesignMode)
         {
-            ASEMain.IsPaused = false;
+            ASEMain.ExitUiPause();
         }
     }
 
+    public void OnSaveListingClick(object sender, RoutedEventArgs e)
+    {
+        SaveListingWindow window = new SaveListingWindow();
+        window.ShowDialog(this);
+    }
+
+    /// <summary>
+    /// Sets or removes a breakpoint on the selected instruction. The button has already
+    /// changed its state by the time Click arrives, so IsChecked reflects the desired state.
+    /// </summary>
+    public void OnBreakpointToggle(object sender, RoutedEventArgs e)
+    {
+        if (lstListing.SelectedItem is not DasmLine line)
+        {
+            tglBreakpoint.IsChecked = false;
+            return;
+        }
+
+        if (tglBreakpoint.IsChecked == true)
+            CPU._moira.SetBreakpoint(line.Address);
+        else
+            CPU._moira.RemoveBreakpoint(line.Address);
+
+        line.IsBreakpoint = tglBreakpoint.IsChecked == true;
+        btnRunToBp.IsEnabled = CPU._moira.BreakpointCount > 0;
+    }
+
+    public void OnClearBreakpointClick(object sender, RoutedEventArgs e)
+    {
+        CPU._moira.RemoveAllBreakpoints();
+
+        // The red marks in the listing are copies of Moira's state: they must be cleared too
+        foreach (var line in DasmListing)
+            line.IsBreakpoint = false;
+
+        // Unchecks the toggle if the selected line had a breakpoint and disables "Run until breakpoint"
+        UpdateBreakpointControls();
+    }
+
+    /// <summary>
+    /// Resumes emulation until the next breakpoint. Closing the window is enough (it
+    /// unpauses in OnClosing): breakpoints are always armed inside Moira and, when one
+    /// is hit, the emulation loop pauses the machine and reopens this window with the
+    /// PC on the stopped instruction (see ASEMain.EmulatorLoop).
+    /// </summary>
+    public void OnRunToBreakpointClick(object sender, RoutedEventArgs e) => Close();
+
+    /// <summary>The breakpoint ToggleButton follows the selected line in the listing.</summary>
+    public void OnListingSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (Design.IsDesignMode)
+            return;
+
+        UpdateBreakpointControls();
+    }
+
+    void UpdateBreakpointControls()
+    {
+        var line = lstListing.SelectedItem as DasmLine;
+        tglBreakpoint.IsEnabled = line != null;
+        tglBreakpoint.IsChecked = line != null && CPU._moira.IsBreakpoint(line.Address);
+        btnRunToBp.IsEnabled = CPU._moira.BreakpointCount > 0;
+    }
+    
     protected override void OnKeyDown(KeyEventArgs e)
     {
         if (!Design.IsDesignMode && e.Key == Key.F10)
@@ -105,12 +187,12 @@ public partial class DebugWindow : Window
         if (!uint.TryParse(text, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out uint addr))
             return;
 
-        addr &= ~1u; // las instrucciones siempre están alineadas a palabra
+        addr &= ~1u; // instructions are always word-aligned
         BuildListing(addr);
         ScrollToLine(IndexOfAddress(addr));
     }
 
-    public void OnRegisterLostFocus(object? sender, FocusChangedEventArgs e)
+    public void OnRegisterLostFocus(object sender, FocusChangedEventArgs e)
     {
         if (sender is TextBox tb)
             CommitRegister(tb);
@@ -167,8 +249,8 @@ public partial class DebugWindow : Window
 
         try
         {
-            // Estado completo de la máquina (formato ASESNAP2, ver Snapshot.cs);
-            // restaurable desde File > Restore snapshot en la ventana principal
+            // Full machine state (ASESNAP2 format, see Snapshot.cs);
+            // restorable from File > Restore snapshot in the main window
             Snapshot.Save(path);
             txtMemStatus.Text = $"Snapshot saved: {Path.GetFileName(path)}";
         }
@@ -188,7 +270,7 @@ public partial class DebugWindow : Window
 
         if (!uint.TryParse(text, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out uint value))
         {
-            // Texto no válido: se restaura el valor actual del registro
+            // Invalid text: restore the register's current value
             UpdateRegisters();
             return;
         }
@@ -231,7 +313,7 @@ public partial class DebugWindow : Window
 
         CPU._moira.SR = sr;
 
-        // setSR puede conmutar el modo supervisor, lo que intercambia el puntero de pila visible
+        // setSR can toggle supervisor mode, which swaps the visible stack pointer
         UpdateRegisters();
     }
 
@@ -239,15 +321,15 @@ public partial class DebugWindow : Window
     {
         CPU._moira.Step();
         ShowCurrentPC();
-        // La instrucción ejecutada puede haber modificado la memoria visible en el monitor
+        // The executed instruction may have modified memory visible in the monitor
         hexView.Refresh();
     }
 
     /// <summary>
-    /// Mueve el PC a una nueva dirección dejando la CPU en un límite de instrucción válido.
-    /// En Moira, al inicio de cada instrucción pc == pc0 apuntan a la instrucción actual, IRD
-    /// contiene su opcode e IRC la palabra siguiente, así que además de PC/PC0 hay que rellenar
-    /// la cola de prefetch (equivale al fullPrefetch interno de Moira).
+    /// Moves the PC to a new address leaving the CPU at a valid instruction boundary.
+    /// In Moira, at the start of each instruction pc == pc0 point to the current instruction,
+    /// IRD holds its opcode and IRC the next word, so besides PC/PC0 the prefetch queue must
+    /// be filled too (equivalent to Moira's internal fullPrefetch).
     /// </summary>
     void JumpTo(uint addr)
     {
@@ -258,7 +340,7 @@ public partial class DebugWindow : Window
     }
 
     /// <summary>
-    /// Resalta la instrucción del PC actual, reconstruyendo el listado si el PC se ha salido de él.
+    /// Highlights the instruction at the current PC, rebuilding the listing if the PC has left it.
     /// </summary>
     void ShowCurrentPC()
     {
@@ -284,14 +366,18 @@ public partial class DebugWindow : Window
     }
 
     /// <summary>
-    /// Reconstruye el listado desensamblando hacia delante desde una dirección sincronizada
-    /// con <paramref name="anchor"/>, de modo que el ancla siempre aparece como una línea del listado.
+    /// Rebuilds the listing by disassembling forward from an address synchronized with
+    /// <paramref name="anchor"/>, so the anchor always shows up as a line of the listing.
     /// </summary>
     void BuildListing(uint anchor)
     {
         anchor &= ~1u;
         uint start = FindSyncStart(anchor);
         uint pc = CPU._moira.PC;
+
+        // Breakpoints live in Moira (they persist across window openings); addresses are
+        // only queried one by one if any is set.
+        bool anyBreakpoints = CPU._moira.BreakpointCount > 0;
 
         DasmListing.Clear();
         _pcLine = null;
@@ -318,16 +404,18 @@ public partial class DebugWindow : Window
                 _pcLine = line;
             }
 
+            line.IsBreakpoint = anyBreakpoints && CPU._moira.IsBreakpoint(addr);
+
             DasmListing.Add(line);
             addr += (uint)disSize;
         }
     }
 
     /// <summary>
-    /// Busca la dirección más lejana dentro de la ventana anterior al ancla desde la que un
-    /// desensamblado hacia delante cae exactamente en el ancla. Como las instrucciones del 68000
-    /// tienen longitud variable, esto garantiza que el listado quede alineado con la instrucción
-    /// del ancla (normalmente el PC, que siempre es un límite de instrucción válido).
+    /// Finds the farthest address within the window before the anchor from which a forward
+    /// disassembly lands exactly on the anchor. Since 68000 instructions have variable
+    /// length, this guarantees the listing stays aligned with the anchor's instruction
+    /// (normally the PC, which is always a valid instruction boundary).
     /// </summary>
     uint FindSyncStart(uint anchor)
     {
@@ -337,7 +425,7 @@ public partial class DebugWindow : Window
         if (slots <= 0)
             return anchor;
 
-        // Tamaño de la instrucción en cada dirección par de la ventana
+        // Instruction size at each even address of the window
         var sizeInWords = new int[slots];
         for (int i = 0; i < slots; i++)
         {
@@ -345,7 +433,7 @@ public partial class DebugWindow : Window
             sizeInWords[i] = disSize / 2;
         }
 
-        // reachable[i] == true si desensamblando desde windowStart + i*2 se llega justo al ancla
+        // reachable[i] == true if disassembling from windowStart + i*2 lands exactly on the anchor
         var reachable = new bool[slots + 1];
         reachable[slots] = true;
 
@@ -362,7 +450,7 @@ public partial class DebugWindow : Window
         return anchor;
     }
 
-    /// <summary>Búsqueda binaria de una dirección en el listado (las direcciones van en orden ascendente).</summary>
+    /// <summary>Binary search for an address in the listing (addresses are in ascending order).</summary>
     int IndexOfAddress(uint addr)
     {
         int lo = 0, hi = DasmListing.Count - 1;
@@ -380,7 +468,7 @@ public partial class DebugWindow : Window
         return -1;
     }
 
-    /// <summary>Desplaza el listado dejando la línea visible con algo de contexto por arriba y por abajo.</summary>
+    /// <summary>Scrolls the listing so the line is visible with some context above and below.</summary>
     void ScrollToLine(int index)
     {
         if (index < 0 || DasmListing.Count == 0)
@@ -427,7 +515,7 @@ public partial class DebugWindow : Window
     }
 
     /// <summary>
-    /// Este método sólo existe para que pueda ver cómo queda el diseño en el diseñador de Avalonia en Visual Studio
+    /// This method only exists so the layout can be previewed in the Avalonia designer in Visual Studio
     /// </summary>
     void BuildDesignListing()
     {

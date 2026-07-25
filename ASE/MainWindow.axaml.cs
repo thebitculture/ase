@@ -15,8 +15,10 @@ namespace ASE
 {
     public partial class MainWindow : Window
     {
-        private float GameAspectRatio;
-        private bool _isResizing = false;
+        // Aspect-ratio keeping: last client size we accepted as correct; used both to
+        // ignore the echo of our own corrections and to know which dimension the user dragged.
+        private Size _lastStableClientSize;
+        private DispatcherTimer _resizeDebounce;
 
         public IntPtr _sdlWindowPtr;
 
@@ -41,9 +43,15 @@ namespace ASE
         {
             base.OnOpened(e);
 
-            // Maintains the aspect ratio of the emulator when resizing the window
-            GameAspectRatio = (float)ASEMain.ScreenWidth / ((float)ASEMain.ScreenHeight + ((float)MainMenu.Height + (float)BottomStatusBar.Bounds.Height));
+            // Maintains the aspect ratio of the emulator when resizing the window.
+            // Corrections are debounced so we never fight the user's interactive drag.
+            _lastStableClientSize = ClientSize;
+            _resizeDebounce = new DispatcherTimer(DispatcherPriority.Normal) { Interval = TimeSpan.FromMilliseconds(300) };
+            _resizeDebounce.Tick += OnResizeSettled;
             this.GetObservable(Window.ClientSizeProperty).Subscribe(OnClientSizeChanged);
+
+            // Snap the startup size to the correct ratio once the first layout is done
+            Dispatcher.UIThread.Post(EnforceAspectRatio, DispatcherPriority.Loaded);
 
             // Attach SDL to the window
             var platformHandle = this.TryGetPlatformHandle();
@@ -129,49 +137,78 @@ namespace ASE
             MainMenu.IsEnabled = show;
         }
 
+        // Pixel aspect ratio of the ST on an original 4:3 PAL monitor: the tube shows
+        // ~52 µs of active line over ~288 visible lines, so the 416 low-res pixels (8 MHz)
+        // that fit in 52 µs span 288 * 4/3 = 384 line-height units -> each pixel is
+        // 384/416 = 12/13 as wide as it is tall (slightly narrower than square).
+        private const double PIXEL_ASPECT = 12.0 / 13.0;
+
+        /// <summary>Aspect ratio of the picture GLControl shows — the full framebuffer
+        /// (display + borders) or the 640x400 crop when borders are hidden — corrected
+        /// by the pixel aspect of the original 4:3 monitor.</summary>
+        private static double DisplayAspectRatio =>
+            PIXEL_ASPECT * (Config.ConfigOptions.RunninConfig.ShowBorders
+                ? (double)ASEMain.ScreenWidth / ASEMain.ScreenHeight
+                : (double)VideoTiming.DISPLAY_TEX_WIDTH / (VideoTiming.DISPLAY_TEX_HEIGHT * 2));
+
         private void OnClientSizeChanged(Size newSize)
         {
-            if (_isResizing)
+            // Ignore the echo of our own correction (and the initial emission)
+            if (Math.Abs(newSize.Width - _lastStableClientSize.Width) < 1 &&
+                Math.Abs(newSize.Height - _lastStableClientSize.Height) < 1)
                 return;
 
-            double menuHeight = MainMenu.Bounds.Height;
-            double statusbarHeight = BottomStatusBar.Bounds.Height;
-            double barsHeight = menuHeight + statusbarHeight;
+            // Debounce: correct only after the user stops dragging, otherwise we would
+            // fight the interactive resize and the window becomes impossible to stretch
+            _resizeDebounce.Stop();
+            _resizeDebounce.Start();
+        }
 
-            // New height for the viewport
-            double glHeight = newSize.Height - menuHeight - statusbarHeight;
+        private void OnResizeSettled(object sender, EventArgs e)
+        {
+            _resizeDebounce.Stop();
+            EnforceAspectRatio();
+        }
+
+        private void EnforceAspectRatio()
+        {
+            // Never fight a maximized/minimized window
+            if (WindowState != WindowState.Normal)
+            {
+                _lastStableClientSize = ClientSize;
+                return;
+            }
+
+            double barsHeight = MainMenu.Bounds.Height + BottomStatusBar.Bounds.Height;
+            Size size = ClientSize;
+
+            // Height available for the GL viewport
+            double glHeight = size.Height - barsHeight;
             if (glHeight <= 1) return;
 
-            double currentRatio = newSize.Width / glHeight;
+            double ratio = DisplayAspectRatio;
 
-            // MAintains aspect ratio of the window
-            if (Math.Abs(currentRatio - GameAspectRatio) > 0.05)
+            if (Math.Abs(size.Width / glHeight - ratio) < 0.01)
             {
-                _isResizing = true;
-
-                double targetGlHeight = newSize.Width / GameAspectRatio;
-                double targetClientHeight = targetGlHeight + barsHeight;
-
-                Dispatcher.UIThread.Post(() =>
-                {
-                    try
-                    {
-                        // Adjust the window height.
-                        // Note: Changing Width/Height affects the overall size (including OS borders).
-                        // I need to calculate the total size based on the new desired ClientSize.
-                        // Difference between total size and client size (borders, title bar)
-                        var frameSize = this.FrameSize ?? new Size(this.Width, this.Height);
-                        var clientSize = this.ClientSize;
-                        double borderHeight = frameSize.Height - clientSize.Height;
-
-                        this.Height = targetClientHeight + borderHeight;
-                    }
-                    finally
-                    {
-                        _isResizing = false;
-                    }
-                });
+                _lastStableClientSize = size;
+                return;
             }
+
+            // Honor the dimension the user actually dragged and derive the other one
+            double dw = Math.Abs(size.Width - _lastStableClientSize.Width);
+            double dh = Math.Abs(size.Height - _lastStableClientSize.Height);
+
+            Size target = dw >= dh
+                ? new Size(size.Width, size.Width / ratio + barsHeight)  // width led -> adjust height
+                : new Size(glHeight * ratio, size.Height);               // height led -> adjust width
+
+            _lastStableClientSize = target;
+
+            // Window.Width/Height are the *client* size in Avalonia (the OS frame is not included).
+            // If the OS clamps this (screen edge, minimum size), the resulting ClientSize change
+            // re-enters through the debounce and converges from the clamped size.
+            Width = target.Width;
+            Height = target.Height;
         }
 
         /// <summary>Turns the drive LED on/off; <paramref name="activity"/> ("A: T05 S09",
@@ -329,7 +366,7 @@ namespace ASE
             if (response == MessageBoxButton.Yes)
                 ASEMain.HardReset();
 
-            ItemMenuEjecDisk.IsEnabled = true;
+            ItemMenuEjectDisk.IsEnabled = true;
 
             SetStatusBarText($"Disk {Path.GetFileName(ImageFile)} inserted in drive A");
         }
@@ -344,7 +381,7 @@ namespace ASE
         void DisableEjectMenu()
         {
             ItemMenuChangeDisk.IsEnabled = false;
-            ItemMenuEjecDisk.IsEnabled = false;
+            ItemMenuEjectDisk.IsEnabled = false;
         }
 
         public async void OnResetClick(object sender, RoutedEventArgs e)
@@ -400,12 +437,29 @@ namespace ASE
                 return;
             }
 
-            // El snapshot puede haber reinsertado el disco que estaba en la unidad A
-            ItemMenuEjecDisk.IsEnabled = ASEMain.driveA.HasDisk;
+            // The snapshot may have re-inserted the disk that was in drive A
+            ItemMenuEjectDisk.IsEnabled = ASEMain.driveA.HasDisk;
 
             SetStatusBarText($"Snapshot {Path.GetFileName(path)} restored");
         }
 
+        private async void OnLibraryClick(object sender, RoutedEventArgs e)
+        {
+            ASEMain.CaptureMouse(false);
+
+            var library = new LibraryWindow();
+            string gameFile = await library.ShowDialog<string>(this);
+
+            if (!string.IsNullOrEmpty(gameFile))
+                InsertDisk(gameFile);
+        }
+        
+        private void OnConfigureLibraryClick(object sender, RoutedEventArgs e)
+        {
+            var configureLibrary = new LibraryConfigurationWindow();
+            configureLibrary.ShowDialog(this);
+        }
+        
         public void OnConfigurationClick(object sender, RoutedEventArgs e)
         {
             var configWindow = new ConfigurationWindow();

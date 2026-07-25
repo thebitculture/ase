@@ -247,6 +247,7 @@ namespace ASE
         private uint _vbo;
         private bool _hasVao;
         private bool _firstRender = true;
+        private double _lastLoggedScaling = -1;
 
         // uniforms: cache de locations
         private int _uTextureLoc;
@@ -427,13 +428,6 @@ namespace ASE
         {
             if (_gl == null || _program == 0 || !_programValid) return;
 
-            // Log on first frame
-            if (_firstRender)
-            {
-                ColoredConsole.WriteLine($"[GLControl] fb=[[yellow]]{fb}[[/yellow]], hasVao=[[yellow]]{_hasVao}[[/yellow]]", Config.ConfigOptions.DebugModes.Quiet);
-                _firstRender = false;
-            }
-
             _gl.BindFramebuffer(GLEnum.Framebuffer, (uint)fb);
 
             // DPI-aware viewport
@@ -441,6 +435,16 @@ namespace ASE
             uint outW = (uint)Math.Max(1, (int)(Bounds.Width  * scaling));
             uint outH = (uint)Math.Max(1, (int)(Bounds.Height * scaling));
             _gl.Viewport(0, 0, outW, outH);
+
+            // Log on first frame and whenever the DPI scale changes (window moved to a
+            // monitor with a different scale) — this is what users should report when the
+            // picture doesn't fill the window.
+            if (_firstRender || scaling != _lastLoggedScaling)
+            {
+                ColoredConsole.WriteLine($"[GLControl] fb=[[yellow]]{fb}[[/yellow]], hasVao=[[yellow]]{_hasVao}[[/yellow]], scale=[[yellow]]{scaling:0.##}[[/yellow]], viewport=[[yellow]]{outW}x{outH}[[/yellow]], bounds=[[yellow]]{Bounds.Width:0.#}x{Bounds.Height:0.#}[[/yellow]]", Config.ConfigOptions.DebugModes.Quiet);
+                _firstRender = false;
+                _lastLoggedScaling = scaling;
+            }
 
             // Reset
             _gl.Disable(GLEnum.CullFace);

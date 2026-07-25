@@ -1,12 +1,13 @@
 <Application xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:svg="clr-namespace:Avalonia.Svg;assembly=Svg.Controls.Avalonia"
-             x:Class="ASE.App">
-  
+             x:Class="ASE.App"
+             RequestedThemeVariant="Dark">
+
   <Application.Styles>
     <FluentTheme/>
 
-    <!-- SVG -->
+    <!-- SVG icon tinting -->
     <Style Selector="Svg">
       <Setter Property="Svg.Css" Value="{DynamicResource IconCssNormal}"/>
     </Style>
@@ -16,22 +17,94 @@
     <Style Selector="TabItem:selected Svg">
       <Setter Property="Svg.Css" Value="{DynamicResource IconCssSelected}"/>
     </Style>
+
+    <!-- Softer, rounded controls -->
+    <Style Selector="Button">
+      <Setter Property="CornerRadius" Value="6"/>
+    </Style>
+    <Style Selector="TextBox">
+      <Setter Property="CornerRadius" Value="6"/>
+    </Style>
+    <Style Selector="ComboBox">
+      <Setter Property="CornerRadius" Value="6"/>
+    </Style>
+
+    <!-- Card: rounded panel that groups related settings -->
+    <Style Selector="Border.card">
+      <Setter Property="Background" Value="{DynamicResource CardBackgroundBrush}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource CardBorderBrush}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="CornerRadius" Value="10"/>
+      <Setter Property="Padding" Value="14"/>
+    </Style>
+
+    <!-- Section title inside a card -->
+    <Style Selector="TextBlock.section">
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Foreground" Value="{DynamicResource AccentTextBrush}"/>
+    </Style>
   </Application.Styles>
 
   <Application.Resources>
     <ResourceDictionary>
+
+      <!-- Atari Fuji orange accent -->
+      <Color x:Key="SystemAccentColor">#EE7326</Color>
+      <Color x:Key="SystemAccentColorDark1">#D5641F</Color>
+      <Color x:Key="SystemAccentColorDark2">#B95518</Color>
+      <Color x:Key="SystemAccentColorDark3">#9C4712</Color>
+      <Color x:Key="SystemAccentColorLight1">#F28A4B</Color>
+      <Color x:Key="SystemAccentColorLight2">#F5A16F</Color>
+      <Color x:Key="SystemAccentColorLight3">#F9B893</Color>
+
       <ResourceDictionary.ThemeDictionaries>
 
         <ResourceDictionary x:Key="Light">
-          <x:String x:Key="IconCssNormal">* { fill: #111; stroke: #111; }</x:String>
-          <x:String x:Key="IconCssDisabled">* { fill: #888; stroke: #888; }</x:String>
-          <x:String x:Key="IconCssSelected">* { fill: #0b5ed7; stroke: #0b5ed7; }</x:String>
+          <x:String x:Key="IconCssNormal">* { fill: #111; }</x:String>
+          <x:String x:Key="IconCssDisabled">* { fill: #888; }</x:String>
+          <x:String x:Key="IconCssSelected">* { fill: #D5641F; }</x:String>
+          <SolidColorBrush x:Key="CardBackgroundBrush">#F7F7F7</SolidColorBrush>
+          <!-- Game detail card: fades the title-screen backdrop into the card colour -->
+          <LinearGradientBrush x:Key="DetailBackdropFade" StartPoint="50%,0%" EndPoint="50%,100%">
+            <GradientStop Color="#00F7F7F7" Offset="0.0"/>
+            <GradientStop Color="#B3F7F7F7" Offset="0.65"/>
+            <GradientStop Color="#FFF7F7F7" Offset="1.0"/>
+          </LinearGradientBrush>
+          <SolidColorBrush x:Key="CardBorderBrush">#E0E0E0</SolidColorBrush>
+          <SolidColorBrush x:Key="AccentTextBrush">#C55A17</SolidColorBrush>
+          <SolidColorBrush x:Key="LibraryBarBrush">#C8C8C8</SolidColorBrush>
+          <LinearGradientBrush x:Key="LibraryBackgroundBrush" StartPoint="50%,0%" EndPoint="50%,100%">
+            <GradientStop Color="#D8D8D8" Offset="0.0"/>
+            <GradientStop Color="#FAFAFA" Offset="1.0"/>
+          </LinearGradientBrush>
+          <BoxShadows x:Key="LibraryBarShadow">0 10 10 0 #40000000</BoxShadows>
+          <BoxShadows x:Key="TileShadow">0 2 2 0 #40000000</BoxShadows>
+          <BoxShadows x:Key="TileShadowHover">0 10 10 0 #55000000</BoxShadows>
+          <BoxShadows x:Key="TileShadowSel">0 5 5 0 #4D000000</BoxShadows>
         </ResourceDictionary>
 
         <ResourceDictionary x:Key="Dark">
-          <x:String x:Key="IconCssNormal">* { fill: #f2f2f2; stroke: #f2f2f2; }</x:String>
-          <x:String x:Key="IconCssDisabled">* { fill: #777; stroke: #777; }</x:String>
-          <x:String x:Key="IconCssSelected">* { fill: #4dabf7; stroke: #4dabf7; }</x:String>
+          <x:String x:Key="IconCssNormal">* { fill: #f2f2f2; }</x:String>
+          <x:String x:Key="IconCssDisabled">* { fill: #777; }</x:String>
+          <x:String x:Key="IconCssSelected">* { fill: #F28A4B; }</x:String>
+          <SolidColorBrush x:Key="CardBackgroundBrush">#232323</SolidColorBrush>
+          <!-- Game detail card: fades the title-screen backdrop into the card colour -->
+          <LinearGradientBrush x:Key="DetailBackdropFade" StartPoint="50%,0%" EndPoint="50%,100%">
+            <GradientStop Color="#00232323" Offset="0.0"/>
+            <GradientStop Color="#B3232323" Offset="0.65"/>
+            <GradientStop Color="#FF232323" Offset="1.0"/>
+          </LinearGradientBrush>
+          <SolidColorBrush x:Key="CardBorderBrush">#373737</SolidColorBrush>
+          <SolidColorBrush x:Key="AccentTextBrush">#F5A16F</SolidColorBrush>
+          <SolidColorBrush x:Key="LibraryBarBrush">#101010</SolidColorBrush>
+          <LinearGradientBrush x:Key="LibraryBackgroundBrush" StartPoint="50%,0%" EndPoint="50%,100%">
+            <GradientStop Color="#101010" Offset="0.0"/>
+            <GradientStop Color="#303030" Offset="1.0"/>
+          </LinearGradientBrush>
+          <BoxShadows x:Key="LibraryBarShadow">0 10 10 0 #80000000</BoxShadows>
+          <BoxShadows x:Key="TileShadow">0 2 2 0 #000000</BoxShadows>
+          <BoxShadows x:Key="TileShadowHover">0 10 10 0 #000000</BoxShadows>
+          <BoxShadows x:Key="TileShadowSel">0 5 5 0 #000000</BoxShadows>
         </ResourceDictionary>
 
       </ResourceDictionary.ThemeDictionaries>

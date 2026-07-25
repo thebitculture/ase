@@ -85,6 +85,38 @@ namespace ASE
         static bool _isRunning;
         public static bool IsPaused = false;
 
+        /// <summary>Pauses/resumes the emulation together with the audio output. IsPaused
+        /// alone parks the CPU but the SDL callback keeps sounding the PSG's frozen state,
+        /// which bleeds into anything else playing audio (e.g. the library's game videos).</summary>
+        public static void PauseEmulation(bool pause)
+        {
+            IsPaused = pause;
+
+            if (_audiodev != 0)
+                SDL.SDL_PauseAudioDevice(_audiodev, pause ? 1 : 0);
+        }
+
+        // Depth of the UI-window pause: every emulator dialog (library, configuration,
+        // scraper, debugger, about…) holds one reference while it is open, so stacked
+        // windows (library configuration → scraper) only resume when the last one closes.
+        static int _uiPauseDepth;
+
+        /// <summary>Pauses the emulation for a UI window. Reference-counted: call
+        /// <see cref="ExitUiPause"/> exactly once when the window closes. While this pause
+        /// is held, <see cref="HandleEvents"/> also stops feeding host input to the IKBD.
+        /// UI thread only.</summary>
+        public static void EnterUiPause()
+        {
+            if (++_uiPauseDepth == 1)
+                PauseEmulation(true);
+        }
+
+        public static void ExitUiPause()
+        {
+            if (_uiPauseDepth > 0 && --_uiPauseDepth == 0)
+                PauseEmulation(false);
+        }
+
         // Freeze rendezvous used by RunWhilePaused: _freezeRequest asks the emulation thread to
         // park at the next frame boundary and _frozen is its acknowledgment. Unlike IsPaused the
         // parked loop does not drain SDL events either — HandleEvents mutates ACIA/IKBD state,
@@ -144,10 +176,10 @@ namespace ASE
                                                 (_, _) => SDL_PumpEvents());
             _sdlPumpTimer.Start();
 
-            // Arranque desde snapshot si se pidió por línea de comandos (--snapshot=<path>);
-            // la máquina se enciende directamente con el estado restaurado, sin arrancar TOS.
+            // Boot from a snapshot if requested on the command line (--snapshot=<path>);
+            // the machine powers on directly with the restored state, without booting TOS.
             string startupSnapshot = Config.StartupSnapshot;
-            Config.StartupSnapshot = "";    // sólo aplica al primer encendido, no a los resets
+            Config.StartupSnapshot = "";    // only applies to the first power-on, not to resets
 
             if (string.IsNullOrEmpty(startupSnapshot))
             {
@@ -167,8 +199,8 @@ namespace ASE
                     error = ex.Message;
                 }
 
-                // Con un archivo inválido (o si aplicar falla a medias, con fallback interno)
-                // se sigue con un arranque limpio: el emulador siempre queda encendido.
+                // With an invalid file (or if applying fails midway, with an internal
+                // fallback) we carry on with a clean boot: the emulator always ends up on.
                 if (snap != null && StartWithSnapshot(snap, out error))
                     ColoredConsole.WriteLine($"Snapshot restored from [[green]]{startupSnapshot}[[/green]]", ConfigOptions.DebugModes.Quiet);
                 else
@@ -235,6 +267,7 @@ namespace ASE
                     // locked to 512 cycles/line, which Spectrum 512's screen-wide cycle-counted
                     // palette routine relies on (otherwise its colours drift down the picture).
                     long frameClockBase = CPU._moira.Clock;
+                    bool hitBreakpoint = false;
 
                     for (int scanline = 0; scanline < 313; scanline++)
                     {
@@ -249,14 +282,14 @@ namespace ASE
 
                         int ElapsedCycles = 0;
 
-                        // Correr la CPU hasta que cae la señal Display Enable (DE).
-                        // En 50Hz, DE cae en el ciclo 376. Aquí es donde DEBEN saltar el Timer B y el HBL.
+                        // Run the CPU until the Display Enable (DE) signal drops.
+                        // At 50Hz, DE drops at cycle 376. This is where Timer B and the HBL MUST fire.
                         int cyclesToDEStop = 376;
-                        RunCpuUntil(lineBase + cyclesToDEStop);
+                        if (RunCpuUntil(lineBase + cyclesToDEStop)) { hitBreakpoint = true; break; }
                         ElapsedCycles += cyclesToDEStop;
 
-                        // Disparar Timer B exactamente al caer Display Enable (como el hardware real).
-                        // Comprobamos si es una línea visible (en PAL estándar va de la 63 a la 262).
+                        // Fire Timer B exactly when Display Enable drops (like the real hardware).
+                        // Check whether this is a visible line (standard PAL: lines 63 to 262).
                         bool isVisibleLine = (scanline >= 63 && scanline < 263);
                         if (isVisibleLine)
                         {
@@ -264,24 +297,39 @@ namespace ASE
                             _mfp.TickTimerB_EventCount();
                         }
 
-                        // Disparar HBL justo al inicio del H-Blank
+                        // Fire the HBL right at the start of the H-Blank
                         _mfp.irqController.RaiseHBL();
 
-                        // Correr el resto de la scanline (los 136 ciclos restantes del H-Blank / Borde derecho)
+                        // Run the rest of the scanline (the remaining 136 cycles of H-Blank / right border)
                         int cyclesToLineEnd = VideoTiming.CYCLES_PER_LINE - cyclesToDEStop;
-                        RunCpuUntil(lineBase + VideoTiming.CYCLES_PER_LINE);
+                        if (RunCpuUntil(lineBase + VideoTiming.CYCLES_PER_LINE)) { hitBreakpoint = true; break; }
                         ElapsedCycles += cyclesToLineEnd;
 
-                        // Sincronizar el resto de periféricos (el WD1772 se sincroniza por
-                        // slice dentro de RunCpuUntil: la entrega DMA de los discos STX
-                        // necesita granularidad de pocos ciclos)
+                        // Sync the remaining peripherals (the WD1772 is synced per slice
+                        // inside RunCpuUntil: the DMA delivery of STX disks needs a
+                        // granularity of a few cycles)
                         ACIA.Sync(ElapsedCycles);
 
-                        // Resolver la línea (bordes abiertos, etc.)
+                        // Resolve the line (open borders, etc.)
                         VideoTiming.LineInfo line = VideoTiming.ResolveLine();
 
                         if (line.Visible)
                             AtariStRenderer.BlitLineWithBorders(_renderBuffer, line);
+                    }
+
+                    if (hitBreakpoint)
+                    {
+                        // Park the machine right where the CPU stopped (PC at the guarded
+                        // instruction) and pop the debugger. The rest of the frame is abandoned:
+                        // the partial framebuffer is not published (the previous full frame stays
+                        // on screen) and the next run restarts cleanly from a frame boundary via
+                        // VideoTiming.StartFrame. The DebugWindow constructor re-checks IsPaused
+                        // and does its own freeze rendezvous, which this thread acknowledges from
+                        // the paused branch below.
+                        PauseEmulation(true);
+                        Dispatcher.UIThread.Post(() =>
+                            new DebugWindow().ShowDialog(MainWindow), DispatcherPriority.Input);
+                        continue;
                     }
 
                     // Publish the finished frame to the GL thread atomically.
@@ -324,8 +372,9 @@ namespace ASE
                 }
                 else
                 {
-                    // Paused: keep consuming input (F12 capture toggle, gamepad hot-plug)
-                    // without busy-spinning a whole core.
+                    // Paused: keep draining so the queue doesn't grow and releases /
+                    // gamepad hot-plug are still seen (HandleEvents swallows the press
+                    // events while paused), without busy-spinning a whole core.
                     DrainSdlEvents();
                     SDL_Delay(5);
                 }
@@ -350,7 +399,9 @@ namespace ASE
         /// further off on every line, which showed up as horizontal stripes worsening downwards.
         /// </summary>
 
-        static void RunCpuUntil(long targetClock)
+        /// <returns>True when the run stopped early because the CPU reached a breakpoint
+        /// (the PC is left AT the guarded instruction, not yet executed).</returns>
+        static bool RunCpuUntil(long targetClock)
         {
             bool isSTE = ConfigOptions.RunninConfig.STModel == ConfigOptions.STModels.STE;
 
@@ -369,7 +420,14 @@ namespace ASE
                 _ym.Sync(elapsed);
                 if (isSTE) STEDmaSound.Tick(elapsed);
                 WD1772.Tick();
+
+                // After the peripherals have caught up with the executed cycles, so the machine
+                // state the debugger shows is consistent with the CPU clock.
+                if (CPU._moira.BreakpointWasHit)
+                    return true;
             }
+
+            return false;
         }
 
         /// <summary>
@@ -601,7 +659,7 @@ namespace ASE
             }
             catch (Exception ex)
             {
-                // Estado a medio aplicar: volver a un arranque limpio con la config anterior
+                // Half-applied state: fall back to a clean boot with the previous config
                 error = ex.Message;
                 ConfigOptions.RunninConfig.STModel = prevModel;
                 ConfigOptions.RunninConfig.RAMConfiguration = prevRam;
@@ -696,6 +754,25 @@ namespace ASE
         public static void HandleEvents(SDL_Event e)
         {
             bool IgnoreCtlrKeyUp = false;
+
+            // While the emulation is paused a UI window owns the host input: swallow the
+            // "press" events so keystrokes typed there (e.g. in the library search box)
+            // don't pile up in the IKBD queue and replay into the program on resume.
+            // Releases still pass — they only clear held keys/joystick directions, and a
+            // break code for a key the ST never saw pressed is a no-op — and so do the
+            // gamepad axis (returning to centre must keep clearing the direction state)
+            // and hot-plug events.
+            if (IsPaused)
+            {
+                switch (e.type)
+                {
+                    case SDL_EventType.SDL_KEYDOWN:
+                    case SDL_EventType.SDL_MOUSEBUTTONDOWN:
+                    case SDL_EventType.SDL_MOUSEMOTION:
+                    case SDL_EventType.SDL_CONTROLLERBUTTONDOWN:
+                        return;
+                }
+            }
 
             // First, check the host keyboard that emulates the joystick
             if ((e.type == SDL_EventType.SDL_KEYDOWN && e.key.repeat == 0) || e.type == SDL_EventType.SDL_KEYUP)
@@ -902,7 +979,7 @@ namespace ASE
                     int scancode = (int)e.key.keysym.scancode;
 
                     if (scancode < ACIA.AtariScancodes.Length && ACIA.AtariScancodes[scancode] != 0)
-                        // Scancode | 0x80 -> Scancode que se ha soltado en el ST
+                        // Scancode | 0x80 -> scancode released on the ST
                         ACIA.PushIkbd((byte)(ACIA.AtariScancodes[scancode] | 0x80));
                 }
             }
@@ -925,7 +1002,7 @@ namespace ASE
             {
                 if (e.type == SDL.SDL_EventType.SDL_MOUSEMOTION && (e.motion.xrel != 0 || e.motion.yrel != 0))
                 {
-                    // Transporta el movimiento relativo del ratón dentro de la ventana del emulador al ST
+                    // Forwards the relative mouse motion inside the emulator window to the ST
                     ACIA.SendMousePacket(e.motion.xrel, e.motion.yrel);
                 }
                 else if (e.type == SDL.SDL_EventType.SDL_MOUSEBUTTONDOWN)
@@ -935,15 +1012,15 @@ namespace ASE
                     if (e.button.button == SDL.SDL_BUTTON_RIGHT)
                         ACIA._mouseButtons |= 0x01; // Bit 0
 
-                    // Fuerza la actualización del ratón en el ST
+                    // Force a mouse update on the ST
                     ACIA.SendMousePacket(0, 0);
                 }
                 else if (e.type == SDL.SDL_EventType.SDL_MOUSEBUTTONUP)
                 {
                     if (e.button.button == SDL.SDL_BUTTON_LEFT)
-                        ACIA._mouseButtons &= ~0x02; // Apagar Bit 1
+                        ACIA._mouseButtons &= ~0x02; // Clear Bit 1
                     if (e.button.button == SDL.SDL_BUTTON_RIGHT)
-                        ACIA._mouseButtons &= ~0x01; // Apagar Bit 0
+                        ACIA._mouseButtons &= ~0x01; // Clear Bit 0
 
                     ACIA.SendMousePacket(0, 0);
                 }

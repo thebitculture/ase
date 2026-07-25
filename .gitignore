@@ -400,3 +400,5 @@ FodyWeavers.xsd
 # Mac
 .DS_Store
 
+# Local properties
+Local.props

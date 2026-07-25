@@ -113,8 +113,8 @@ namespace ASE
             control = r.U8();
             soundMode = r.U8();
             playing = r.Bool();
-            // xsint se restaura directamente, sin pasar por SetXsint: el estado del MFP
-            // (GPIP7, Timer A) viene ya restaurado de su propia sección
+            // xsint is restored directly, without going through SetXsint: the MFP state
+            // (GPIP7, Timer A) has already been restored from its own section
             xsint = r.Bool();
             frameStartReg = r.U32();
             frameEndReg = r.U32();

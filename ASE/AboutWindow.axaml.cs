@@ -17,13 +17,24 @@ public partial class AboutWindow : Window
     {
         base.OnOpened(e);
 
+        // The emulator parks (and stops receiving host input) while the window is open
+        ASEMain.EnterUiPause();
+
         TextVersion.Text = TextVersion.Text.Replace("{{version}}", Config.Version);
+
+        SwitchCheckForUpdates.IsChecked = Config.ConfigOptions.RunninConfig.CheckForUpdates;
 
         if (ReleaseChecker.ReleaseInfo != null && ReleaseChecker.ReleaseInfo.ExistsNewVersion)
         {
             TextNewVersion.Text = TextNewVersion.Text.Replace("{{version}}", ReleaseChecker.ReleaseInfo.TagName);
             StackNewVersion.IsVisible = true;
         }
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        base.OnClosed(e);
+        ASEMain.ExitUiPause();
     }
 
     private async void StackNewVersion_Tapped(object sender, Avalonia.Input.TappedEventArgs e)
@@ -54,6 +65,9 @@ public partial class AboutWindow : Window
 
     private void ButtonOkay_Click(object sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
+        Config.ConfigOptions.RunninConfig.CheckForUpdates = SwitchCheckForUpdates.IsChecked == true;
+        Program.Config.DumpJsonConfig();
+
         Close();
     }
 }

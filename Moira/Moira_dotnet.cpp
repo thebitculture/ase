@@ -12,11 +12,16 @@
 class MoiraHost : public moira::Moira {
 private:
     moira_callbacks cb;
-    
+
     // Campos para manejar el bus error pendiente
     bool pendingBusError;
     uint32_t busErrorAddress;
     bool busErrorIsWrite;
+
+    // Breakpoint latch. didReachBreakpoint fires at the end of the instruction that
+    // precedes the guarded one (pc0 == guarded address), so when the run loop stops
+    // the guarded instruction has NOT been executed yet.
+    bool bpHit;
 
     // Método helper para lanzar bus error si está pendiente
     void throwPendingBusErrorIfNeeded() const {
@@ -36,10 +41,25 @@ private:
     }
 
 public:
-    explicit MoiraHost(const moira_callbacks& cbs) : cb(cbs), 
-        pendingBusError(false), busErrorAddress(0), busErrorIsWrite(false) {
+    explicit MoiraHost(const moira_callbacks& cbs) : cb(cbs),
+        pendingBusError(false), busErrorAddress(0), busErrorIsWrite(false),
+        bpHit(false) {
         // Vectors for IRQs will be managed by ASE
         irqMode = moira::IrqMode::USER;
+    }
+
+    // ---- Breakpoints ----
+
+    void didReachBreakpoint(uint32_t addr) override { (void)addr; bpHit = true; }
+
+    bool breakpointWasHit() const { return bpHit; }
+
+    // Like Moira::executeUntil, but stops at the first breakpoint hit. The latch is
+    // cleared on entry, so a stale hit (e.g. from single-stepping onto a guarded
+    // address with moira_execute) never blocks a later run.
+    void executeUntilBp(int64_t targetCycle) {
+        bpHit = false;
+        while (getClock() < targetCycle && !bpHit) execute();
     }
 
     void sync(int cycles) override {
@@ -81,7 +101,7 @@ public:
     // Normal OS service calls (TRAP, TRAPV, CHK, divide-by-zero, trace) are not logged.
     void willExecute(moira::M68kException exc, uint16_t vector) override {
         using E = moira::M68kException;
-        if (!std::getenv("MOIRA_TRACE_EXC")) return;
+
         if (exc != E::BUS_ERROR && exc != E::ADDRESS_ERROR && exc != E::ILLEGAL &&
             exc != E::PRIVILEGE && exc != E::LINEA && exc != E::LINEF &&
             exc != E::FORMAT_ERROR && exc != E::IRQ_SPURIOUS) return;
@@ -147,12 +167,20 @@ void moira_destroy(moira_handle h) {
 // Running CPU
 void moira_reset(moira_handle h) { H(h)->reset(); }
 void moira_execute(moira_handle h) { H(h)->execute(); }
-void moira_execute_cycles(moira_handle h, int64_t cycles) { H(h)->execute(cycles); }
-void moira_execute_until(moira_handle h, int64_t cycle) { H(h)->executeUntil(cycle); }
+void moira_execute_cycles(moira_handle h, int64_t cycles) { H(h)->executeUntilBp(H(h)->getClock() + cycles); }
+void moira_execute_until(moira_handle h, int64_t cycle) { H(h)->executeUntilBp(cycle); }
 void moira_setSupervisorMode(moira_handle h, bool s) { H(h)->setSupervisorMode(s); }
-void moira_triggerBusError(moira_handle h, uint32_t faultaddress, bool isWrite) { 
+void moira_triggerBusError(moira_handle h, uint32_t faultaddress, bool isWrite) {
     H(h)->scheduleBusError(faultaddress, isWrite);
 }
+
+// Breakpoints
+void moira_bp_setAt(moira_handle h, uint32_t addr) { H(h)->debugger.breakpoints.setAt(addr); }
+void moira_bp_removeAt(moira_handle h, uint32_t addr) { H(h)->debugger.breakpoints.removeAt(addr); }
+bool moira_bp_isSetAt(moira_handle h, uint32_t addr) { return H(h)->debugger.breakpoints.isSetAt(addr); }
+int64_t moira_bp_count(moira_handle h) { return H(h)->debugger.breakpoints.elements(); }
+void moira_bp_removeAll(moira_handle h) { H(h)->debugger.breakpoints.removeAll(); }
+bool moira_bp_wasHit(moira_handle h) { return H(h)->breakpointWasHit(); }
 
 // Clock
 int64_t moira_getClock(moira_handle h) { return H(h)->getClock(); }

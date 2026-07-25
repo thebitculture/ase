@@ -50,32 +50,33 @@ namespace ASE
         const int V_STOP_60  = 234;
         const int V_STOP_BOTTOM_OPEN = 308;   // safety limit for an opened bottom border
 
-        // ===================== Visible window (full PAL overscan, centred) =====================
+        // ===================== Visible window (what a real TV shows, centred) =====================
         // Horizontal units are "low-res pixels" == DE cycles; each maps to 2 texture pixels
         // (low-res is pixel-doubled). Vertical units are scanlines, 1:1 with texture rows.
         //
-        // The window keeps the FULL PAL overscan span (460 px x 274 lines) but is positioned so
-        // the normal 320x200 display sits in the centre, giving symmetric borders instead of the
-        // hardware's lopsided overscan (which reaches further right/bottom, into H/V blanking).
-        // The display centre is cycle 216 (= (56+376)/2) and line 163 (= (63+263)/2), so the
-        // window is centred by making LEFT+RIGHT = 432 and TOP+BOTTOM = 326:
-        //   left/right border = 70 px each      top/bottom border = 37 lines each
-        // The deepest, blanking-side ~18 px of an opened right border and ~8 lines of an opened
-        // bottom border fall outside the window (they are not visible on a real TV either); every
-        // other border-removal trick is shown in full.
-        public const int VISIBLE_LEFT_CYCLE  = -14;   // 56 - 70   (display centred horizontally)
-        public const int VISIBLE_RIGHT_CYCLE = 446;   // 376 + 70
-        public const int VISIBLE_TOP_LINE    = 26;    // 63 - 37   (display centred vertically)
-        public const int VISIBLE_BOTTOM_LINE = 300;   // 263 + 37
+        // The window matches what a 4:3 PAL tube actually displays: ~52 µs of active line
+        // (52 µs at 8 MHz = 416 px) over ~288 visible lines, positioned so the normal 320x200
+        // display sits in the centre (the display centre is cycle 216 = (56+376)/2 and line
+        // 163 = (63+263)/2):
+        //   left/right border = 48 px each      top/bottom border = 44 lines each
+        // With the 12/13 ST pixel aspect this window is *exactly* the 4:3 tube. An opened
+        // bottom border fits in full; border-removal tricks can drive DE beyond the window
+        // horizontally (from cycle 4 on the left, up to cycle 464 on an opened right border) —
+        // that content is clipped here just as a TV loses it to blanking/overscan. Widen the
+        // window if you ever need to inspect it.
+        public const int VISIBLE_LEFT_CYCLE  = 8;     // 56 - 48   (display centred horizontally)
+        public const int VISIBLE_RIGHT_CYCLE = 424;   // 376 + 48
+        public const int VISIBLE_TOP_LINE    = 19;    // 63 - 44   (display centred vertically)
+        public const int VISIBLE_BOTTOM_LINE = 307;   // 263 + 44
 
-        public const int BUFFER_WIDTH  = (VISIBLE_RIGHT_CYCLE - VISIBLE_LEFT_CYCLE) * 2; // 920
-        public const int BUFFER_HEIGHT = VISIBLE_BOTTOM_LINE - VISIBLE_TOP_LINE;          // 274
+        public const int BUFFER_WIDTH  = (VISIBLE_RIGHT_CYCLE - VISIBLE_LEFT_CYCLE) * 2; // 832
+        public const int BUFFER_HEIGHT = VISIBLE_BOTTOM_LINE - VISIBLE_TOP_LINE;          // 288
 
         // Texture rectangle of the normal (non-overscan) 320x200 display inside the buffer.
         // Used to crop back to the borderless view when ShowBorders is off. With the centred
-        // window the display is symmetric inside the buffer (140 px / 37 lines margin each side).
-        public const int DISPLAY_ORIGIN_X  = (DE_START_50 - VISIBLE_LEFT_CYCLE) * 2;       // 140
-        public const int DISPLAY_ORIGIN_Y  = V_START_50 - VISIBLE_TOP_LINE;                // 37
+        // window the display is symmetric inside the buffer (96 px / 44 lines margin each side).
+        public const int DISPLAY_ORIGIN_X  = (DE_START_50 - VISIBLE_LEFT_CYCLE) * 2;       // 96
+        public const int DISPLAY_ORIGIN_Y  = V_START_50 - VISIBLE_TOP_LINE;                // 44
         public const int DISPLAY_TEX_WIDTH = (DE_STOP_50 - DE_START_50) * 2;               // 640
         public const int DISPLAY_TEX_HEIGHT = V_STOP_50 - V_START_50;                      // 200
 
