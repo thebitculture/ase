@@ -67,7 +67,14 @@ namespace ASE
 
                     TinyDialogs.MessageBox("Error", "Error when calling SDL_CreateWindowFrom, I can't continue like this.", MessageBoxDialogType.Ok, MessageBoxIconType.Error, MessageBoxButton.Ok);
                     Close();
+                    return;
                 }
+
+                // X11 hands over the window but not its input: unlike the Windows and macOS
+                // backends, SDL selects no event on a window it did not create, so without this
+                // it would never see the keyboard, the mouse capture or even the gamepad.
+                if (OperatingSystem.IsLinux() && !X11Input.AttachInput(_sdlWindowPtr, out string x11Error))
+                    ColoredConsole.WriteLine($"Warning: could not attach the X11 input to the window ([[red]]{x11Error}[[/red]]): keyboard, mouse capture and gamepad will not work");
 
                 // If initialization is successful, start the emulator main loop
                 ASEMain.Init(this);

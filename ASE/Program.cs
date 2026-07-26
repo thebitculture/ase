@@ -24,6 +24,7 @@
 
 using SDL2;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using TinyDialogsNet;
 using Avalonia;
 using Avalonia.Native;
@@ -49,9 +50,51 @@ namespace ASE
                 .UseReactiveUI(_ => { });
 
 
+        // Names dlopen() is asked for, in order, when resolving SDL2 on Linux. A copy shipped
+        // next to the executable wins over the system one, as the bundled SDL2.dll/libSDL2.dylib
+        // do on the other platforms.
+        static readonly string[] LinuxSdlNames =
+        [
+            "libSDL2.so",           // bundled next to the executable (checked in the output directory)
+            "libSDL2-2.0.so.0",     // the SONAME every distribution installs with the runtime package
+            "libSDL2-2.0.so"
+        ];
+
+        /// <summary>
+        /// Teaches .NET how to find SDL2 on Linux, where it is not bundled but taken from the
+        /// distribution. The default probing for <c>DllImport("SDL2")</c> only tries the
+        /// unversioned <c>libSDL2.so</c>, a symlink that belongs to the *development* package:
+        /// on a machine with just the runtime package (<c>libsdl2-2.0-0</c> and friends) only the
+        /// SONAME <c>libSDL2-2.0.so.0</c> exists and the emulator died at startup with a
+        /// DllNotFoundException. Returning IntPtr.Zero leaves the default probing in charge.
+        /// </summary>
+        static void RegisterSdlLibraryResolver()
+        {
+            if (!OperatingSystem.IsLinux())
+                return;
+
+            NativeLibrary.SetDllImportResolver(typeof(SDL).Assembly, (libraryName, assembly, searchPath) =>
+            {
+                if (libraryName != "SDL2")
+                    return IntPtr.Zero;
+
+                foreach (string name in LinuxSdlNames)
+                    if (NativeLibrary.TryLoad(Path.Combine(AppContext.BaseDirectory, name), out nint bundled))
+                        return bundled;
+
+                foreach (string name in LinuxSdlNames)
+                    if (NativeLibrary.TryLoad(name, out nint system))
+                        return system;
+
+                return IntPtr.Zero;
+            });
+        }
+
         [STAThread]
         static void Main(string[] args)
         {
+            RegisterSdlLibraryResolver();
+
             Config = new Config();
             Config.LoadConfig(args);
 
@@ -65,7 +108,15 @@ namespace ASE
 
             SDL.SDL_SetHint(SDL.SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");
             SDL.SDL_SetHint(SDL.SDL_HINT_MAC_BACKGROUND_APP, "1");
-            
+
+            // Avalonia only has an X11 backend on Linux (even inside a Wayland session, where it
+            // runs through XWayland), so SDL must pick X11 as well: SDL_CreateWindowFrom cannot
+            // adopt an X11 window if SDL chose the Wayland driver — the default on several
+            // distributions — and the emulator would come up with no input at all. An explicit
+            // SDL_VIDEODRIVER in the environment still wins: SDL_SetHint never overrides it.
+            if (OperatingSystem.IsLinux() && !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DISPLAY")))
+                SDL.SDL_SetHint("SDL_VIDEODRIVER", "x11");
+
             if (SDL.SDL_Init(SDL.SDL_INIT_AUDIO | SDL.SDL_INIT_GAMECONTROLLER | SDL.SDL_INIT_VIDEO) < 0)
             {
                 Console.WriteLine($"Error SDL: {SDL.SDL_GetError()}");
