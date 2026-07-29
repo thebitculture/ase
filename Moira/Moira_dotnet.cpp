@@ -102,6 +102,11 @@ public:
     void willExecute(moira::M68kException exc, uint16_t vector) override {
         using E = moira::M68kException;
 
+        // Opt-in, as the header above says: TOS raises line-F on every GEM call, so without this
+        // guard a normal boot buries the console under exception dumps. Do not drop it again while
+        // debugging — export MOIRA_TRACE_EXC instead.
+        if (!std::getenv("MOIRA_TRACE_EXC")) return;
+
         if (exc != E::BUS_ERROR && exc != E::ADDRESS_ERROR && exc != E::ILLEGAL &&
             exc != E::PRIVILEGE && exc != E::LINEA && exc != E::LINEF &&
             exc != E::FORMAT_ERROR && exc != E::IRQ_SPURIOUS) return;

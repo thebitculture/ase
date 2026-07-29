@@ -90,6 +90,84 @@ namespace ASE
             });
         }
 
+        // File names DllImport("moira") ends up loading, per platform. Spelled out so the preflight
+        // check below names the same file the runtime looks for.
+        static string MoiraFileName =>
+            OperatingSystem.IsWindows() ? "moira.dll" :
+            OperatingSystem.IsMacOS() ? "moira.dylib" : "moira.so";
+
+        // Pieces of the Visual C++ runtime moira.dll imports when it is built against the dynamic
+        // CRT (/MD). They are not part of Windows: they arrive with the "Visual C++ 2015-2022
+        // Redistributable", which every developer machine has and a clean install does not.
+        static readonly string[] WindowsVcRuntime =
+        [
+            "VCRUNTIME140.dll",
+            "VCRUNTIME140_1.dll",
+            "MSVCP140.dll"
+        ];
+
+        /// <summary>
+        /// Loads the native CPU core up front so a failure is reported as something actionable.
+        /// .NET raises "DllNotFoundException: Dll was not found" both when moira.dll is missing and
+        /// when it is present but one of *its* dependencies cannot be resolved, naming in either
+        /// case the library that was requested — which sends people hunting for a file that was
+        /// never absent.
+        /// </summary>
+        /// <returns>true if the library loaded; false after reporting why it did not.</returns>
+        static bool CheckNativeCpuCore()
+        {
+            if (NativeLibrary.TryLoad("moira", typeof(Moira).Assembly, null, out _))
+                return true;
+
+            string path = Path.Combine(AppContext.BaseDirectory, MoiraFileName);
+            string reason;
+
+            if (!File.Exists(path))
+            {
+                reason = $"{MoiraFileName} is missing from {AppContext.BaseDirectory}.";
+            }
+            else
+            {
+                string[] missing = OperatingSystem.IsWindows()
+                    ? WindowsVcRuntime.Where(dll => !NativeLibrary.TryLoad(dll, out _)).ToArray()
+                    : [];
+
+                reason = missing.Length > 0
+                    ? $"{MoiraFileName} could not be loaded because {string.Join(", ", missing)} is not " +
+                       "installed on this system. Install the Microsoft Visual C++ 2015-2022 Redistributable " +
+                       "(x64) from https://aka.ms/vs/17/release/vc_redist.x64.exe"
+                    : $"{MoiraFileName} was found but could not be loaded: a library it depends on is " +
+                      $"missing, or it was built for a different architecture.{LoaderError(path)}";
+            }
+
+            ColoredConsole.WriteLine($"[[red]]{reason}[[/red]]");
+
+            Dialogs.MessageBox("ASE cannot start", ColoredConsole.Strip(reason),
+                MessageBoxDialogType.Ok, MessageBoxIconType.Error, MessageBoxButton.Ok)
+                .GetAwaiter().GetResult();
+
+            return false;
+        }
+
+        /// <summary>
+        /// The platform loader's own explanation for a library that refuses to load, ready to be
+        /// appended to a sentence. On Unix this is the dlerror text, which names the dependency it
+        /// could not resolve; on Windows it is the HRESULT message. Empty when the load
+        /// unexpectedly succeeds, which leaves the generic wording standing on its own.
+        /// </summary>
+        static string LoaderError(string path)
+        {
+            try
+            {
+                NativeLibrary.Load(path);
+                return string.Empty;
+            }
+            catch (Exception ex)
+            {
+                return $" The system reports: {ex.Message}";
+            }
+        }
+
         [STAThread]
         static void Main(string[] args)
         {
@@ -97,6 +175,11 @@ namespace ASE
 
             Config = new Config();
             Config.LoadConfig(args);
+
+            // Before anything else touches the CPU core: a machine without the native library (or
+            // without what it depends on) must be told what to install, not handed a stack trace.
+            if (!CheckNativeCpuCore())
+                return;
 
             if (ConfigOptions.RunninConfig.CheckForUpdates)
             {

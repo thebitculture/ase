@@ -1,6 +1,9 @@
 
 cmake_minimum_required(VERSION 3.15)
 
+cmake_policy(SET CMP0091 NEW)
+project(moira CXX)
+
 add_library(moira SHARED
  Moira.cpp
  MoiraDebugger.cpp
@@ -25,10 +28,15 @@ endif()
 if(MSVC)
     target_compile_options(moira PUBLIC /W4 /bigobj) # /WX disabled for now
     target_compile_options(moira PUBLIC /wd4100 /wd4201 /wd4324 /wd4458 /wd4127)
+
+    # /MT (/MTd for Debug): no VCRUNTIME140*/MSVCP140 imports
+    set_property(TARGET moira PROPERTY
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
 if(MINGW)
     target_compile_options(moira PUBLIC -Wa,-mbig-obj)
+    target_link_options(moira PRIVATE -static)
 endif()
 
 set_target_properties(moira PROPERTIES OUTPUT_NAME "moira")

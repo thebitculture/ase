@@ -103,7 +103,7 @@
 		<None Update="GameMenus.json">
 		  <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 		</None>
-		<None Update="native/libSDL2.dylib" Condition="'$(OS)' != 'Windows_NT'">
+		<None Update="native/libSDL2.dylib" Condition="$([MSBuild]::IsOSPlatform('OSX'))">
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 			<Link>libSDL2.dylib</Link>
 		</None>
@@ -111,13 +111,17 @@
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 			<Link>SDL2.dll</Link>
 		</None>
-		<None Update="native\moira.dll">
+		<None Update="native/moira.dll" Condition="'$(OS)' == 'Windows_NT'">
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 			<Link>moira.dll</Link>
 		</None>
-    		<None Update="native/moira.dylib" Condition="'$(OS)' != 'Windows_NT'">
+    		<None Update="native/moira.dylib" Condition="$([MSBuild]::IsOSPlatform('OSX'))">
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 			<Link>moira.dylib</Link>
+		</None>
+		<None Update="native/moira.so" Condition="$([MSBuild]::IsOSPlatform('Linux'))">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+			<Link>moira.so</Link>
 		</None>
 	</ItemGroup>
 
