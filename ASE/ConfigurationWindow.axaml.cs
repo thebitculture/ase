@@ -12,6 +12,15 @@ namespace ASE
         Config.ConfigOptions configBackup;
         bool ForceReset = false;
 
+        // The model ComboBox raises Model_SelectionChanged while its binding is first
+        // resolved (DataContext assignment in the constructor); the ROM/model guard must
+        // not fire until the user actually interacts with the window.
+        bool _uiReady = false;
+
+        // Last model the ROM/model guard accepted, so a rejected change can snap back to it
+        // (preserving e.g. a Mega/blitter choice) instead of a hardcoded default.
+        int _lastValidModelIndex;
+
         bool _redefineIsRunning = false;
         Button _ButtonRedefineStarted;
         TextBlock _TextBlockJoykey;
@@ -33,6 +42,7 @@ namespace ASE
                 Bloom = Config.ConfigOptions.RunninConfig.Bloom,
                 Mask = Config.ConfigOptions.RunninConfig.Mask,
                 Noise = Config.ConfigOptions.RunninConfig.Noise,
+                DisableCrtEffects = Config.ConfigOptions.RunninConfig.DisableCrtEffects,
                 ShowBorders = Config.ConfigOptions.RunninConfig.ShowBorders,
                 
                 MouseSensitivity = Config.ConfigOptions.RunninConfig.MouseSensitivity,
@@ -62,13 +72,21 @@ namespace ASE
             RebindJoymap();
 
             chkShowBorders.IsChecked = Config.ConfigOptions.RunninConfig.ShowBorders;
-            
+
+            // Assigning IsChecked raises IsCheckedChanged, which is what greys out the sliders
+            // when the effects come up already disabled.
+            ToggleDisableEffects.IsChecked = Config.ConfigOptions.RunninConfig.DisableCrtEffects;
+            UpdateEffectsSlidersEnabled();
+
             // Directories tab: edited locally and committed to the config on OK only,
             // so Cancel discards the changes without needing backup fields
             TextScreenshotsDir.Text = Config.ConfigOptions.RunninConfig.ScreenshotsPath;
             TextSnapshotsDir.Text = Config.ConfigOptions.RunninConfig.SnapshotsPath;
             TextDiskImagesDir.Text = Config.ConfigOptions.RunninConfig.DiskImagesPath;
             TextTOSRomsDir.Text = Config.ConfigOptions.RunninConfig.TOSRomsPath;
+
+            _lastValidModelIndex = (int)Config.ConfigOptions.RunninConfig.STModel;
+            _uiReady = true;
         }
 
         // The emulator parks (and stops receiving host input) while the window is open
@@ -115,16 +133,45 @@ namespace ASE
             var (canceled, selpath) = await Dialogs.OpenFile("Select TOS image file",
                 Config.DialogStartFolder(TextTOSRomsDir.Text), new FileFilter("TOS image", ["*.rom", "*.img", "*.tos"]));
 
-            if (!canceled && selpath.Count() == 1)
-            {
-                string TOSImagePath = selpath.First();
+            if (canceled || selpath.Count() != 1)
+                return;
 
-                if (CheckTOSCompatibility(TOSImagePath))
-                {
-                    Config.ConfigOptions.RunninConfig.TOSPath = TOSImagePath;
-                    TextTOSImage.Text = TOSImagePath;
-                    ForceReset = true;
-                }
+            string TOSImagePath = selpath.First();
+
+            if (!File.Exists(TOSImagePath))
+            {
+                TinyDialogs.MessageBox("Error", $"Selected TOS image '{TOSImagePath}' does not exist.", MessageBoxDialogType.Ok, MessageBoxIconType.Error, MessageBoxButton.Ok);
+                return;
+            }
+
+            long fileSize = new FileInfo(TOSImagePath).Length;
+
+            // A 192KB image is a TOS 1.00-1.04 (STF/FM); a 256KB one is a TOS 1.06-2.06 (STE).
+            // Anything else is not a TOS we can boot.
+            if (fileSize != 192 * 1024 && fileSize != 256 * 1024)
+            {
+                TinyDialogs.MessageBox("Error", $"Unrecognized TOS image. It must be 192KB (STF/FM, TOS 1.00-1.04) or 256KB (STE, TOS 1.06-2.06).", MessageBoxDialogType.Ok, MessageBoxIconType.Error, MessageBoxButton.Ok);
+                return;
+            }
+
+            // Commit the ROM first so the model auto-adjust below (which runs through
+            // Model_SelectionChanged) evaluates against the newly selected image.
+            Config.ConfigOptions.RunninConfig.TOSPath = TOSImagePath;
+            TextTOSImage.Text = TOSImagePath;
+            ForceReset = true;
+
+            // Rather than rejecting a ROM/model mismatch, steer the model to match the ROM:
+            //  - a 256KB (STE-only) image  -> switch to Atari STE
+            //  - a 192KB image on an STE   -> drop to Atari STF/FM (no blitter)
+            // A 192KB image on an STF/FM (with or without blitter) already matches; leave it.
+            if (fileSize == 256 * 1024)
+            {
+                if (Config.ConfigOptions.RunninConfig.STModel != Config.ConfigOptions.STModels.STE)
+                    ComboModel.SelectedIndex = (int)Config.ConfigOptions.STModels.STE;
+            }
+            else if (Config.ConfigOptions.RunninConfig.STModel == Config.ConfigOptions.STModels.STE)
+            {
+                ComboModel.SelectedIndex = (int)Config.ConfigOptions.STModels.ST;
             }
         }
 
@@ -269,6 +316,9 @@ namespace ASE
             Config.ConfigOptions.RunninConfig.Scanline = configBackup.Scanline;
             Config.ConfigOptions.RunninConfig.ChromAb = configBackup.ChromAb;
             Config.ConfigOptions.RunninConfig.Bloom = configBackup.Bloom;
+            Config.ConfigOptions.RunninConfig.Mask = configBackup.Mask;
+            Config.ConfigOptions.RunninConfig.Noise = configBackup.Noise;
+            Config.ConfigOptions.RunninConfig.DisableCrtEffects = configBackup.DisableCrtEffects;
             Config.ConfigOptions.RunninConfig.ShowBorders = configBackup.ShowBorders;
             
             Config.ConfigOptions.RunninConfig.MouseSensitivity = configBackup.MouseSensitivity;
@@ -315,7 +365,46 @@ namespace ASE
         public void OnBrowseDiskImagesDirClick(object sender, RoutedEventArgs e) => FileUtils.BrowseDirectory(TextDiskImagesDir, "Select disk images directory");
         public void OnBrowseTOSRomsDirClick(object sender, RoutedEventArgs e) => FileUtils.BrowseDirectory(TextTOSRomsDir, "Select TOS ROMs directory");
 
-        private void Model_SelectionChanged(object sender, SelectionChangedEventArgs e) => ForceReset = (Config.ConfigOptions.RunninConfig.STModel != configBackup.STModel) ? true : false;
+        private void Model_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            // Ignore the selection change raised while the binding is first resolved.
+            if (!_uiReady)
+                return;
+
+            var model = Config.ConfigOptions.RunninConfig.STModel;
+            string tospath = Config.ConfigOptions.RunninConfig.TOSPath;
+
+            // A 256KB TOS only runs on the STE. If one is loaded and the user picks an
+            // STF/FM model, we can't silently swap the ROM (unlike the browse flow), so
+            // reject it and snap the model back to STE.
+            if (model != Config.ConfigOptions.STModels.STE && IsSteOnlyRom(tospath))
+            {
+                TinyDialogs.MessageBox("Error", $"The selected TOS ROM is only compatible with the Atari STE.", MessageBoxDialogType.Ok, MessageBoxIconType.Error, MessageBoxButton.Ok);
+                ComboModel.SelectedIndex = _lastValidModelIndex;
+                return;
+            }
+
+            // Conversely, a 192KB TOS only runs on an STF/FM. If one is loaded and the user
+            // picks STE, reject it and snap back to the previous (STF/FM) model, keeping any
+            // blitter choice.
+            if (model == Config.ConfigOptions.STModels.STE && IsStfRom(tospath))
+            {
+                TinyDialogs.MessageBox("Error", $"The selected TOS ROM is only compatible with the Atari STF/FM.", MessageBoxDialogType.Ok, MessageBoxIconType.Error, MessageBoxButton.Ok);
+                ComboModel.SelectedIndex = _lastValidModelIndex;
+                return;
+            }
+
+            _lastValidModelIndex = (int)model;
+            ForceReset = model != configBackup.STModel;
+        }
+
+        // A 256KB TOS image (TOS 1.06-2.06) only boots on the STE.
+        static bool IsSteOnlyRom(string tospath)
+            => File.Exists(tospath) && new FileInfo(tospath).Length == 256 * 1024;
+
+        // A 192KB TOS image (TOS 1.00-1.04) only boots on an STF/FM (with or without blitter).
+        static bool IsStfRom(string tospath)
+            => File.Exists(tospath) && new FileInfo(tospath).Length == 192 * 1024;
         private void Memory_SelectionChanged(object sender, SelectionChangedEventArgs e) => ForceReset = (Config.ConfigOptions.RunninConfig.RAMConfiguration != configBackup.RAMConfiguration) ? true : false;
 
         private void SliderCurvature_OnValueChanged(object sender, RangeBaseValueChangedEventArgs e) => Config.ConfigOptions.RunninConfig.Curvature = (float)SliderCurvature.Value;
@@ -326,17 +415,27 @@ namespace ASE
         private void SliderMask_OnValueChanged(object sender, RangeBaseValueChangedEventArgs e) => Config.ConfigOptions.RunninConfig.Mask = (float)SliderMask.Value;
         private void SliderNoise_OnValueChanged(object sender, RangeBaseValueChangedEventArgs e) => Config.ConfigOptions.RunninConfig.Noise = (float)SliderNoise.Value;
 
-        private void ButtonZeroGLValues_OnClick(object sender, RoutedEventArgs e)
+        /// <summary>
+        /// Switches the whole CRT shader off (GLControl draws with a plain blit instead) rather
+        /// than zeroing the sliders: on a weak GPU the effects cost the same at 0 as at any other
+        /// value. The slider values survive, so turning it back on restores the previous look —
+        /// they are just greyed out meanwhile.
+        /// </summary>
+        private void ToggleDisableEffects_OnIsCheckedChanged(object sender, RoutedEventArgs e)
         {
-            Config.ConfigOptions.RunninConfig.Curvature = 0.0f;
-            Config.ConfigOptions.RunninConfig.Vignette = 0.0f;
-            Config.ConfigOptions.RunninConfig.Scanline = 0.0f;
-            Config.ConfigOptions.RunninConfig.ChromAb = 0.0f;
-            Config.ConfigOptions.RunninConfig.Bloom = 0.0f;
-            Config.ConfigOptions.RunninConfig.Mask = 0.0f;
-            Config.ConfigOptions.RunninConfig.Noise = 0.0f;
+            if (((ToggleSwitch)sender).IsChecked is bool isChecked)
+                Config.ConfigOptions.RunninConfig.DisableCrtEffects = isChecked;
 
-            RebindGLSliders();
+            UpdateEffectsSlidersEnabled();
+        }
+
+        void UpdateEffectsSlidersEnabled()
+        {
+            bool effectsOn = !Config.ConfigOptions.RunninConfig.DisableCrtEffects;
+
+            GridEffectSliders.IsEnabled = effectsOn;
+            PanelNoiseSlider.IsEnabled = effectsOn;
+            ButtonDefaultGLValues.IsEnabled = effectsOn;
         }
 
         private void ButtonDefaultGLValues_OnClick(object sender, RoutedEventArgs e)

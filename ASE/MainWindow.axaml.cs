@@ -10,6 +10,7 @@ using SDL2;
 using System;
 using TinyDialogsNet;
 using Tmds.DBus.Protocol;
+using static ASE.Config;
 
 namespace ASE
 {
@@ -82,7 +83,23 @@ namespace ASE
                 // The OpenGL control have a transparent overlay to capture input events
                 GlInputOverlay.PointerPressed += GL_OnPointerPressed;
                 GlInputOverlay.PointerReleased += GL_OnPointerReleased;
+
+                ShowUpdateWindowIfNeeded();
             }
+        }
+
+        /// <summary>
+        /// Announces the newer release found at startup. The check runs in Program.Main, before
+        /// Avalonia is up, so the window can only be raised here — posted rather than awaited,
+        /// since ShowDialog needs an owner whose OnOpened has already returned. The dialog holds
+        /// a UI pause, so the machine waits frozen for the answer instead of booting behind it.
+        /// </summary>
+        private void ShowUpdateWindowIfNeeded()
+        {
+            if (ReleaseChecker.ReleaseInfo?.ExistsNewVersion != true)
+                return;
+
+            Dispatcher.UIThread.Post(() => _ = new UpdateWindow().ShowDialog(this), DispatcherPriority.Loaded);
         }
 
         protected override void OnClosed(EventArgs e)

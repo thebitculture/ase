@@ -428,7 +428,7 @@ namespace ASE
                 if (!_commandLengths.TryGetValue(cmd, out int expectedLength))
                 {
                     // Unknown command -> discard immediately (IKBD treats as NOP)
-                    if (ConfigOptions.RunninConfig.DebugMode >= ConfigOptions.DebugModes.Information)
+                    if (ConfigOptions.RunninConfig.DebugMode >= ConfigOptions.DebugModes.Full)
                         ColoredConsole.WriteLine($"[[cyan]]IKBD[[/cyan]] unknown command [[red]]${cmd:X2}[[/red]] discarded");
                     _commandBuffer.Clear();
                     return;
@@ -449,7 +449,7 @@ namespace ASE
                 }
 
                 // ...Command is complete? execute it
-                if (ConfigOptions.RunninConfig.DebugMode >= ConfigOptions.DebugModes.Information)
+                if (ConfigOptions.RunninConfig.DebugMode >= ConfigOptions.DebugModes.Full)
                     ColoredConsole.WriteLine($"[[cyan]]IKBD[[/cyan]] cmd [[green]]${cmd:X2}[[/green]] (mouse={MouseEnabled}, joy={JoystickEnabled}, PC=${CPU._moira.PC0:X6})");
 
                 ExecuteCommand(cmd);

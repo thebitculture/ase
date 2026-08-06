@@ -6,6 +6,8 @@
  * 
  */
 
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using static ASE.Config;
 
 namespace ASE
@@ -54,6 +56,39 @@ namespace ASE
             return vec;
         }
 
+        // ---- Bus callbacks handed to the native core ----
+        //
+        // These are [UnmanagedCallersOnly] static methods rather than delegates on purpose. A
+        // delegate handed to native code is called through a runtime-generated marshalling stub,
+        // and the old wiring stacked a second hop on top of it (native -> stub -> closure ->
+        // Memory), so every single bus access paid for two indirections plus the stub. With the
+        // 68000 prefetching continuously this is the hottest path in the emulator — roughly two
+        // million accesses per emulated second — and the transition cost is most visible on slow
+        // hosts (Raspberry Pi 4, low-end PCs).
+        //
+        // The wrappers exist because the native signature carries the unused 'user' pointer, and
+        // because [UnmanagedCallersOnly] methods cannot be called from managed code — keeping the
+        // real work in the plain methods leaves the rest of the emulator able to use them.
+        //
+        // An exception must never escape one of these into native code: it cannot be caught across
+        // the boundary and terminates the process. Everything they reach (Memory bus accessors,
+        // IrqAck) reports faults through Moira's bus-error mechanism instead of throwing.
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        static byte BusRead8(IntPtr user, uint addr) => ASEMain._mem.CpuRead8(addr);
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        static ushort BusRead16(IntPtr user, uint addr) => ASEMain._mem.CpuRead16(addr);
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        static void BusWrite8(IntPtr user, uint addr, byte v) => ASEMain._mem.CpuWrite8(addr, v);
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        static void BusWrite16(IntPtr user, uint addr, ushort v) => ASEMain._mem.CpuWrite16(addr, v);
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+        static ushort BusIrqAck(IntPtr user, byte level) => IrqAck(level);
+
         /// <summary>
         /// Initializes the CPU and all associated hardware components to a known state, preparing the system for
         /// operation.
@@ -72,14 +107,19 @@ namespace ASE
             // Wire the CPU bus through the timing wrappers (CpuRead*/CpuWrite*) so the ST memory
             // wait states are applied once per bus cycle. They fall through to the raw Read*/Write*
             // accessors, which the rest of the emulator keeps using directly (no wait states).
-            _moira = new Moira(
-                ASEMain._mem.CpuRead8,
-                ASEMain._mem.CpuRead16,
-                ASEMain._mem.CpuWrite8,
-                ASEMain._mem.CpuWrite16,
-                null,
-                IrqAck
-                );
+            // 'sync' is left null so Moira keeps its own default; peripherals are advanced from
+            // ASEMain.RunCpuUntil instead.
+            unsafe
+            {
+                _moira = new Moira(
+                    &BusRead8,
+                    &BusRead16,
+                    &BusWrite8,
+                    &BusWrite16,
+                    null,
+                    &BusIrqAck
+                    );
+            }
 
             ASEMain._mfp = new MFP68901();
 

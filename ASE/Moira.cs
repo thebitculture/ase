@@ -15,65 +15,57 @@ namespace ASE
 {
     /// <summary>
     /// Wrapper for Moira 68k CPU emulator, providing methods to execute instructions, control CPU state, and
-    /// interact with memory and registers through user-supplied delegates.
+    /// interact with memory and registers through caller-supplied function pointers.
     /// </summary>
     /// <remarks>Moira enables integration of a 68k CPU core into .NET applications by allowing the user to
-    /// supply delegates for memory access, synchronization, and interrupt handling. The class exposes methods for
+    /// supply callbacks for memory access, synchronization, and interrupt handling. The class exposes methods for
     /// instruction execution, register manipulation, and disassembly, and supports both single-step and cycle-based
     /// execution. Thread safety is not guaranteed; callers should ensure appropriate synchronization if accessing
     /// instances from multiple threads. The class implements IDisposable and must be disposed to release native
     /// resources.</remarks>
-    public sealed class Moira : IDisposable
+    public sealed unsafe class Moira : IDisposable
     {
-        // -------------------- Public delegates --------------------
-
-        public delegate byte Read8(uint addr);
-        public delegate ushort Read16(uint addr);
-        public delegate void Write8(uint addr, byte value);
-        public delegate void Write16(uint addr, ushort value);
-        public delegate void Sync(int cycles);
-        public delegate ushort ReadIrqUserVector(byte level);
-
         // -------------------- Construction --------------------
 
+        /// <summary>
+        /// Creates the native CPU core and wires its bus to the supplied callbacks.
+        /// </summary>
+        /// <remarks>
+        /// The callbacks are raw function pointers, not delegates: they are meant to be
+        /// <see cref="System.Runtime.InteropServices.UnmanagedCallersOnlyAttribute"/> static methods (see
+        /// <c>CPU.BusRead8</c> and friends), which the native core can call without the marshalling stub a
+        /// delegate would need. This is the emulator's hottest path — the 68000 prefetches continuously, so
+        /// there are on the order of two million bus accesses per emulated second — and every indirection
+        /// removed here is CPU time given back on slow hosts.
+        /// <para>
+        /// A callback must never let an exception escape into native code: it cannot be caught across the
+        /// boundary and takes the process down.
+        /// </para>
+        /// <paramref name="sync"/> and <paramref name="readIrqUserVector"/> may be null, in which case Moira's
+        /// own default behaviour is used.
+        /// </remarks>
         public Moira(
-            Read8 read8,
-            Read16 read16,
-            Write8 write8,
-            Write16 write16,
-            Sync sync = null,
-            ReadIrqUserVector readIrqUserVector = null)
+            delegate* unmanaged[Cdecl]<IntPtr, uint, byte> read8,
+            delegate* unmanaged[Cdecl]<IntPtr, uint, ushort> read16,
+            delegate* unmanaged[Cdecl]<IntPtr, uint, byte, void> write8,
+            delegate* unmanaged[Cdecl]<IntPtr, uint, ushort, void> write16,
+            delegate* unmanaged[Cdecl]<IntPtr, int, void> sync,
+            delegate* unmanaged[Cdecl]<IntPtr, byte, ushort> readIrqUserVector)
         {
-            ArgumentNullException.ThrowIfNull(read8);
-            ArgumentNullException.ThrowIfNull(read16);
-            ArgumentNullException.ThrowIfNull(write8);
-            ArgumentNullException.ThrowIfNull(write16);
-
-            // Keep managed delegates alive (critical: prevents GC collection)
-            _read8 = read8;
-            _read16 = read16;
-            _write8 = write8;
-            _write16 = write16;
-            _sync = sync;
-            _readIrq = readIrqUserVector;
-
-            // Create unmanaged delegates that match the native signature
-            _r8 = (_, addr) => _read8(addr);
-            _r16 = (_, addr) => _read16(addr);
-            _w8 = (_, addr, v) => _write8(addr, v);
-            _w16 = (_, addr, v) => _write16(addr, v);
-            _syncNative = _sync is null ? null : new SyncFn((_, cycles) => _sync(cycles));
-            _irqNative = _readIrq is null ? null : new ReadIrqUserVectorFn((_, level) => _readIrq(level));
+            if (read8 == null)  throw new ArgumentNullException(nameof(read8));
+            if (read16 == null) throw new ArgumentNullException(nameof(read16));
+            if (write8 == null) throw new ArgumentNullException(nameof(write8));
+            if (write16 == null) throw new ArgumentNullException(nameof(write16));
 
             var cb = new Callbacks
             {
                 user = IntPtr.Zero,
-                read8 = _r8,
-                read16 = _r16,
-                write8 = _w8,
-                write16 = _w16,
-                sync = _syncNative,
-                readIrqUserVector = _irqNative
+                read8 = read8,
+                read16 = read16,
+                write8 = write8,
+                write16 = write16,
+                sync = sync,
+                readIrqUserVector = readIrqUserVector
             };
 
             _h = Native.moira_create(ref cb);
@@ -304,56 +296,24 @@ namespace ASE
 
         private IntPtr _h;
 
-        // Keep original managed delegates (user passed) alive
-        private readonly Read8 _read8;
-        private readonly Read16 _read16;
-        private readonly Write8 _write8;
-        private readonly Write16 _write16;
-        private readonly Sync _sync;
-        private readonly ReadIrqUserVector _readIrq;
-
-        // Keep unmanaged delegates alive
-        private readonly Read8Fn _r8;
-        private readonly Read16Fn _r16;
-        private readonly Write8Fn _w8;
-        private readonly Write16Fn _w16;
-        private readonly SyncFn _syncNative;
-        private readonly ReadIrqUserVectorFn _irqNative;
-
         // Native interop (internal/private)
 
         private const string Lib = "moira";
 
+        // Mirrors moira_callbacks in Moira_dotnet.h — field order and types must match it.
+        // No GC roots are needed here: the callbacks are pointers to static methods, which
+        // (unlike the delegates this used to hold) the collector can never move or reclaim.
         [StructLayout(LayoutKind.Sequential)]
         private struct Callbacks
         {
             public IntPtr user;
-            public Read8Fn read8;
-            public Read16Fn read16;
-            public Write8Fn write8;
-            public Write16Fn write16;
-            public SyncFn sync;
-            public ReadIrqUserVectorFn readIrqUserVector;
+            public delegate* unmanaged[Cdecl]<IntPtr, uint, byte> read8;
+            public delegate* unmanaged[Cdecl]<IntPtr, uint, ushort> read16;
+            public delegate* unmanaged[Cdecl]<IntPtr, uint, byte, void> write8;
+            public delegate* unmanaged[Cdecl]<IntPtr, uint, ushort, void> write16;
+            public delegate* unmanaged[Cdecl]<IntPtr, int, void> sync;                      // may be null
+            public delegate* unmanaged[Cdecl]<IntPtr, byte, ushort> readIrqUserVector;      // may be null
         }
-
-        // Native callback signatures (match your current DLL)
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-        private delegate byte Read8Fn(IntPtr user, uint addr);
-
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-        private delegate ushort Read16Fn(IntPtr user, uint addr);
-
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-        private delegate void Write8Fn(IntPtr user, uint addr, byte v);
-
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-        private delegate void Write16Fn(IntPtr user, uint addr, ushort v);
-
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-        private delegate void SyncFn(IntPtr user, int cycles);
-
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-        private delegate ushort ReadIrqUserVectorFn(IntPtr user, byte level);
 
         private static class Native
         {

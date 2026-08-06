@@ -27,7 +27,7 @@
 							<TextBlock Classes="section" Text="Machine"/>
 							<Grid ColumnDefinitions="110,*" RowDefinitions="Auto,Auto" RowSpacing="10">
 								<TextBlock Grid.Row="0" Grid.Column="0" VerticalAlignment="Center" Text="Atari model"/>
-								<ComboBox Grid.Row="0" Grid.Column="1" MaxDropDownHeight="140" HorizontalAlignment="Stretch"
+								<ComboBox x:Name="ComboModel" Grid.Row="0" Grid.Column="1" MaxDropDownHeight="140" HorizontalAlignment="Stretch"
 										  SelectedIndex="{Binding STModel, Mode=TwoWay}" SelectionChanged="Model_SelectionChanged">
 									<ComboBoxItem>Atari STF/FM</ComboBoxItem>
 									<ComboBoxItem>Atari STF/FM + Blitter</ComboBoxItem>
@@ -67,7 +67,7 @@
 					<Border Classes="card">
 						<StackPanel Spacing="10">
 							<TextBlock Classes="section" Text="CRT effects"/>
-							<Grid ColumnDefinitions="*,20,*" RowDefinitions="Auto,Auto,Auto" RowSpacing="4">
+							<Grid Name="GridEffectSliders" ColumnDefinitions="*,20,*" RowDefinitions="Auto,Auto,Auto" RowSpacing="4">
 
 								<StackPanel Grid.Column="0" Grid.Row="0" Orientation="Vertical">
 									<TextBlock Text="{Binding #SliderCurvature.Value, StringFormat={}Curvature : {0:0.000}}" VerticalAlignment="Center"/>
@@ -97,7 +97,7 @@
 								</StackPanel>
 							</Grid>
 							<Grid ColumnDefinitions="*,20,*">
-								<StackPanel Grid.Column="0" Orientation="Vertical">
+								<StackPanel Name="PanelNoiseSlider" Grid.Column="0" Orientation="Vertical">
 									<TextBlock Text="{Binding #SliderNoise.Value, StringFormat={}Noise : {0:0.000}}" VerticalAlignment="Center"/>
 									<Slider Minimum="0.0" Maximum="1.0" x:Name="SliderNoise" ValueChanged="SliderNoise_OnValueChanged" />
 								</StackPanel>
@@ -105,9 +105,13 @@
 									<CheckBox Name="chkShowBorders" IsCheckedChanged="ChkShowBorders_OnIsCheckedChanged">Show borders</CheckBox>
 								</StackPanel>
 							</Grid>
-							<StackPanel Spacing="8" Orientation="Horizontal" Margin="0,4,0,0">
-								<Button Name="ButtonZeroGLValues" Click="ButtonZeroGLValues_OnClick" Content="Disable all effects"/>
-								<Button Name="ButtonDefaultGLValues" Click="ButtonDefaultGLValues_OnClick" Content="Set default values"/>
+							<StackPanel Spacing="16" Orientation="Horizontal" Margin="0,4,0,0">
+								<!-- Bypasses the CRT shader altogether (plain blit): faster on weak GPUs.
+									 The slider values are kept, so switching it back off restores the look. -->
+								<ToggleSwitch Name="ToggleDisableEffects" VerticalAlignment="Center"
+											  OffContent="Disable all effects" OnContent="All effects disabled"
+											  IsCheckedChanged="ToggleDisableEffects_OnIsCheckedChanged"/>
+								<Button Name="ButtonDefaultGLValues" VerticalAlignment="Center" Click="ButtonDefaultGLValues_OnClick" Content="Set default values"/>
 							</StackPanel>
 						</StackPanel>
 					</Border>

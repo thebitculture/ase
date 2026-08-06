@@ -185,7 +185,11 @@ namespace ASE
             {
                 ReleaseChecker.IsNewVersionAvailableAsync().Wait();
 
-                if (ReleaseChecker.ReleaseInfo.ExistsNewVersion)
+                // The window offering to update is raised by MainWindow.OnOpened: Avalonia is not
+                // running yet at this point. This line stays for the console log.
+                // ReleaseInfo is null when the query failed (no network, GitHub down): not a reason
+                // to keep the emulator from starting.
+                if (ReleaseChecker.ReleaseInfo?.ExistsNewVersion == true)
                     ColoredConsole.WriteLine($"⭐⭐ New release [[yellow]]{ReleaseChecker.ReleaseInfo.TagName}[[/yellow]] available!! from [[magenta]]{ReleaseChecker.ReleaseInfo.HtmlUrl}[[/magenta]] ⭐⭐", ConfigOptions.DebugModes.Quiet);
             }
 

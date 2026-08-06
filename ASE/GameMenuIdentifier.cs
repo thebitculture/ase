@@ -79,11 +79,24 @@ namespace ASE
             { "KRAPPY", "PK" },
             { "PPKC", "PK" },
             { "KC", "PK" },
+            // Pompey Pirates
+            { "POMPEY", "PP" },
             // SuperGAU
             { "SG", "GG" },
             { "SGAU", "GG" },
-						// Superior
-            { "SUPERIOR", "SU" },
+            // Electric Mouse
+            { "EMOUSE", "EM" },
+            // Sewer Doc Disk
+            { "SEWERDOC", "SD" },
+            { "SDD", "SD" },
+            // Spaced Out
+            { "SPACED", "SO" },
+            { "PSOU", "SO" },
+            // T. E. R. Doc Disk
+            { "TERDOC", "TE" },
+            { "TERDD", "TE" },
+            // Vectronix
+            { "VECT", "VE" },
         };
 
         // Reverse index: group ID -> list of its alternative abbreviations.
@@ -142,7 +155,14 @@ namespace ASE
         /// </summary>
         public static GameMenuIdentifier LoadFromFile(string jsonPath)
         {
-            var json = File.ReadAllText(jsonPath);
+            if (!File.Exists(jsonPath))
+                return new GameMenuIdentifier(new List<GameEntry>());
+
+            string json = File.ReadAllText(jsonPath);
+            
+            if (string.IsNullOrEmpty(json))
+                return new GameMenuIdentifier(new List<GameEntry>());
+
             var catalog = JsonSerializer.Deserialize<List<GameEntry>>(json)
                            ?? new List<GameEntry>();
             return new GameMenuIdentifier(catalog);

@@ -116,6 +116,13 @@ namespace ASE
             // variable, self-stabilising wait modelled directly in Memory.ApplyBusWait.
             public int MfpWaitCycles { get; set; } = 4;
 
+            // Bypasses the CRT shader entirely (a plain blit is used instead) rather than just
+            // zeroing the sliders: with the effects at 0 the GPU still runs the whole fragment
+            // program — the five bloom taps, the noise hash, the two gamma powers — for every
+            // pixel. Meant for weak GPUs (Raspberry Pi and the like). The slider values are kept,
+            // so switching it back off restores the previous look.
+            public bool DisableCrtEffects { get; set; } = false;
+
             public float Curvature { get; set; } = 0.01f;
             public float Vignette { get; set; } = 0.18f;
             public float Scanline { get; set; } = 1.0f;
@@ -261,6 +268,20 @@ namespace ASE
                         if (parts.Length > 1 && bool.TryParse(parts[1], out bool _maxs))
                             ConfigOptions.RunninConfig.MaxSpeed = _maxs;
                         break;
+                    case "--profile":
+                        {
+                            // Default: one line per second of emulated time (50 Hz PAL).
+                            int every = 50;
+
+                            if (parts.Length > 1 && (!int.TryParse(parts[1], out every) || every <= 0))
+                            {
+                                ColoredConsole.WriteLine("Invalid profile interval. Use [[cyan]]--profile=N[[/cyan]], with N = frames between report lines.");
+                                every = 50;
+                            }
+
+                            FrameProfiler.Configure(every);
+                        }
+                        break;
                     case "--floppy":
                         if (parts.Length > 1)
                             ConfigOptions.RunninConfig.FloppyImagePath = parts[1];
@@ -313,25 +334,77 @@ namespace ASE
                         if (parts.Length > 1)
                             ConfigOptions.RunninConfig.LibraryPath = parts[1];
                         break;
-                    
+                    case "--no-effects":
+                        ConfigOptions.RunninConfig.DisableCrtEffects =
+                            parts.Length < 2 || !bool.TryParse(parts[1], out bool _nfx) || _nfx;
+                        break;
+
                     default:
-                        Console.WriteLine("Usage: ASE [options]");
-                        Console.WriteLine("Options:");
-                        Console.WriteLine("  --tos=<path>                  Path to the TOS ROM file (default: tos100.rom)");
-                        Console.WriteLine("  --altconfig=<path>            Loads alternative config");
-                        Console.WriteLine("  --debug[=level]               Debug verbosity: none|quiet|information|full (bare --debug = full)");
-                        Console.WriteLine("  --maxspeed=[true/false]       Run at max speed or ST speed");
-                        Console.WriteLine("  --floppy=[image file]         Starts with floppy image inserted");
-                        Console.WriteLine("  --snapshot=<path>             Restores a machine snapshot (.snap) on startup");
-                        Console.WriteLine("  --snapshots-dir=<path>        Directory where F11 saves machine snapshots");
-                        Console.WriteLine("  --screenshots-dir=<path>      Directory where Shift+F11 saves PNG screenshots");
-                        Console.WriteLine("  --library-dir=<path>          Directory for the software library");
-                        Console.WriteLine("  --mouse-sensitivity=N         Set mouse sensitivity (default: 2)");
-                        Console.WriteLine("  --help, -h                    Show this help message");
+                        // Anything unrecognized lands here as well, so name it before the list —
+                        // otherwise a typo just looks like the emulator refusing to start.
+                        if (parts[0].ToLower() is not ("--help" or "-h"))
+                            ColoredConsole.WriteLine($"Unknown option [[red]]{parts[0]}[[/red]].{Environment.NewLine}");
+
+                        PrintUsage();
                         Environment.Exit(0);
                         break;
                 }
             }
+        }
+
+        /// <summary>
+        /// Prints the command-line help. Every option the switch above understands is listed here;
+        /// the ones in square brackets work bare as well as with a value.
+        /// </summary>
+        static void PrintUsage()
+        {
+            // Defaults are read from a fresh ConfigOptions so the help cannot drift from the code.
+            var def = new ConfigOptions();
+
+            ColoredConsole.WriteLine("Usage: [[white]]ASE[[/white]] [options]");
+
+            HelpSection("Machine");
+            HelpOption("--tos", "=<path>", "TOS ROM image (192 KB for ST/Mega, 256 KB for STE)");
+            HelpOption("--altconfig", "=<path>", "Load this configuration file instead of the default one");
+            HelpOption("--maxspeed", "=true|false", "Run as fast as the host allows instead of at ST speed");
+
+            HelpSection("Media and directories");
+            HelpOption("--floppy", "=<path>", "Start with a disk image (.st/.msa/.stx/.zip) in drive A");
+            HelpOption("--snapshot", "=<path>", "Restore a machine snapshot (.snap) on startup");
+            HelpOption("--library-dir", "=<path>", "Folder of the game library (images + Library.json)");
+            HelpOption("--snapshots-dir", "=<path>", "Where F11 saves machine snapshots");
+            HelpOption("--screenshots-dir", "=<path>", "Where Shift+F11 saves PNG screenshots");
+
+            HelpSection("Display and input");
+            HelpOption("--no-effects", "[=true|false]", "Bypass the CRT shader: faster on weak GPUs");
+            HelpOption("--mouse-sensitivity", "=N", $"Mouse sensitivity, e.g. 2.5 (default: {def.MouseSensitivity})");
+
+            HelpSection("Timing (advanced)");
+            HelpOption("--cycleexact", "[=true|false]", $"Cycle-exact bus wait states (default: {(def.CycleExactBus ? "on" : "off")})");
+            HelpOption("--busphase", "=N", $"Phase of the 4-cycle MMU bus grid, 0-3 (default: {def.BusPhase})");
+            HelpOption("--mfpwait", "=N", $"Extra wait cycles per MFP access (default: {def.MfpWaitCycles})");
+
+            HelpSection("Diagnostics");
+            HelpOption("--debug", "[=level]", "Verbosity: none|quiet|information|full (bare = full)");
+            HelpOption("--profile", "[=N]", "Timing breakdown every N frames (default: 50)");
+            HelpOption("--help, -h", "", "Show this help message");
+        }
+
+        /// <summary>Section header of the help listing.</summary>
+        static void HelpSection(string title) =>
+            ColoredConsole.WriteLine($"{Environment.NewLine}[[white]]{title}:[[/white]]");
+
+        /// <summary>
+        /// One option of the help listing: flag in cyan, its argument in yellow, description
+        /// aligned to a fixed column. The padding is computed from the visible text, since the
+        /// colour markup is stripped before anything reaches the console.
+        /// </summary>
+        static void HelpOption(string flag, string argument, string description)
+        {
+            string padding = new string(' ', Math.Max(1, 30 - flag.Length - argument.Length));
+            string coloredArg = argument.Length > 0 ? $"[[yellow]]{argument}[[/yellow]]" : "";
+
+            ColoredConsole.WriteLine($"  [[cyan]]{flag}[[/cyan]]{coloredArg}{padding}{description}");
         }
 
         public static string GetAppDefaultConfigsFilePath()

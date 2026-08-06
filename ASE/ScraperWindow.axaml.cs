@@ -57,7 +57,7 @@ public partial class ScraperWindow : Window
         ButtonsScraper(true);
         TextFilename.Text = "Initializing...";
 
-        var gmidentifier = GameMenuIdentifier.LoadFromFile("GameMenus.json");
+        var gmidentifier = GameMenuIdentifier.LoadFromFile(Path.Combine(AppContext.BaseDirectory, "GameMenus.json"));
 
         if (File.Exists(Path.Combine(Config.ConfigOptions.RunninConfig.LibraryPath, "Library.json")))
         {

@@ -2,7 +2,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        mc:Ignorable="d" Width="500" Height="320"
+        mc:Ignorable="d" Width="500" SizeToContent="Height" 
         CanResize="False"
         WindowStartupLocation="CenterScreen"
         UseLayoutRounding="True"
@@ -36,8 +36,12 @@
                                 <TextBlock FontSize="11" Opacity="0.6" TextWrapping="Wrap"
                                            Text="From/To are hexadecimal addresses. Wrap PC keeps the current PC at the middle of the listing."/>
 
-                                <ToggleSwitch x:Name="tglRegisters" Content="Include registers"/>
-
+                                <StackPanel Orientation="Horizontal" Spacing="50">
+                                        <ToggleSwitch x:Name="tglRegisters" Content="Include registers"/>
+                                        <!-- Off drops the trailing "; $addr: hex" comment on every line -->
+                                        <ToggleSwitch x:Name="tglAddressDump" IsChecked="True" Content="Include address and hex dump"/>                                        
+                                </StackPanel>
+                                
                         </StackPanel>
                 </Border>
 

@@ -71,12 +71,21 @@ namespace ASE
         public static FloppyImage driveA = new FloppyImage();
         public static FloppyImage driveB = new FloppyImage();
 
-        // Double buffer: the emulation thread renders into _renderBuffer (no contention); at the
-        // end of each frame it is copied into ScreenBuffer under _syncLock, which the GL thread
-        // reads through SnapshotScreen. This prevents the GL thread from ever sampling a
-        // half-drawn frame (which showed up as flickering scanlines).
-        public static uint[] ScreenBuffer = new uint[ScreenViewSize];
-        static readonly uint[] _renderBuffer = new uint[ScreenViewSize];
+        // Frame hand-off to the GL thread, without copying anything.
+        // Three buffers rotate through three roles: the one the emulation is drawing into, the one
+        // holding the last finished frame, and the one the GL thread is uploading.
+        static uint[] _renderBuffer = new uint[ScreenViewSize];
+        static uint[] _readyBuffer = new uint[ScreenViewSize];
+        static uint[] _glBuffer = new uint[ScreenViewSize];
+
+        /// <summary>Whichever buffer holds the most recently published frame — the ready slot, or
+        /// the GL thread's once it has taken it. Nobody writes to either, so screenshots can read
+        /// it under the lock.</summary>
+        static uint[] _lastPublished;
+
+        /// <summary>Incremented on every published frame; the GL thread compares it against the
+        /// one it last uploaded to know whether there is anything new to push to the texture.</summary>
+        static long _frameSeq;
         public static bool IsMouseCaptured = false;
         public static MainWindow MainWindow;
 
@@ -97,8 +106,8 @@ namespace ASE
         }
 
         // Depth of the UI-window pause: every emulator dialog (library, configuration,
-        // scraper, debugger, about…) holds one reference while it is open, so stacked
-        // windows (library configuration → scraper) only resume when the last one closes.
+        // scraper, debugger, about) holds one reference while it is open, so stacked
+        // windows (library configuration -> scraper) only resume when the last one closes.
         static int _uiPauseDepth;
 
         /// <summary>Pauses the emulation for a UI window. Reference-counted: call
@@ -161,7 +170,7 @@ namespace ASE
             
             if (_audiodev == 0)
             {
-                Console.WriteLine("SDL_OpenAudioDevice error: " + SDL.SDL_GetError());
+                ColoredConsole.WriteLine($"[[red]]SDL_OpenAudioDevice error: {SDL.SDL_GetError()}[[/red]]");
                 return;
             }
 
@@ -239,6 +248,7 @@ namespace ASE
                 }
 
                 uint frameStart = SDL_GetTicks();
+                long profileFrameStart = FrameProfiler.Stamp();
 
                 bool isSTE = ConfigOptions.RunninConfig.STModel == ConfigOptions.STModels.STE;
 
@@ -275,7 +285,9 @@ namespace ASE
                         // queue and feed it to the IKBD at scanline granularity, so a key or
                         // gamepad change lands mid-frame like on a real ST instead of waiting
                         // for the next frame boundary.
+                        long profileMark = FrameProfiler.Stamp();
                         DrainSdlEvents();
+                        profileMark = FrameProfiler.AddInput(profileMark);
 
                         long lineBase = frameClockBase + (long)scanline * VideoTiming.CYCLES_PER_LINE;
                         VideoTiming.StartLine(scanline, lineBase);
@@ -305,6 +317,10 @@ namespace ASE
                         if (RunCpuUntil(lineBase + VideoTiming.CYCLES_PER_LINE)) { hitBreakpoint = true; break; }
                         ElapsedCycles += cyclesToLineEnd;
 
+                        // Everything above (both CPU slices and the chips they drive) is charged
+                        // to 'cpu'; what follows, to 'video'.
+                        profileMark = FrameProfiler.AddCpu(profileMark);
+
                         // Sync the remaining peripherals (the WD1772 is synced per slice
                         // inside RunCpuUntil: the DMA delivery of STX disks needs a
                         // granularity of a few cycles)
@@ -315,6 +331,8 @@ namespace ASE
 
                         if (line.Visible)
                             AtariStRenderer.BlitLineWithBorders(_renderBuffer, line);
+
+                        FrameProfiler.AddVideo(profileMark);
                     }
 
                     if (hitBreakpoint)
@@ -332,9 +350,19 @@ namespace ASE
                         continue;
                     }
 
-                    // Publish the finished frame to the GL thread atomically.
+                    // Publish the finished frame to the GL thread atomically: a reference swap,
+                    // no copy. The buffer taken in exchange still holds an old frame, which is
+                    // harmless because every frame is redrawn in full — BlitLineWithBorders fills
+                    // each row with the border colour before drawing the display over it, and it
+                    // runs for every row of the visible window.
+                    long profilePublish = FrameProfiler.Stamp();
                     lock (_syncLock)
-                        Array.Copy(_renderBuffer, ScreenBuffer, ScreenViewSize);
+                    {
+                        (_renderBuffer, _readyBuffer) = (_readyBuffer, _renderBuffer);
+                        _lastPublished = _readyBuffer;
+                        _frameSeq++;
+                    }
+                    FrameProfiler.AddPublish(profilePublish);
 
                     // Vsync completed
                     _mfp.irqController.RaiseVBL();
@@ -348,6 +376,8 @@ namespace ASE
 
                     if (!ConfigOptions.RunninConfig.MaxSpeed)
                     {
+                        long profileIdle = FrameProfiler.Stamp();
+
                         // Dynamic wait loop. It combines longer waits using SDL_Delay, which do not block the process,
                         // and then performs a fine-grained adjustment during the last few microseconds using SpinWait,
                         // which does block but is more precise. The longer waits allow SDL to keep collecting events in
@@ -364,11 +394,15 @@ namespace ASE
                                 Thread.SpinWait(10); // < 2 ms, active wait
                         }
 
+                        FrameProfiler.AddIdle(profileIdle);
+
                         // Check if we are late
                         double late = (double)sw.ElapsedTicks / Stopwatch.Frequency - next;
                         if (late > 0.1)
                             next = (double)sw.ElapsedTicks / Stopwatch.Frequency;
                     }
+
+                    FrameProfiler.EndFrame(profileFrameStart);
                 }
                 else
                 {
@@ -451,12 +485,27 @@ namespace ASE
             }
         }
 
-        /// <summary>Copies the latest published frame into <paramref name="dest"/> under the
-        /// frame lock, so the GL thread never reads a frame that is still being drawn.</summary>
-        public static void SnapshotScreen(byte[] dest)
+        /// <summary>
+        /// Hands the GL thread the last published frame, or <c>null</c> when it already holds the
+        /// newest one (the emulation has not finished another frame since — the GL thread usually
+        /// draws faster than 50 Hz, so this is a common case and skips a pointless upload).
+        /// <para>
+        /// The returned buffer belongs to the caller until its next call: the emulation cannot
+        /// draw into it in the meantime. <paramref name="seenSeq"/> is the caller's bookmark and
+        /// is updated in place.
+        /// </para>
+        /// </summary>
+        public static uint[] AcquireFrame(ref long seenSeq)
         {
             lock (_syncLock)
-                System.Buffer.BlockCopy(ScreenBuffer, 0, dest, 0, dest.Length);
+            {
+                if (_frameSeq == seenSeq)
+                    return null;
+
+                seenSeq = _frameSeq;
+                (_glBuffer, _readyBuffer) = (_readyBuffer, _glBuffer);
+                return _glBuffer;
+            }
         }
 
         /// <summary>
@@ -548,7 +597,7 @@ namespace ASE
             int width = borders ? VideoTiming.BUFFER_WIDTH : VideoTiming.DISPLAY_TEX_WIDTH;
             int height = borders ? VideoTiming.BUFFER_HEIGHT : VideoTiming.DISPLAY_TEX_HEIGHT;
 
-            // ScreenBuffer pixels are RGBA in memory (0xAABBGGRR), same layout the GL texture uses
+            // Framebuffer pixels are RGBA in memory (0xAABBGGRR), same layout the GL texture uses
             byte[] row = new byte[width * 4];
 
             using var bmp = new WriteableBitmap(new PixelSize(width, height * 2), new Vector(96, 96),
@@ -557,9 +606,14 @@ namespace ASE
             {
                 lock (_syncLock)
                 {
+                    // No frame published yet (machine off, or a capture before the very first
+                    // frame): there is nothing to save, so no file is written.
+                    if (_lastPublished == null)
+                        return;
+
                     for (int y = 0; y < height; y++)
                     {
-                        System.Buffer.BlockCopy(ScreenBuffer,
+                        System.Buffer.BlockCopy(_lastPublished,
                             ((srcY + y) * VideoTiming.BUFFER_WIDTH + srcX) * 4, row, 0, row.Length);
                         Marshal.Copy(row, 0, fb.Address + (2 * y) * fb.RowBytes, row.Length);
                         Marshal.Copy(row, 0, fb.Address + (2 * y + 1) * fb.RowBytes, row.Length);
