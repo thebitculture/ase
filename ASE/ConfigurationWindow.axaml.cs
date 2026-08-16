@@ -1,6 +1,12 @@
+using Avalonia;
+using Avalonia.Animation;
+using Avalonia.Animation.Easings;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Interactivity;
+using Avalonia.Layout;
+using Avalonia.Media;
+using Avalonia.Threading;
 using SDL2;
 using TinyDialogsNet;
 using Avalonia.Input;
@@ -25,6 +31,13 @@ namespace ASE
         Button _ButtonRedefineStarted;
         TextBlock _TextBlockJoykey;
 
+        // Video-mode reveal: the CRT/borders card still collapses physically so the space is
+        // reclaimed, but its contents also fade and move a few pixels. This makes the state change
+        // read as a lightweight settings transition rather than a "roller blind".
+        double _crtExpandedHeight;
+        bool _crtLayoutReady;
+        readonly TranslateTransform _crtRevealTranslate = new();
+
         public ConfigurationWindow()
         {
             InitializeComponent();
@@ -44,7 +57,8 @@ namespace ASE
                 Noise = Config.ConfigOptions.RunninConfig.Noise,
                 DisableCrtEffects = Config.ConfigOptions.RunninConfig.DisableCrtEffects,
                 ShowBorders = Config.ConfigOptions.RunninConfig.ShowBorders,
-                
+                MonochromeMonitor = Config.ConfigOptions.RunninConfig.MonochromeMonitor,
+
                 MouseSensitivity = Config.ConfigOptions.RunninConfig.MouseSensitivity,
 
                 GamepadButtonX = Config.ConfigOptions.RunninConfig.GamepadButtonX,
@@ -55,6 +69,12 @@ namespace ASE
                 GamepadButtonRS = Config.ConfigOptions.RunninConfig.GamepadButtonRS,
                 GamepadButtonLB = Config.ConfigOptions.RunninConfig.GamepadButtonLB,
                 GamepadButtonRB = Config.ConfigOptions.RunninConfig.GamepadButtonRB,
+
+                // The emulation mode and the MT-32 volume: the MIDI ports and the ROM folder are
+                // edited locally and reach the config in OnOkClick, so Cancel has nothing to undo
+                // there. The volume, like the CRT sliders, is applied live and so needs restoring.
+                MidiEmulation = Config.ConfigOptions.RunninConfig.MidiEmulation,
+                Mt32Volume = Config.ConfigOptions.RunninConfig.Mt32Volume,
             };
 
             DataContext = Config.ConfigOptions.RunninConfig;
@@ -72,10 +92,15 @@ namespace ASE
             RebindJoymap();
 
             chkShowBorders.IsChecked = Config.ConfigOptions.RunninConfig.ShowBorders;
+            // Segmented monitor selector: only the monochrome half carries the handler,
+            // and setting both here runs before _uiReady, so it cannot request a reset.
+            RadioMonochromeMonitor.IsChecked = Config.ConfigOptions.RunninConfig.MonochromeMonitor;
+            RadioColourMonitor.IsChecked = !Config.ConfigOptions.RunninConfig.MonochromeMonitor;
 
-            // Assigning IsChecked raises IsCheckedChanged, which is what greys out the sliders
-            // when the effects come up already disabled.
-            ToggleDisableEffects.IsChecked = Config.ConfigOptions.RunninConfig.DisableCrtEffects;
+            // The switch reads as "Effects on/off": checked = effects enabled = NOT disabled.
+            // Assigning IsChecked raises IsCheckedChanged, which greys out the sliders when the
+            // effects come up already off.
+            ToggleEffects.IsChecked = !Config.ConfigOptions.RunninConfig.DisableCrtEffects;
             UpdateEffectsSlidersEnabled();
 
             // Directories tab: edited locally and committed to the config on OK only,
@@ -84,6 +109,16 @@ namespace ASE
             TextSnapshotsDir.Text = Config.ConfigOptions.RunninConfig.SnapshotsPath;
             TextDiskImagesDir.Text = Config.ConfigOptions.RunninConfig.DiskImagesPath;
             TextTOSRomsDir.Text = Config.ConfigOptions.RunninConfig.TOSRomsPath;
+
+            // MIDI tab: same deal as the directories above, plus the host port lists. The
+            // emulation ComboBox itself is bound to the config and selected itself when the
+            // DataContext was assigned.
+            TextMt32RomDir.Text = Config.ConfigOptions.RunninConfig.MT32Rompath;
+            // Ceiling before value: a Slider clamps whatever is assigned to its current range.
+            SliderMt32Volume.Maximum = Mt32Backend.MaxVolume;
+            SliderMt32Volume.Value = Config.ConfigOptions.RunninConfig.Mt32Volume;
+            LoadMidiDevices();
+            UpdateMidiVisibility();
 
             _lastValidModelIndex = (int)Config.ConfigOptions.RunninConfig.STModel;
             _uiReady = true;
@@ -94,6 +129,53 @@ namespace ASE
         {
             base.OnOpened(e);
             ASEMain.EnterUiPause();
+
+            // Set up the CRT reveal once the first layout has run, so the expanded panel's
+            // natural height is known (posted at Loaded priority, i.e. after layout).
+            Dispatcher.UIThread.Post(InitCrtReveal, DispatcherPriority.Loaded);
+        }
+
+        /// <summary>
+        /// Measures the CRT card at full size and applies the initial monitor state without animation.
+        /// Subsequent changes combine a quick fade and small vertical movement with the height change.
+        /// The opacity finishes before most of the collapse, so the clipping is barely perceptible.
+        /// </summary>
+        void InitCrtReveal()
+        {
+            double h = CrtEffectsClip.Bounds.Height;
+            _crtExpandedHeight = h > 1 ? h + 2 : 470;   // fallback if layout has not settled yet
+
+            CrtEffectsClip.RenderTransform = _crtRevealTranslate;
+
+            bool expanded = RadioMonochromeMonitor.IsChecked != true;
+            CrtEffectsClip.MaxHeight = expanded ? _crtExpandedHeight : 0;
+            CrtEffectsClip.Opacity = expanded ? 1 : 0;
+            CrtEffectsClip.IsHitTestVisible = expanded;
+            _crtRevealTranslate.Y = expanded ? 0 : -8;
+
+            // Height is deliberately slower than opacity: when collapsing, the controls disappear
+            // before the panel has visibly "rolled up"; on expand they gently settle into place.
+            CrtEffectsClip.Transitions = new Transitions
+            {
+                new DoubleTransition { Property = Layoutable.MaxHeightProperty, Duration = TimeSpan.FromMilliseconds(220), Easing = new CubicEaseInOut() },
+                new DoubleTransition { Property = Visual.OpacityProperty,       Duration = TimeSpan.FromMilliseconds(130), Easing = new CubicEaseInOut() },
+            };
+
+            _crtRevealTranslate.Transitions = new Transitions
+            {
+                new DoubleTransition { Property = TranslateTransform.YProperty, Duration = TimeSpan.FromMilliseconds(180), Easing = new CubicEaseInOut() },
+            };
+
+            _crtLayoutReady = true;
+        }
+
+        /// <summary>Shows or hides the colour-only CRT controls with a compact fade-and-lift reveal.</summary>
+        void SetCrtExpanded(bool expanded)
+        {
+            CrtEffectsClip.IsHitTestVisible = expanded;
+            CrtEffectsClip.MaxHeight = expanded ? _crtExpandedHeight : 0;
+            CrtEffectsClip.Opacity = expanded ? 1 : 0;
+            _crtRevealTranslate.Y = expanded ? 0 : -8;
         }
 
         protected override void OnClosed(EventArgs e)
@@ -188,6 +270,21 @@ namespace ASE
             if (!CheckTOSCompatibility(Config.ConfigOptions.RunninConfig.TOSPath))
                 return;
 
+            // The built-in MT-32 cannot do anything without its ROMs. Only the folder is checked:
+            // libmt32emu identifies the images by SHA-1, so their names prove nothing.
+            string mt32Roms = (TextMt32RomDir.Text ?? "").Trim();
+            bool mt32Selected = Config.ConfigOptions.RunninConfig.MidiEmulation == Config.ConfigOptions.MIDIEmulationOptions.BuiltInMT32;
+
+            if (mt32Selected && !Directory.Exists(mt32Roms))
+            {
+                TinyDialogs.MessageBox("Error", "The built-in Roland MT-32 emulation needs a folder holding its control and PCM ROM images.", MessageBoxDialogType.Ok, MessageBoxIconType.Error, MessageBoxButton.Ok);
+                return;
+            }
+
+            // A different ROM set is only picked up when the module is created again, i.e. on reset.
+            if (mt32Selected && mt32Roms != Config.ConfigOptions.RunninConfig.MT32Rompath)
+                ForceReset = true;
+
             if (ForceReset)
             {
                 MessageBoxButton result = TinyDialogs.MessageBox("Reset", $"ST must be reset to apply changes.", MessageBoxDialogType.YesNo, MessageBoxIconType.Warning, MessageBoxButton.Yes);
@@ -212,10 +309,22 @@ namespace ASE
             Config.ConfigOptions.RunninConfig.DiskImagesPath = (TextDiskImagesDir.Text ?? "").Trim();
             Config.ConfigOptions.RunninConfig.TOSRomsPath = (TextTOSRomsDir.Text ?? "").Trim();
 
+            // Save MIDI (the emulation mode itself is bound to the config and already applied).
+            // The ports are stored by name, so an entry left over from a device that is currently
+            // unplugged survives untouched.
+            Config.ConfigOptions.RunninConfig.MT32Rompath = mt32Roms;
+            Config.ConfigOptions.RunninConfig.MidiInDevice = SelectedMidiPort(ComboMidiIn);
+            Config.ConfigOptions.RunninConfig.MidiOutDevice = SelectedMidiPort(ComboMidiOut);
+
             Program.Config.DumpJsonConfig();
 
             if (ForceReset)
+            {
                 ASEMain.HardReset();
+                // The monitor type may have changed (colour ↔ monochrome): re-fit the window to
+                // the new picture aspect ratio.
+                ASEMain.MainWindow?.RefreshAspectRatio();
+            }
 
             Close();
         }
@@ -320,7 +429,8 @@ namespace ASE
             Config.ConfigOptions.RunninConfig.Noise = configBackup.Noise;
             Config.ConfigOptions.RunninConfig.DisableCrtEffects = configBackup.DisableCrtEffects;
             Config.ConfigOptions.RunninConfig.ShowBorders = configBackup.ShowBorders;
-            
+            Config.ConfigOptions.RunninConfig.MonochromeMonitor = configBackup.MonochromeMonitor;
+
             Config.ConfigOptions.RunninConfig.MouseSensitivity = configBackup.MouseSensitivity;
 
             Config.ConfigOptions.RunninConfig.GamepadButtonX = configBackup.GamepadButtonX;
@@ -331,7 +441,10 @@ namespace ASE
             Config.ConfigOptions.RunninConfig.GamepadButtonRS = configBackup.GamepadButtonRS;
             Config.ConfigOptions.RunninConfig.GamepadButtonLB = configBackup.GamepadButtonLB;
             Config.ConfigOptions.RunninConfig.GamepadButtonRB = configBackup.GamepadButtonRB;
-            
+
+            Config.ConfigOptions.RunninConfig.MidiEmulation = configBackup.MidiEmulation;
+            Config.ConfigOptions.RunninConfig.Mt32Volume = configBackup.Mt32Volume;
+
             Close();
         }
 
@@ -359,6 +472,91 @@ namespace ASE
 
             return true;
         }
+
+        // ==================== MIDI tab ====================
+
+        /// <summary>
+        /// Reveals the options that belong to the selected MIDI emulation: the host port mapping
+        /// for "System managed MIDI", the ROM folder for the built-in MT-32, neither when MIDI is
+        /// not emulated. Both grids live in the same row of the card, so the one that is hidden
+        /// gives its space back.
+        /// </summary>
+        void UpdateMidiVisibility()
+        {
+            var mode = Config.ConfigOptions.RunninConfig.MidiEmulation;
+
+            GridMidiSystem.IsVisible = mode == Config.ConfigOptions.MIDIEmulationOptions.System;
+            GridMidiMt32.IsVisible = mode == Config.ConfigOptions.MIDIEmulationOptions.BuiltInMT32;
+        }
+
+        private void MidiEmulation_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            UpdateMidiVisibility();
+
+            // Raised as well while the binding resolves in the constructor, before the port lists
+            // exist; everything below is a reaction to the user, so it waits for the real thing.
+            if (!_uiReady)
+                return;
+
+            // Switching to the host ports re-reads them, which doubles as the refresh path for a
+            // device plugged in while this window was open.
+            if (Config.ConfigOptions.RunninConfig.MidiEmulation == Config.ConfigOptions.MIDIEmulationOptions.System)
+                LoadMidiDevices();
+
+            // What the ST's MIDI port is wired to is decided when the machine is powered on, and
+            // MT-32 titles look for the module while loading, so a change only takes effect on a
+            // reset (OnOkClick asks for the confirmation).
+            if (Config.ConfigOptions.RunninConfig.MidiEmulation != configBackup.MidiEmulation)
+                ForceReset = true;
+        }
+
+        /// <summary>Fills both port dropdowns with what the host OS publishes right now.</summary>
+        void LoadMidiDevices()
+        {
+            // The first pass starts from the configured ports; on any later one (the list is read
+            // again whenever the user returns to this mode) the selection already in the window
+            // wins, so refreshing never undoes a choice that has not been saved yet.
+            string wantedIn = ComboMidiIn.ItemsSource is null ? Config.ConfigOptions.RunninConfig.MidiInDevice : SelectedMidiPort(ComboMidiIn);
+            string wantedOut = ComboMidiOut.ItemsSource is null ? Config.ConfigOptions.RunninConfig.MidiOutDevice : SelectedMidiPort(ComboMidiOut);
+
+            FillMidiPortCombo(ComboMidiIn, HostMidi.Inputs(), wantedIn);
+            FillMidiPortCombo(ComboMidiOut, HostMidi.Outputs(), wantedOut);
+        }
+
+        /// <summary>
+        /// Lists the given host ports, preselecting the configured one. Entries carry the stored
+        /// value in their Tag: the configuration keeps port *names*, since the platform indices
+        /// shift as devices come and go (see <see cref="HostMidi"/>).
+        /// </summary>
+        static void FillMidiPortCombo(ComboBox combo, IReadOnlyList<HostMidiPort> ports, string configured)
+        {
+            var items = new List<ComboBoxItem> { new() { Content = "None", Tag = "" } };
+
+            foreach (HostMidiPort port in ports)
+                items.Add(new ComboBoxItem { Content = port.Name, Tag = port.Name });
+
+            // A configured port that is not there right now (device unplugged, config brought from
+            // another machine) still gets its own entry: opening the window and pressing OK must
+            // not silently downgrade the choice to "None".
+            if (!string.IsNullOrEmpty(configured) && !ports.Any(p => p.Name == configured))
+                items.Add(new ComboBoxItem { Content = $"{configured}  (not connected)", Tag = configured });
+
+            combo.ItemsSource = items;
+            combo.SelectedItem = items.FirstOrDefault(i => (string)i.Tag == configured) ?? items[0];
+        }
+
+        /// <summary>Port name selected in one of the dropdowns, "" for "None".</summary>
+        static string SelectedMidiPort(ComboBox combo) => (combo.SelectedItem as ComboBoxItem)?.Tag as string ?? "";
+
+        public void OnBrowseMt32RomsClick(object sender, RoutedEventArgs e) => FileUtils.BrowseDirectory(TextMt32RomDir, "Select Roland MT-32 ROMs directory");
+
+        /// <summary>
+        /// The emulated module's volume knob. Written straight to the running config, which
+        /// the audio mixer reads per buffer (see Mt32Backend.MixInto): the change is audible
+        /// while dragging, no reset and no OK needed — and Cancel puts the backup back.
+        /// </summary>
+        private void SliderMt32Volume_OnValueChanged(object sender, RangeBaseValueChangedEventArgs e)
+            => Config.ConfigOptions.RunninConfig.Mt32Volume = (int)SliderMt32Volume.Value;
 
         public void OnBrowseScreenshotsDirClick(object sender, RoutedEventArgs e) => FileUtils.BrowseDirectory(TextScreenshotsDir, "Select screenshots directory");
         public void OnBrowseSnapshotsDirClick(object sender, RoutedEventArgs e) => FileUtils.BrowseDirectory(TextSnapshotsDir, "Select snapshots directory");
@@ -416,15 +614,16 @@ namespace ASE
         private void SliderNoise_OnValueChanged(object sender, RangeBaseValueChangedEventArgs e) => Config.ConfigOptions.RunninConfig.Noise = (float)SliderNoise.Value;
 
         /// <summary>
-        /// Switches the whole CRT shader off (GLControl draws with a plain blit instead) rather
-        /// than zeroing the sliders: on a weak GPU the effects cost the same at 0 as at any other
-        /// value. The slider values survive, so turning it back on restores the previous look —
-        /// they are just greyed out meanwhile.
+        /// "Effects on/off" switch. On (checked) keeps the full CRT shader; off makes GLControl
+        /// draw with a plain blit instead of zeroing the sliders — on a weak GPU the effects cost
+        /// the same at 0 as at any other value. The slider values survive, so turning it back on
+        /// restores the previous look; they are just greyed out meanwhile. The switch is the
+        /// inverse of the stored <c>DisableCrtEffects</c> flag.
         /// </summary>
-        private void ToggleDisableEffects_OnIsCheckedChanged(object sender, RoutedEventArgs e)
+        private void ToggleEffects_OnIsCheckedChanged(object sender, RoutedEventArgs e)
         {
             if (((ToggleSwitch)sender).IsChecked is bool isChecked)
-                Config.ConfigOptions.RunninConfig.DisableCrtEffects = isChecked;
+                Config.ConfigOptions.RunninConfig.DisableCrtEffects = !isChecked;
 
             UpdateEffectsSlidersEnabled();
         }
@@ -556,6 +755,28 @@ namespace ASE
         {
             if (((CheckBox)sender).IsChecked is bool isChecked)
                 Config.ConfigOptions.RunninConfig.ShowBorders = isChecked;
+        }
+
+        // Switching between a colour and a monochrome monitor changes the whole video geometry
+        // (resolution, refresh rate, buffer size), so it can only take effect on a reset. The
+        // value is applied live like the other settings; ForceReset makes OnOkClick ask for the
+        // reset confirmation and reboot the machine. The CRT/borders card, which is meaningless in
+        // high resolution, collapses/expands to match.
+        //
+        // Only the monochrome segment is handled: picking the colour one unchecks this radio and
+        // raises the event with false, so both directions arrive here.
+        private void RadioMonochromeMonitor_OnIsCheckedChanged(object sender, RoutedEventArgs e)
+        {
+            if (((RadioButton)sender).IsChecked is not bool isChecked)
+                return;
+
+            Config.ConfigOptions.RunninConfig.MonochromeMonitor = isChecked;
+
+            if (_uiReady && isChecked != configBackup.MonochromeMonitor)
+                ForceReset = true;
+
+            if (_crtLayoutReady)
+                SetCrtExpanded(!isChecked);
         }
     }
 }

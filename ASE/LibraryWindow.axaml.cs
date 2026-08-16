@@ -21,6 +21,11 @@ public partial class LibraryWindow : Window
     /// Closes with the full path of the game to insert as the dialog result, or null.</summary>
     public ObservableCollection<GameEntry> Games { get; } = new();
 
+    /// <summary>Catalogue entry the dialog closed with, beside the disk-image path it
+    /// returns: MainWindow needs the entry itself to apply the game's MT-32 instrument
+    /// profile (see <see cref="MT32.Mt32Profiles"/>). Null when nothing was launched.</summary>
+    public LibraryItem SelectedGame { get; private set; }
+
     readonly List<GameEntry> _allGames = new();
     readonly CancellationTokenSource _coversCts = new();
     readonly string _libraryPath;
@@ -164,6 +169,7 @@ public partial class LibraryWindow : Window
             return;
         }
 
+        SelectedGame = game.Item;
         Close(path);
     }
 

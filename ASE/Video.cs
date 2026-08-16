@@ -73,7 +73,13 @@ namespace ASE
             /// </summary>
             public static void BlitLineWithBorders(uint[] buffer, VideoTiming.LineInfo li)
             {
-                int ty = li.Line - VideoTiming.VISIBLE_TOP_LINE;
+                if (VideoTiming.Mono)
+                {
+                    BlitLineMono(buffer, li);
+                    return;
+                }
+
+                int ty = li.Line - VideoTiming.RENDER_TOP_LINE;
                 if (ty < 0 || ty >= VideoTiming.BUFFER_HEIGHT)
                     return;
 
@@ -165,6 +171,52 @@ namespace ASE
             {
                 uint offsetBytes = (uint)((group * planes + plane) * 2);
                 return BigEndian.Read16(srcLine + offsetBytes);
+            }
+
+            /// <summary>
+            /// Renders one 640-pixel high-resolution (monochrome) row. One bitplane, 40 words
+            /// (80 bytes) starting at the line's shifter address. The SM124 is purely black and
+            /// white: the shifter does NOT use the palette RGB in high resolution — colour
+            /// register 0 only selects normal vs reverse video (pixel 0 shows its tone, pixel 1
+            /// the inverse), so registers can hold leftover colour values and must be ignored.
+            /// No borders or mid-line palette tricks are modelled here.
+            /// </summary>
+            static void BlitLineMono(uint[] buffer, VideoTiming.LineInfo li)
+            {
+                int ty = li.Line - VideoTiming.RENDER_TOP_LINE;
+                if (ty < 0 || ty >= VideoTiming.BUFFER_HEIGHT)
+                    return;
+
+                int width = VideoTiming.BUFFER_WIDTH;   // 640
+                int rowBase = ty * width;
+
+                const uint white = 0xFFFFFFFFu;
+                const uint black = 0xFF000000u;
+
+                // Colour register 0 = 0 means reverse video (white on black); anything else is the
+                // usual black on white. Pixel value 0 -> register 0's tone, value 1 -> its inverse.
+                byte[] raw = VideoTiming.LineStartPalette;
+                int reg0 = ((raw[0] << 8) | raw[1]) & 0x0FFF;
+                bool reg0White = reg0 != 0;
+                uint pal0 = reg0White ? white : black;
+                uint pal1 = reg0White ? black : white;
+
+                if (!li.HasDisplay)
+                {
+                    for (int x = 0; x < width; x++)
+                        buffer[rowBase + x] = pal0;
+                    return;
+                }
+
+                uint srcLine = li.VideoAddr;
+                int tx = 0;
+                int words = width / 16;   // 40 words per 640-pixel line
+                for (int w = 0; w < words; w++)
+                {
+                    ushort bits = ReadBEWord(srcLine, w, 1, 0);
+                    for (int bit = 15; bit >= 0; bit--)
+                        buffer[rowBase + tx++] = ((bits >> bit) & 1) != 0 ? pal1 : pal0;
+                }
             }
         }
     }

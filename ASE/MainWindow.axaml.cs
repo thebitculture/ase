@@ -5,6 +5,7 @@ using Avalonia.Interactivity;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Platform.Storage;
+using Avalonia.Reactive;
 using Avalonia.Threading;
 using SDL2;
 using System;
@@ -29,10 +30,21 @@ namespace ASE
         DateTime TimeLastTimeTextBlock = DateTime.Now;
 
         string ZipFile = "";
-        
+
+        // The one MT-32 toolbox window, or null when it is closed (see OnMt32ToolboxClick).
+        MT32.Mt32Toolbox _mt32Toolbox;
+
+        // Key this window's geometry is stored under in windows.json (see WindowLayouts).
+        const string LayoutKey = "MainWindow";
+
         public MainWindow()
         {
             InitializeComponent();
+
+            // Before the window is shown, so it comes up where it was left instead of
+            // jumping there. A size that no longer matches the video mode is corrected by
+            // the EnforceAspectRatio pass that runs after the first layout.
+            WindowLayouts.Restore(this, LayoutKey, restoreSize: true);
 
             BitmapLedDriveOn = new Bitmap(AssetLoader.Open(new Uri("avares://ASE/Assets/drive_led_on.png")));
             BitmapLedDriveOff = new Bitmap(AssetLoader.Open(new Uri("avares://ASE/Assets/drive_led_off.png")));
@@ -49,7 +61,12 @@ namespace ASE
             _lastStableClientSize = ClientSize;
             _resizeDebounce = new DispatcherTimer(DispatcherPriority.Normal) { Interval = TimeSpan.FromMilliseconds(300) };
             _resizeDebounce.Tick += OnResizeSettled;
-            this.GetObservable(Window.ClientSizeProperty).Subscribe(OnClientSizeChanged);
+            // Avalonia.Reactive.Observable (the Subscribe(Action<T>) extension) is internal; the
+            // overload this used to bind to came from System.Reactive, which Avalonia 12's
+            // ReactiveUI.Avalonia no longer drags in. AnonymousObserver is Avalonia's own public
+            // adapter for exactly this.
+            this.GetObservable(Window.ClientSizeProperty)
+                .Subscribe(new AnonymousObserver<Size>(OnClientSizeChanged));
 
             // Snap the startup size to the correct ratio once the first layout is done
             Dispatcher.UIThread.Post(EnforceAspectRatio, DispatcherPriority.Loaded);
@@ -59,6 +76,17 @@ namespace ASE
 
             if (platformHandle != null)
             {
+                // On Linux the window about to be adopted is an X11 one (Avalonia has no Wayland
+                // backend), so SDL must be on its x11 driver. Verified instead of assumed: handing
+                // an X11 window id to the Wayland driver is not an error SDL reports back, it is a
+                // pointer dereference — on sdl2-compat it takes the whole process down with a
+                // segmentation fault right here, before anything is drawn or logged.
+                if (OperatingSystem.IsLinux() && !CanAdoptWindow(platformHandle))
+                {
+                    Close();
+                    return;
+                }
+
                 _sdlWindowPtr = SDL.SDL_CreateWindowFrom(platformHandle.Handle);
 
                 if (_sdlWindowPtr == IntPtr.Zero)
@@ -89,6 +117,39 @@ namespace ASE
         }
 
         /// <summary>
+        /// Whether SDL can take this window over. Linux only, called before SDL_CreateWindowFrom.
+        /// The blocking condition is a video driver other than x11 (no X server was reachable, or
+        /// one was forced): there SDL would misread the window handle instead of rejecting it.
+        /// A handle that is not an XID is only reported — SDL is on X11 and will refuse it cleanly.
+        /// </summary>
+        /// <returns>false — after explaining it on the console and in an alert — when the window
+        /// must not be handed to SDL.</returns>
+        private static bool CanAdoptWindow(IPlatformHandle handle)
+        {
+            string driver = SDL.SDL_GetCurrentVideoDriver();
+
+            if (driver == "x11")
+            {
+                if (handle.HandleDescriptor != "XID")
+                    ColoredConsole.WriteLine($"Warning: the window handle is a [[yellow]]{handle.HandleDescriptor}[[/yellow]], not an X11 XID: keyboard, mouse capture and gamepad may not work.");
+
+                return true;
+            }
+
+            string message = $"SDL is using the '{driver}' video driver, but the ASE window is an X11 one, " +
+                             "so SDL cannot read its keyboard, mouse or gamepad. Inside a Wayland session ASE " +
+                             "runs through XWayland: check that it is installed, and that SDL_VIDEODRIVER is " +
+                             "not forced to another driver in your environment.";
+
+            ColoredConsole.WriteLine($"[[red]]{message}[[/red]]");
+
+            TinyDialogs.MessageBox("ASE cannot start", message,
+                MessageBoxDialogType.Ok, MessageBoxIconType.Error, MessageBoxButton.Ok);
+
+            return false;
+        }
+
+        /// <summary>
         /// Announces the newer release found at startup. The check runs in Program.Main, before
         /// Avalonia is up, so the window can only be raised here — posted rather than awaited,
         /// since ShowDialog needs an owner whose OnOpened has already returned. The dialog holds
@@ -100,6 +161,15 @@ namespace ASE
                 return;
 
             Dispatcher.UIThread.Post(() => _ = new UpdateWindow().ShowDialog(this), DispatcherPriority.Loaded);
+        }
+
+        protected override void OnClosing(WindowClosingEventArgs e)
+        {
+            base.OnClosing(e);
+
+            // Read here and not in OnClosed: by then the window is gone and its position
+            // and size no longer mean anything.
+            WindowLayouts.Remember(this, LayoutKey, rememberSize: true);
         }
 
         protected override void OnClosed(EventArgs e)
@@ -167,13 +237,20 @@ namespace ASE
         // 384/416 = 12/13 as wide as it is tall (slightly narrower than square).
         private const double PIXEL_ASPECT = 12.0 / 13.0;
 
-        /// <summary>Aspect ratio of the picture GLControl shows — the full framebuffer
-        /// (display + borders) or the 640x400 crop when borders are hidden — corrected
-        /// by the pixel aspect of the original 4:3 monitor.</summary>
+        /// <summary>Aspect ratio of the picture GLControl shows. On a colour monitor it is the
+        /// full framebuffer (display + borders) or the 640x400 crop when borders are hidden,
+        /// corrected by the pixel aspect of the original 4:3 monitor. On a monochrome monitor it
+        /// is the native 640x400 with square pixels.</summary>
         private static double DisplayAspectRatio =>
-            PIXEL_ASPECT * (Config.ConfigOptions.RunninConfig.ShowBorders
-                ? (double)ASEMain.ScreenWidth / ASEMain.ScreenHeight
-                : (double)VideoTiming.DISPLAY_TEX_WIDTH / (VideoTiming.DISPLAY_TEX_HEIGHT * 2));
+            VideoTiming.Mono
+                ? (double)VideoTiming.BUFFER_WIDTH / VideoTiming.BUFFER_HEIGHT
+                : PIXEL_ASPECT * (Config.ConfigOptions.RunninConfig.ShowBorders
+                    ? (double)VideoTiming.BUFFER_WIDTH / (VideoTiming.BUFFER_HEIGHT * 2)
+                    : (double)VideoTiming.DISPLAY_TEX_WIDTH / (VideoTiming.DISPLAY_TEX_HEIGHT * 2));
+
+        /// <summary>Re-applies the window aspect ratio to the current video mode. Called after a
+        /// reset that may have switched the monitor type (colour ↔ monochrome).</summary>
+        public void RefreshAspectRatio() => EnforceAspectRatio();
 
         private void OnClientSizeChanged(Size newSize)
         {
@@ -315,7 +392,7 @@ namespace ASE
                         )
                     {
                         HasValidFile = true;
-                        InsertDisk(s);
+                        InsertDisk(s, null);
                         break;
                     }
                 }
@@ -336,20 +413,45 @@ namespace ASE
                 new FileFilter("ST disk images", ["*.st", "*.msa", "*.stx", "*.zip"]));
 
             if (!canceled && selpath.Count() == 1)
-                InsertDisk(selpath.ElementAt(0));
+                InsertDisk(selpath.ElementAt(0), null);
         }
 
         public async void OnChangeDiskClick(object sender, RoutedEventArgs e)
         {
-            InsertDisk(ZipFile);
+            // Another disk of the same zip is still the same game, so it keeps whatever
+            // library entry (and MT-32 profile) is already loaded.
+            InsertDisk(ZipFile, MT32.Mt32Profiles.CurrentGame);
         }
 
-        async void InsertDisk(string ImageFile)
+        /// <summary>
+        /// Puts a disk image in drive A with the emulation thread parked at a frame boundary, so
+        /// the image contents and geometry never change under a sector read in flight. Failures of
+        /// the load itself (truncated image, corrupt zip) come back in <paramref name="message"/>
+        /// instead of escaping the async void handlers that call this.
+        /// </summary>
+        static bool InsertIntoDriveA(string imageFile, out string message)
+        {
+            bool inserted = false;
+            string loadMessage = "";
+
+            if (!ASEMain.RunWhilePaused(() => inserted = ASEMain.driveA.Insert(imageFile, out loadMessage),
+                                        out string error))
+                loadMessage = $"Could not read [[red]]{imageFile}[[/red]]: {error}";
+
+            message = loadMessage;
+            return inserted;
+        }
+
+        /// <summary>
+        /// Loads a disk image into drive A and offers the reboot. <paramref name="libraryGame"/>
+        /// is the catalogue entry the image came from, or null for anything opened by hand:
+        /// it is what decides the game's MT-32 instrument mapping (see <see cref="MT32.Mt32Profiles"/>).
+        /// </summary>
+        async void InsertDisk(string ImageFile, Models.LibraryItem libraryGame)
         {
             DisableEjectMenu();
 
-            string message;
-            bool inserted = ASEMain.driveA.Insert(ImageFile, out message);
+            bool inserted = InsertIntoDriveA(ImageFile, out string message);
 
             if (!inserted)
             {
@@ -359,20 +461,22 @@ namespace ASE
                     var dialog = new FileList(message);
                     var selectedFile = await dialog.ShowDialog<string>(this);
 
-                    if (selectedFile != null)
+                    // Nothing picked: whatever was in the drive is still in it, no disk change
+                    if (selectedFile == null)
                     {
-                        bool insertedFromZip = ASEMain.driveA.Insert($"{ImageFile}|{selectedFile}", out message);
-
-                        if (!insertedFromZip)
-                        {
-                            await Dialogs.MessageBox("Error", message, MessageBoxDialogType.Ok, MessageBoxIconType.Error, MessageBoxButton.Ok);
-                            return;
-                        }
-
-                        ZipFile = ImageFile;
-                        ItemMenuChangeDisk.IsEnabled = true;
-                        ImageFile = selectedFile;
+                        RefreshDiskMenus();
+                        return;
                     }
+
+                    if (!InsertIntoDriveA($"{ImageFile}|{selectedFile}", out message))
+                    {
+                        await Dialogs.MessageBox("Error", message, MessageBoxDialogType.Ok, MessageBoxIconType.Error, MessageBoxButton.Ok);
+                        return;
+                    }
+
+                    ZipFile = ImageFile;
+                    ItemMenuChangeDisk.IsEnabled = true;
+                    ImageFile = selectedFile;
                 }
                 else
                 {
@@ -385,6 +489,14 @@ namespace ASE
                 ColoredConsole.WriteLine(message);
             }
 
+            // Applied before the reboot prompt on purpose: a power-cycle re-sends the mapped
+            // programs to a fresh module (MidiManager.Initialize), so the game comes up with
+            // its instruments already in place.
+            MT32.Mt32Profiles.SetCurrentGame(libraryGame);
+
+            // Answering No is a real option now: the FDC reports the disk change to the running
+            // program (see FloppyImage.SignalDiskTransition), which is what multi-disk games and
+            // GEMDOS need to pick up the new disk without rebooting.
             var response = await Dialogs.MessageBox("Disk inserted", "Reboot?", MessageBoxDialogType.YesNo, MessageBoxIconType.Question, MessageBoxButton.Yes);
 
             if (response == MessageBoxButton.Yes)
@@ -397,8 +509,14 @@ namespace ASE
 
         public void OnEjecImageClick(object sender, RoutedEventArgs e)
         {
-            ASEMain.driveA.Eject();
+            // Same rendezvous as inserting: the emulation thread must not be reading the image
+            // while it is taken away from under it.
+            ASEMain.RunWhilePaused(ASEMain.driveA.Eject, out _);
             ZipFile = "";
+
+            // Empty drive: no library game any more, so the MT-32 mapping goes with it.
+            MT32.Mt32Profiles.SetCurrentGame(null);
+
             DisableEjectMenu();
         }
 
@@ -406,6 +524,64 @@ namespace ASE
         {
             ItemMenuChangeDisk.IsEnabled = false;
             ItemMenuEjectDisk.IsEnabled = false;
+        }
+
+        /// <summary>Puts the disk menu entries back in sync with what is actually in drive A.</summary>
+        void RefreshDiskMenus()
+        {
+            ItemMenuEjectDisk.IsEnabled = ASEMain.driveA.HasDisk;
+            ItemMenuChangeDisk.IsEnabled = !string.IsNullOrEmpty(ZipFile);
+        }
+
+        /// <summary>
+        /// Decides the Emulation entries that depend on machine state, right when the user
+        /// opens the menu — no polling, and no event plumbing from the places that can
+        /// change it (the Configuration window, a restored snapshot, a reset).
+        /// </summary>
+        private void OnEmulationMenuOpened(object sender, RoutedEventArgs e)
+        {
+            // Single instance, and only meaningful with the built-in module wired up: with
+            // any other MIDI mode there is no front panel to open, however many library
+            // games carry a YM->MT-32 mapping.
+            ItemMenuMt32Toolbox.IsEnabled = _mt32Toolbox == null && Mt32ModuleWiredUp;
+        }
+
+        /// <summary>Whether the machine was last powered on wired to the built-in MT-32 —
+        /// not whether the module actually came up (bad ROMs still open the toolbox, dark
+        /// and inert, which is how the user finds out).</summary>
+        static bool Mt32ModuleWiredUp =>
+            MidiManager.Mode == ConfigOptions.MIDIEmulationOptions.BuiltInMT32;
+
+        /// <summary>
+        /// Opens the MT-32 front panel (volume knob + LCD). Single instance: the menu entry
+        /// is greyed out while the window is up and comes back when it closes. It is shown
+        /// non-modally and holds no UI pause — unlike the emulator's dialogs, it is only
+        /// useful with the machine running. The toolbox closes itself if the MIDI mode moves
+        /// away from the module later on.
+        /// </summary>
+        public void OnMt32ToolboxClick(object sender, RoutedEventArgs e)
+        {
+            if (_mt32Toolbox != null)
+            {
+                _mt32Toolbox.Activate();
+                return;
+            }
+
+            // The menu entry is already greyed out in this case; this is the guard for any
+            // other way in (a hotkey, a future command) rather than a second UI decision.
+            if (!Mt32ModuleWiredUp)
+                return;
+
+            ItemMenuMt32Toolbox.IsEnabled = false;
+
+            _mt32Toolbox = new MT32.Mt32Toolbox();
+
+            // Only clears the slot: whether the entry comes back enabled is recomputed when
+            // the menu is next opened, since the toolbox may have closed itself precisely
+            // because the module went away.
+            _mt32Toolbox.Closed += (_, _) => _mt32Toolbox = null;
+
+            _mt32Toolbox.Show(this);
         }
 
         public async void OnResetClick(object sender, RoutedEventArgs e)
@@ -475,7 +651,7 @@ namespace ASE
             string gameFile = await library.ShowDialog<string>(this);
 
             if (!string.IsNullOrEmpty(gameFile))
-                InsertDisk(gameFile);
+                InsertDisk(gameFile, library.SelectedGame);
         }
         
         private void OnConfigureLibraryClick(object sender, RoutedEventArgs e)

@@ -5,7 +5,7 @@
 
 	<PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net9.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>disable</Nullable>
 	<LangVersion>latest</LangVersion>
@@ -41,7 +41,7 @@
 
 	<PropertyGroup>
 		<Major>1</Major>
-		<Minor>9</Minor>
+		<Minor>10</Minor>
 	</PropertyGroup>
 
 	<PropertyGroup>
@@ -80,14 +80,14 @@
 	</ItemGroup>
 
 	<ItemGroup>
-		<PackageReference Include="Avalonia" Version="12.0.5" />
-		<PackageReference Include="Avalonia.Desktop" Version="12.0.5" />
-		<PackageReference Include="Avalonia.Themes.Fluent" Version="12.0.5" />
-		<PackageReference Include="ReactiveUI.Avalonia" Version="12.0.3" />
-		<PackageReference Include="LibVLCSharp" Version="3.10.0" />
+		<PackageReference Include="Avalonia" Version="12.1.1" />
+		<PackageReference Include="Avalonia.Desktop" Version="12.1.1" />
+		<PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.1" />
+		<PackageReference Include="ReactiveUI.Avalonia" Version="12.1.1" />
+		<PackageReference Include="LibVLCSharp" Version="3.10.1" />
 		<PackageReference Include="sdl2" Version="2.0.5" />
 		<PackageReference Include="Silk.NET.OpenGL" Version="2.23.0" />
-		<PackageReference Include="Svg.Controls.Skia.Avalonia" Version="12.0.0.13" />
+		<PackageReference Include="Svg.Controls.Skia.Avalonia" Version="12.0.0.15" />
 		<PackageReference Include="TinyDialogsNet" Version="2.0.0" />
 		<!-- libvlc binaries for game video previews; on macOS/Linux VLC must be installed system-wide -->
 		<PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.23.1" Condition="'$(OS)' == 'Windows_NT'" />
@@ -99,30 +99,74 @@
 	  </Compile>
 	</ItemGroup>
 
+	<!--
+		Selección de librería nativa por RID. Las nativas viven en native/<rid>/
+		(ver native/README.md). Se copia SOLO la del RID con el que se compila:
+		- publish -r <rid>  → RuntimeIdentifier
+		- build/run sin -r  → RID del equipo (NETCoreSdkPortableRuntimeIdentifier)
+		El RID se normaliza a so+arquitectura para tolerar variantes
+		(win10-x64, linux-musl-arm64, …).
+	-->
+	<PropertyGroup>
+		<_AseRid Condition="'$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</_AseRid>
+		<_AseRid Condition="'$(_AseRid)' == ''">$(NETCoreSdkPortableRuntimeIdentifier)</_AseRid>
+
+		<AseNativeOs Condition="$(_AseRid.StartsWith('win'))">win</AseNativeOs>
+		<AseNativeOs Condition="$(_AseRid.StartsWith('osx'))">osx</AseNativeOs>
+		<AseNativeOs Condition="$(_AseRid.StartsWith('linux'))">linux</AseNativeOs>
+
+		<AseNativeArch Condition="$(_AseRid.EndsWith('arm64'))">arm64</AseNativeArch>
+		<AseNativeArch Condition="'$(AseNativeArch)' == '' and $(_AseRid.EndsWith('x64'))">x64</AseNativeArch>
+
+		<AseNativeRid>$(AseNativeOs)-$(AseNativeArch)</AseNativeRid>
+	</PropertyGroup>
+
 	<ItemGroup>
 		<None Update="GameMenus.json">
 		  <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 		</None>
-		<None Update="native/libSDL2.dylib" Condition="$([MSBuild]::IsOSPlatform('OSX'))">
-			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-			<Link>libSDL2.dylib</Link>
-		</None>
-		<None Update="native/SDL2.dll" Condition="'$(OS)' == 'Windows_NT'">
-			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-			<Link>SDL2.dll</Link>
-		</None>
-		<None Update="native/moira.dll" Condition="'$(OS)' == 'Windows_NT'">
+
+		<!-- Moira -->
+		<None Update="native/$(AseNativeRid)/moira.dll" Condition="'$(AseNativeOs)' == 'win'">
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 			<Link>moira.dll</Link>
 		</None>
-    		<None Update="native/moira.dylib" Condition="$([MSBuild]::IsOSPlatform('OSX'))">
+		<None Update="native/$(AseNativeRid)/moira.dylib" Condition="'$(AseNativeOs)' == 'osx'">
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 			<Link>moira.dylib</Link>
 		</None>
-		<None Update="native/moira.so" Condition="$([MSBuild]::IsOSPlatform('Linux'))">
+		<None Update="native/$(AseNativeRid)/moira.so" Condition="'$(AseNativeOs)' == 'linux'">
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 			<Link>moira.so</Link>
 		</None>
+
+		<!-- SDL2: solo Windows y macOS; en Linux se usa el de la distribución -->
+		<None Update="native/$(AseNativeRid)/SDL2.dll" Condition="'$(AseNativeOs)' == 'win'">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+			<Link>SDL2.dll</Link>
+		</None>
+		<None Update="native/$(AseNativeRid)/libSDL2.dylib" Condition="'$(AseNativeOs)' == 'osx'">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+			<Link>libSDL2.dylib</Link>
+		</None>
+		
+		<None Update="native/$(AseNativeRid)/mt32emu-2.dll" Condition="'$(AseNativeOs)' == 'win'">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+			<Link>mt32emu-2.dll</Link>
+		</None>
+		<None Update="native/$(AseNativeRid)/libmt32emu.2.dylib" Condition="'$(AseNativeOs)' == 'osx'">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+			<Link>libmt32emu.2.dylib</Link>
+		</None>
+		<None Update="native/$(AseNativeRid)/libmt32emu.so.2" Condition="'$(AseNativeOs)' == 'linux'">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+			<Link>libmt32emu.so.2</Link>
+		</None>
+		<None Update="native/$(AseNativeRid)/libtinyfiledialogs.so" Condition="'$(AseNativeOs)' == 'linux' and '$(AseNativeArch)' == 'arm64'">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+			<Link>libtinyfiledialogs.so</Link>
+		</None>
+		
 	</ItemGroup>
 
 	<!-- Warn instead of failing: clean clones must still build. -->

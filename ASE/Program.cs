@@ -1,4 +1,4 @@
-﻿/*
+/*
  * - ATARI SYSTEM EMULATOR - 
  * 
  * The Bit Culture 2026
@@ -22,8 +22,10 @@
  * https://github.com/nguillaumin/perihelion-m68k-tutorials
  */
 
+using Mt32;
 using SDL2;
 using System.Diagnostics;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using TinyDialogsNet;
 using Avalonia;
@@ -53,6 +55,12 @@ namespace ASE
         // Names dlopen() is asked for, in order, when resolving SDL2 on Linux. A copy shipped
         // next to the executable wins over the system one, as the bundled SDL2.dll/libSDL2.dylib
         // do on the other platforms.
+        //
+        // The unversioned libSDL2.so is a symlink that belongs to the *development* package: on a
+        // machine with just the runtime package (libsdl2-2.0-0 and friends) only the SONAME
+        // libSDL2-2.0.so.0 exists, which is the whole reason the default probing for
+        // DllImport("SDL2") is not enough and the emulator died at startup with a
+        // DllNotFoundException.
         static readonly string[] LinuxSdlNames =
         [
             "libSDL2.so",           // bundled next to the executable (checked in the output directory)
@@ -60,34 +68,77 @@ namespace ASE
             "libSDL2-2.0.so"
         ];
 
+        // Names dlopen() is asked for, in order, when resolving libmt32emu outside Windows. The
+        // versioned one is what ASE ships next to the executable; the bare symlink belongs to a
+        // distribution's development package and is only useful for a system-wide install.
+        //
+        // The binding declares DllImport("mt32emu-2"), which is the file name only on Windows:
+        // Munt's CMakeLists.txt sets RUNTIME_OUTPUT_NAME mt32emu-<major> there and nowhere else,
+        // so on the other platforms CMake applies its own convention for a library built with
+        // VERSION/SOVERSION and the binary is called libmt32emu.so.2 / libmt32emu.2.dylib.
+        // Default probing only tries [lib]mt32emu-2[.so|.dylib] and would never reach those, and
+        // ASE keeps Munt's own names in native/<rid>/ rather than renaming the binaries.
+        static string[] Mt32EmuNames => OperatingSystem.IsMacOS()
+            ? ["libmt32emu.2.dylib", "libmt32emu.dylib"]
+            : ["libmt32emu.so.2", "libmt32emu.so"];
+
         /// <summary>
-        /// Teaches .NET how to find SDL2 on Linux, where it is not bundled but taken from the
-        /// distribution. The default probing for <c>DllImport("SDL2")</c> only tries the
-        /// unversioned <c>libSDL2.so</c>, a symlink that belongs to the *development* package:
-        /// on a machine with just the runtime package (<c>libsdl2-2.0-0</c> and friends) only the
-        /// SONAME <c>libSDL2-2.0.so.0</c> exists and the emulator died at startup with a
-        /// DllNotFoundException. Returning IntPtr.Zero leaves the default probing in charge.
+        /// Teaches .NET how to find the native libraries whose file names do not match what
+        /// <c>DllImport</c> asks for: SDL2 on Linux, where it is not bundled but taken from the
+        /// distribution, and Munt's libmt32emu on macOS and Linux. See <see cref="LinuxSdlNames"/>
+        /// and <see cref="Mt32EmuNames"/> for why the default probing misses them.
+        ///
+        /// <para>Both registrations go through this single method because .NET allows exactly one
+        /// resolver per assembly and throws <c>InvalidOperationException: a resolver is already set
+        /// for the assembly</c> on the second call. SDL2-CS and the Munt binding are compiled into
+        /// the same assembly here, so registering them separately blew up on Linux — the only
+        /// platform where both needed a resolver. Grouping by assembly keeps that from happening
+        /// again whichever way the bindings are packaged: should another native library of ASE ever
+        /// need one, add it to the list below instead of calling SetDllImportResolver elsewhere.</para>
+        ///
+        /// <para>Returning IntPtr.Zero leaves the default probing in charge, which is what every
+        /// other native library of this assembly (moira) relies on.</para>
         /// </summary>
-        static void RegisterSdlLibraryResolver()
+        static void RegisterNativeLibraryResolvers()
         {
-            if (!OperatingSystem.IsLinux())
-                return;
+            Dictionary<Assembly, List<(string Import, string[] Candidates)>> byAssembly = [];
 
-            NativeLibrary.SetDllImportResolver(typeof(SDL).Assembly, (libraryName, assembly, searchPath) =>
+            void Add(Assembly assembly, string import, string[] candidates)
             {
-                if (libraryName != "SDL2")
+                if (!byAssembly.TryGetValue(assembly, out var entries))
+                    byAssembly[assembly] = entries = [];
+
+                entries.Add((import, candidates));
+            }
+
+            if (OperatingSystem.IsLinux())
+                Add(typeof(SDL).Assembly, "SDL2", LinuxSdlNames);
+
+            if (!OperatingSystem.IsWindows())
+                Add(typeof(Mt32EmuNative).Assembly, Mt32EmuNative.DllName, Mt32EmuNames);
+
+            foreach ((Assembly assembly, var entries) in byAssembly)
+            {
+                NativeLibrary.SetDllImportResolver(assembly, (libraryName, _, _) =>
+                {
+                    foreach ((string import, string[] candidates) in entries)
+                    {
+                        if (libraryName != import)
+                            continue;
+
+                        // A copy shipped next to the executable wins over the system one.
+                        foreach (string name in candidates)
+                            if (NativeLibrary.TryLoad(Path.Combine(AppContext.BaseDirectory, name), out nint bundled))
+                                return bundled;
+
+                        foreach (string name in candidates)
+                            if (NativeLibrary.TryLoad(name, out nint system))
+                                return system;
+                    }
+
                     return IntPtr.Zero;
-
-                foreach (string name in LinuxSdlNames)
-                    if (NativeLibrary.TryLoad(Path.Combine(AppContext.BaseDirectory, name), out nint bundled))
-                        return bundled;
-
-                foreach (string name in LinuxSdlNames)
-                    if (NativeLibrary.TryLoad(name, out nint system))
-                        return system;
-
-                return IntPtr.Zero;
-            });
+                });
+            }
         }
 
         // File names DllImport("moira") ends up loading, per platform. Spelled out so the preflight
@@ -150,6 +201,34 @@ namespace ASE
         }
 
         /// <summary>
+        /// Pins SDL's video driver to X11 on Linux, where that is not a preference but a
+        /// requirement: Avalonia has no Wayland backend, so the window later handed to
+        /// <c>SDL_CreateWindowFrom</c> is always an X11 one (through XWayland inside a Wayland
+        /// session). On the Wayland driver SDL receives an X11 window id where it expects a
+        /// <c>wl_surface*</c> — plain SDL2 refuses and the emulator comes up with no input at all,
+        /// while sdl2-compat (the SDL2 of Arch and others, which reimplements SDL2 on top of SDL3)
+        /// dereferences it and the process dies with a segmentation fault before the window shows.
+        ///
+        /// <para>Hence OVERRIDE priority: a plain <c>SDL_SetHint</c> never wins over an
+        /// <c>SDL_VIDEODRIVER</c> exported in the environment, a common tweak in Wayland setups.
+        /// And the hint is set under both names because SDL3 renamed it to <c>SDL_VIDEO_DRIVER</c>,
+        /// which leaves the SDL2 spelling a silent no-op on sdl2-compat.</para>
+        /// </summary>
+        static void ForceX11VideoDriver()
+        {
+            string environmentDriver = Environment.GetEnvironmentVariable("SDL_VIDEODRIVER");
+
+            if (!string.IsNullOrEmpty(environmentDriver) && environmentDriver != "x11")
+                ColoredConsole.WriteLine($"Ignoring [[yellow]]SDL_VIDEODRIVER={environmentDriver}[[/yellow]]: the ASE window is an X11 one, so SDL needs its x11 driver to receive the input.");
+
+            SDL.SDL_SetHintWithPriority("SDL_VIDEODRIVER", "x11", SDL.SDL_HintPriority.SDL_HINT_OVERRIDE);    // SDL2 name
+            SDL.SDL_SetHintWithPriority("SDL_VIDEO_DRIVER", "x11", SDL.SDL_HintPriority.SDL_HINT_OVERRIDE);   // SDL3 / sdl2-compat name
+
+            if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DISPLAY")))
+                ColoredConsole.WriteLine("[[yellow]]Warning:[[/yellow]] DISPLAY is not set, so there is no X server to talk to. Inside a Wayland session ASE needs XWayland.");
+        }
+
+        /// <summary>
         /// The platform loader's own explanation for a library that refuses to load, ready to be
         /// appended to a sentence. On Unix this is the dlerror text, which names the dependency it
         /// could not resolve; on Windows it is the HRESULT message. Empty when the load
@@ -171,7 +250,7 @@ namespace ASE
         [STAThread]
         static void Main(string[] args)
         {
-            RegisterSdlLibraryResolver();
+            RegisterNativeLibraryResolvers();
 
             Config = new Config();
             Config.LoadConfig(args);
@@ -196,19 +275,24 @@ namespace ASE
             SDL.SDL_SetHint(SDL.SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");
             SDL.SDL_SetHint(SDL.SDL_HINT_MAC_BACKGROUND_APP, "1");
 
-            // Avalonia only has an X11 backend on Linux (even inside a Wayland session, where it
-            // runs through XWayland), so SDL must pick X11 as well: SDL_CreateWindowFrom cannot
-            // adopt an X11 window if SDL chose the Wayland driver — the default on several
-            // distributions — and the emulator would come up with no input at all. An explicit
-            // SDL_VIDEODRIVER in the environment still wins: SDL_SetHint never overrides it.
-            if (OperatingSystem.IsLinux() && !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DISPLAY")))
-                SDL.SDL_SetHint("SDL_VIDEODRIVER", "x11");
+            if (OperatingSystem.IsLinux())
+                ForceX11VideoDriver();
 
             if (SDL.SDL_Init(SDL.SDL_INIT_AUDIO | SDL.SDL_INIT_GAMECONTROLLER | SDL.SDL_INIT_VIDEO) < 0)
             {
-                Console.WriteLine($"Error SDL: {SDL.SDL_GetError()}");
+                ColoredConsole.WriteLine($"[[red]]Error SDL: {SDL.SDL_GetError()}[[/red]]");
+
+                if (OperatingSystem.IsLinux())
+                    ColoredConsole.WriteLine("ASE needs SDL's x11 video driver. Inside a Wayland session that means XWayland must be installed and reachable.");
+
                 return;
             }
+
+            // Printed whatever the debug level is: which SDL build got loaded and which drivers it
+            // picked is the first thing worth knowing about any startup, input or audio report —
+            // the same distribution name can ship plain SDL2 or sdl2-compat, which behave differently.
+            SDL.SDL_GetVersion(out SDL.SDL_version sdlVersion);
+            ColoredConsole.WriteLine($"SDL [[green]]{sdlVersion.major}.{sdlVersion.minor}.{sdlVersion.patch}[[/green]] — video driver [[green]]{SDL.SDL_GetCurrentVideoDriver()}[[/green]], audio driver [[green]]{SDL.SDL_GetCurrentAudioDriver()}[[/green]]");
 
             if (!string.IsNullOrEmpty(ConfigOptions.RunninConfig.FloppyImagePath))
             {

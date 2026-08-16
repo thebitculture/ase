@@ -1,307 +1,622 @@
 <Window xmlns="https://github.com/avaloniaui"
-		xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-		xmlns:svg="clr-namespace:Avalonia.Svg;assembly=Svg.Controls.Avalonia"
-		xmlns:local="clr-namespace:ASE"
-		x:Class="ASE.ConfigurationWindow"
-		x:DataType="local:Config+ConfigOptions"
-		Title="Configuration"
-		CanResize="False"
-		WindowStartupLocation="CenterScreen"
-		UseLayoutRounding="True"
-		Width="620" Height="580"
-		>
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:svg="clr-namespace:Avalonia.Svg;assembly=Svg.Controls.Avalonia"
+        xmlns:local="clr-namespace:ASE"
+        Classes="aseDialog"
+        x:Class="ASE.ConfigurationWindow"
+        x:DataType="local:Config+ConfigOptions"
+        Title="Configuration"
+        CanResize="False"
+        WindowStartupLocation="CenterScreen"
+        UseLayoutRounding="True"
+        Width="760" Height="720">
 
-	<Grid RowDefinitions="*,Auto" Margin="16,12,16,12">
+    <Grid RowDefinitions="Auto,*,Auto">
 
-		<TabControl Grid.Row="0">
-			<TabItem>
-				<TabItem.Header>
-					<StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-						<Svg Path="avares://ASE/Assets/Icons/gear.svg" Width="18" Height="18" VerticalAlignment="Center" />
-						<TextBlock Text="Setup" VerticalAlignment="Center"/>
-					</StackPanel>
-				</TabItem.Header>
-				<StackPanel Orientation="Vertical" Margin="0,14,0,0" Spacing="12">
-					<Border Classes="card">
-						<StackPanel Spacing="10">
-							<TextBlock Classes="section" Text="Machine"/>
-							<Grid ColumnDefinitions="110,*" RowDefinitions="Auto,Auto" RowSpacing="10">
-								<TextBlock Grid.Row="0" Grid.Column="0" VerticalAlignment="Center" Text="Atari model"/>
-								<ComboBox x:Name="ComboModel" Grid.Row="0" Grid.Column="1" MaxDropDownHeight="140" HorizontalAlignment="Stretch"
-										  SelectedIndex="{Binding STModel, Mode=TwoWay}" SelectionChanged="Model_SelectionChanged">
-									<ComboBoxItem>Atari STF/FM</ComboBoxItem>
-									<ComboBoxItem>Atari STF/FM + Blitter</ComboBoxItem>
-									<ComboBoxItem>Atari STE</ComboBoxItem>
-								</ComboBox>
-								<TextBlock Grid.Row="1" Grid.Column="0" VerticalAlignment="Center" Text="Memory"/>
-								<ComboBox Grid.Row="1" Grid.Column="1" MaxDropDownHeight="180" HorizontalAlignment="Stretch"
-										  SelectedIndex="{Binding RAMConfiguration, Mode=TwoWay}" SelectionChanged="Memory_SelectionChanged">
-									<ComboBoxItem>512KB</ComboBoxItem>
-									<ComboBoxItem>1MB</ComboBoxItem>
-									<ComboBoxItem>2MB</ComboBoxItem>
-									<ComboBoxItem>4MB</ComboBoxItem>
-								</ComboBox>
-							</Grid>
-						</StackPanel>
-					</Border>
-					<Border Classes="card">
-						<StackPanel Spacing="10">
-							<TextBlock Classes="section" Text="TOS ROM"/>
-							<Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-								<TextBox Grid.Column="0" x:Name="TextTOSImage" IsReadOnly="True" Text="{Binding TOSPath}"/>
-								<Button Grid.Column="1" Content="Browse…" Click="OnBrowseTOSImageClick" />
-							</Grid>
-						</StackPanel>
-					</Border>
-				</StackPanel>
-			</TabItem>
+        <!-- Header -->
+        <Grid Grid.Row="0" ColumnDefinitions="Auto,*" Margin="24,20,24,16" ColumnSpacing="14">
+            <Border Width="44" Height="44"
+                    CornerRadius="10"
+                    Background="{DynamicResource AccentSoftBrush}"
+                    BorderBrush="{DynamicResource CardBorderBrush}"
+                    BorderThickness="1"
+                    VerticalAlignment="Center">
+                <Svg Path="avares://ASE/Assets/Icons/gear.svg"
+                     Width="22" Height="22"
+                     HorizontalAlignment="Center"
+                     VerticalAlignment="Center" />
+            </Border>
 
-			<TabItem>
-				<TabItem.Header>
-					<StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-						<Svg Path="avares://ASE/Assets/Icons/tv.svg" Width="18" Height="18" VerticalAlignment="Center"/>
-						<TextBlock Text="Video" VerticalAlignment="Center"/>
-					</StackPanel>
-				</TabItem.Header>
-				<StackPanel Orientation="Vertical" Margin="0,14,0,0" Spacing="12">
-					<Border Classes="card">
-						<StackPanel Spacing="10">
-							<TextBlock Classes="section" Text="CRT effects"/>
-							<Grid Name="GridEffectSliders" ColumnDefinitions="*,20,*" RowDefinitions="Auto,Auto,Auto" RowSpacing="4">
+            <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
+                <TextBlock Classes="windowTitle" Text="Configuration" />
+                <TextBlock Classes="description"
+                           Text="Machine, display, input and storage settings" />
+            </StackPanel>
+        </Grid>
 
-								<StackPanel Grid.Column="0" Grid.Row="0" Orientation="Vertical">
-									<TextBlock Text="{Binding #SliderCurvature.Value, StringFormat={}Curvature : {0:0.000}}" VerticalAlignment="Center"/>
-									<Slider x:Name="SliderCurvature" Minimum="0" Maximum="0.05" ValueChanged="SliderCurvature_OnValueChanged" />
-								</StackPanel>
-								<StackPanel Grid.Column="2" Grid.Row="0" Orientation="Vertical">
-									<TextBlock Text="{Binding #SliderVignette.Value, StringFormat={}Vignette : {0:0.000}}" VerticalAlignment="Center"/>
-									<Slider Minimum="0" Maximum="1.0" x:Name="SliderVignette" ValueChanged="SliderVignette_OnValueChanged" />
-								</StackPanel>
+        <!-- Main content -->
+        <TabControl Grid.Row="1" Margin="24,0,24,0">
+            
+            <!-- SETUP -->
+            <TabItem>
+                <TabItem.Header>
+                    <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                        <Svg Path="avares://ASE/Assets/Icons/gear.svg" Width="17" Height="17" VerticalAlignment="Center" />
+                        <TextBlock Text="Setup" VerticalAlignment="Center" />
+                    </StackPanel>
+                </TabItem.Header>
 
-								<StackPanel Grid.Column="0" Grid.Row="1" Orientation="Vertical">
-									<TextBlock Text="{Binding #SliderScanline.Value, StringFormat={}Scanline : {0:0.000}}" VerticalAlignment="Center"/>
-									<Slider Minimum="-5.0" Maximum="5.0" x:Name="SliderScanline" ValueChanged="SliderScanline_OnValueChanged" />
-								</StackPanel>
-								<StackPanel Grid.Column="2" Grid.Row="1" Orientation="Vertical">
-									<TextBlock Text="{Binding #SliderAberration.Value, StringFormat={}Aberration : {0:0.000}}" VerticalAlignment="Center"/>
-									<Slider Minimum="0.0" Maximum="2.0" x:Name="SliderAberration" ValueChanged="SliderAberration_OnValueChanged" />
-								</StackPanel>
+                    <StackPanel Margin="0,16,0,8" Spacing="12">
+                        <Border Classes="card">
+                            <StackPanel Spacing="16">
+                                <StackPanel Spacing="3">
+                                    <TextBlock Classes="section" Text="Machine" />
+                                    <TextBlock Classes="description" Text="Choose the emulated Atari model and installed memory." />
+                                </StackPanel>
 
-								<StackPanel Grid.Column="0" Grid.Row="2" Orientation="Vertical">
-									<TextBlock Text="{Binding #SliderBloom.Value, StringFormat={}Bloom : {0:0.000}}" VerticalAlignment="Center"/>
-									<Slider Minimum="0.0" Maximum="2.0" x:Name="SliderBloom" ValueChanged="SliderBloom_OnValueChanged" />
-								</StackPanel>
-								<StackPanel Grid.Column="2" Grid.Row="2" Orientation="Vertical">
-									<TextBlock Text="{Binding #SliderMask.Value, StringFormat={}Mask : {0:0.000}}" VerticalAlignment="Center"/>
-									<Slider Minimum="0.0" Maximum="2.0" x:Name="SliderMask" ValueChanged="SliderMask_OnValueChanged" />
-								</StackPanel>
-							</Grid>
-							<Grid ColumnDefinitions="*,20,*">
-								<StackPanel Name="PanelNoiseSlider" Grid.Column="0" Orientation="Vertical">
-									<TextBlock Text="{Binding #SliderNoise.Value, StringFormat={}Noise : {0:0.000}}" VerticalAlignment="Center"/>
-									<Slider Minimum="0.0" Maximum="1.0" x:Name="SliderNoise" ValueChanged="SliderNoise_OnValueChanged" />
-								</StackPanel>
-								<StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Bottom" HorizontalAlignment="Right">
-									<CheckBox Name="chkShowBorders" IsCheckedChanged="ChkShowBorders_OnIsCheckedChanged">Show borders</CheckBox>
-								</StackPanel>
-							</Grid>
-							<StackPanel Spacing="16" Orientation="Horizontal" Margin="0,4,0,0">
-								<!-- Bypasses the CRT shader altogether (plain blit): faster on weak GPUs.
-									 The slider values are kept, so switching it back off restores the look. -->
-								<ToggleSwitch Name="ToggleDisableEffects" VerticalAlignment="Center"
-											  OffContent="Disable all effects" OnContent="All effects disabled"
-											  IsCheckedChanged="ToggleDisableEffects_OnIsCheckedChanged"/>
-								<Button Name="ButtonDefaultGLValues" VerticalAlignment="Center" Click="ButtonDefaultGLValues_OnClick" Content="Set default values"/>
-							</StackPanel>
-						</StackPanel>
-					</Border>
-				</StackPanel>
-			</TabItem>
+                                <Grid ColumnDefinitions="160,*" RowDefinitions="Auto,Auto" RowSpacing="12" ColumnSpacing="18">
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Classes="fieldLabel" VerticalAlignment="Center" Text="ATARI MODEL" />
+                                    <ComboBox x:Name="ComboModel"
+                                              Grid.Row="0" Grid.Column="1"
+                                              MaxDropDownHeight="140"
+                                              HorizontalAlignment="Stretch"
+                                              SelectedIndex="{Binding STModel, Mode=TwoWay}"
+                                              SelectionChanged="Model_SelectionChanged">
+                                        <ComboBoxItem>Atari STF/FM</ComboBoxItem>
+                                        <ComboBoxItem>Atari STF/FM + Blitter</ComboBoxItem>
+                                        <ComboBoxItem>Atari STE</ComboBoxItem>
+                                    </ComboBox>
 
-			<TabItem>
-				<TabItem.Header>
-					<StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-						<Svg Path="avares://ASE/Assets/Icons/joystick.svg" Width="18" Height="18" VerticalAlignment="Center"/>
-						<TextBlock Text="Input" VerticalAlignment="Center"/>
-					</StackPanel>
-				</TabItem.Header>
-				<StackPanel Orientation="Vertical" Margin="0,14,0,0" Spacing="12">
-					<Border Classes="card">
-						<StackPanel Spacing="6">
-							<TextBlock Text="{Binding #SliderMouseSensitivity.Value, StringFormat={}Mouse sensitivity adjustment : {0:0.0}}" VerticalAlignment="Center"/>
-							<Grid ColumnDefinitions="32,*,32">
-								<Svg Path="avares://ASE/Assets/Icons/mousecursorfast.svg"
-								 Width="24" Height="24" Grid.Column="0"
-								 VerticalAlignment="Center"/>
-								<Slider x:Name="SliderMouseSensitivity" Value="{Binding MouseSensitivity, Mode=TwoWay}" Minimum="0.5" Maximum="5.0" TickFrequency="0.5" IsSnapToTickEnabled="True" Grid.Column="1" />
-								<Svg Path="avares://ASE/Assets/Icons/mousecursorslow.svg"
-								 Width="24" Height="24" Grid.Column="2"
-								 VerticalAlignment="Center"/>
-							</Grid>
-						</StackPanel>
-					</Border>
-					<UniformGrid Columns="2">
-						<Border Classes="card" Margin="0,0,6,0">
-							<StackPanel Spacing="10">
-								<TextBlock Classes="section" HorizontalAlignment="Center">🕹️ Joystick mapped to keys</TextBlock>
-								<Grid ColumnDefinitions="auto,auto,auto" RowDefinitions="auto,auto,auto,auto,auto" ColumnSpacing="10" RowSpacing="4" HorizontalAlignment="Center">
-									<TextBlock VerticalAlignment="Center" Grid.Column="0" Grid.Row="0">Up</TextBlock>
-									<TextBlock VerticalAlignment="Center" x:Name="TextUp" FontWeight="Bold" Grid.Column="1" Grid.Row="0">8</TextBlock>
-									<Button x:Name="btnRedefineUp" VerticalAlignment="Center" Grid.Column="2" Grid.Row="0" Click="OnRedefine">Redefine</Button>
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Classes="fieldLabel" VerticalAlignment="Center" Text="MEMORY" />
+                                    <ComboBox Grid.Row="1" Grid.Column="1"
+                                              MaxDropDownHeight="180"
+                                              HorizontalAlignment="Stretch"
+                                              SelectedIndex="{Binding RAMConfiguration, Mode=TwoWay}"
+                                              SelectionChanged="Memory_SelectionChanged">
+                                        <ComboBoxItem>512KB</ComboBoxItem>
+                                        <ComboBoxItem>1MB</ComboBoxItem>
+                                        <ComboBoxItem>2MB</ComboBoxItem>
+                                        <ComboBoxItem>4MB</ComboBoxItem>
+                                    </ComboBox>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
 
-									<TextBlock VerticalAlignment="Center" Grid.Column="0" Grid.Row="1">Down</TextBlock>
-									<TextBlock VerticalAlignment="Center" x:Name="TextDown" FontWeight="Bold" Grid.Column="1" Grid.Row="1">8</TextBlock>
-									<Button x:Name="btnRedefineDown" VerticalAlignment="Center" Grid.Column="2" Grid.Row="1" Click="OnRedefine">Redefine</Button>
+                        <Border Classes="card">
+                            <StackPanel Spacing="14">
+                                <StackPanel Spacing="3">
+                                    <TextBlock Classes="section" Text="TOS ROM" />
+                                    <TextBlock Classes="description" Text="Select the ROM image used to boot the emulated machine." />
+                                </StackPanel>
 
-									<TextBlock VerticalAlignment="Center" Grid.Column="0" Grid.Row="2">Left</TextBlock>
-									<TextBlock VerticalAlignment="Center" x:Name="TextLeft" FontWeight="Bold" Grid.Column="1" Grid.Row="2">8</TextBlock>
-									<Button x:Name="btnRedefineLeft" VerticalAlignment="Center" Grid.Column="2" Grid.Row="2" Click="OnRedefine">Redefine</Button>
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                                    <TextBox Grid.Column="0"
+                                             x:Name="TextTOSImage"
+                                             IsReadOnly="True"
+                                             Text="{Binding TOSPath}" />
+                                    <Button Grid.Column="1"
+                                            Classes="compact"
+                                            Content="Browse…"
+                                            Click="OnBrowseTOSImageClick" />
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+            </TabItem>
 
-									<TextBlock VerticalAlignment="Center" Grid.Column="0" Grid.Row="3">Right</TextBlock>
-									<TextBlock VerticalAlignment="Center" x:Name="TextRight" FontWeight="Bold" Grid.Column="1" Grid.Row="3">8</TextBlock>
-									<Button x:Name="btnRedefineRight" VerticalAlignment="Center" Grid.Column="2" Grid.Row="3" Click="OnRedefine">Redefine</Button>
+            <!-- VIDEO -->
+            <TabItem>
+                <TabItem.Header>
+                    <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                        <Svg Path="avares://ASE/Assets/Icons/tv.svg" Width="17" Height="17" VerticalAlignment="Center" />
+                        <TextBlock Text="Video" VerticalAlignment="Center" />
+                    </StackPanel>
+                </TabItem.Header>
 
-									<TextBlock VerticalAlignment="Center" Grid.Column="0" Grid.Row="4">Fire</TextBlock>
-									<TextBlock VerticalAlignment="Center" x:Name="TextFire" FontWeight="Bold" Grid.Column="1" Grid.Row="4">8</TextBlock>
-									<Button x:Name="btnRedefineFire" VerticalAlignment="Center" Grid.Column="2" Grid.Row="4" Click="OnRedefine">Redefine</Button>
-								</Grid>
-							</StackPanel>
-						</Border>
-						<Border Classes="card" Margin="6,0,0,0">
-							<StackPanel Spacing="10">
-								<TextBlock Classes="section" HorizontalAlignment="Center">🎮 Gamepad buttons mapping</TextBlock>
-								<Grid ColumnDefinitions="auto,auto,auto,auto" RowDefinitions="auto,auto,auto,auto" ColumnSpacing="10" RowSpacing="8" HorizontalAlignment="Center">
-									<!-- Column 1 -->
-									<TextBlock VerticalAlignment="Center" Grid.Column="0" Grid.Row="0">Y</TextBlock>
-									<ComboBox Name="ComboY" Grid.Column="1" Grid.Row="0" Width="80">
-										<ComboBoxItem>None</ComboBoxItem>
-										<ComboBoxItem>Fire</ComboBoxItem>
-										<ComboBoxItem>Space</ComboBoxItem>
-										<ComboBoxItem>Up</ComboBoxItem>
-										<ComboBoxItem>Y</ComboBoxItem>
-										<ComboBoxItem>N</ComboBoxItem>
-										<ComboBoxItem>T</ComboBoxItem>
-									</ComboBox>
-									<TextBlock VerticalAlignment="Center" Grid.Column="0" Grid.Row="1">X</TextBlock>
-									<ComboBox Name="ComboX" Grid.Column="1" Grid.Row="1" Width="80">
-										<ComboBoxItem>None</ComboBoxItem>
-										<ComboBoxItem>Fire</ComboBoxItem>
-										<ComboBoxItem>Space</ComboBoxItem>
-										<ComboBoxItem>Up</ComboBoxItem>
-										<ComboBoxItem>Y</ComboBoxItem>
-										<ComboBoxItem>N</ComboBoxItem>
-										<ComboBoxItem>T</ComboBoxItem>
-									</ComboBox>
-									<TextBlock VerticalAlignment="Center" Grid.Column="0" Grid.Row="2">B</TextBlock>
-									<ComboBox Name="ComboB" Grid.Column="1" Grid.Row="2" Width="80">
-										<ComboBoxItem>None</ComboBoxItem>
-										<ComboBoxItem>Fire</ComboBoxItem>
-										<ComboBoxItem>Space</ComboBoxItem>
-										<ComboBoxItem>Up</ComboBoxItem>
-										<ComboBoxItem>Y</ComboBoxItem>
-										<ComboBoxItem>N</ComboBoxItem>
-										<ComboBoxItem>T</ComboBoxItem>
-									</ComboBox>
-									<TextBlock VerticalAlignment="Center" Grid.Column="0" Grid.Row="3">A</TextBlock>
-									<ComboBox Name="ComboA" Grid.Column="1" Grid.Row="3" Width="80">
-										<ComboBoxItem>None</ComboBoxItem>
-										<ComboBoxItem>Fire</ComboBoxItem>
-										<ComboBoxItem>Space</ComboBoxItem>
-										<ComboBoxItem>Up</ComboBoxItem>
-										<ComboBoxItem>Y</ComboBoxItem>
-										<ComboBoxItem>N</ComboBoxItem>
-										<ComboBoxItem>T</ComboBoxItem>
-									</ComboBox>
-									<!-- Column 2 -->
-									<TextBlock VerticalAlignment="Center" Grid.Column="2" Grid.Row="0">LB</TextBlock>
-									<ComboBox Name="ComboLB" Grid.Column="3" Grid.Row="0" Width="80">
-										<ComboBoxItem>None</ComboBoxItem>
-										<ComboBoxItem>Fire</ComboBoxItem>
-										<ComboBoxItem>Space</ComboBoxItem>
-										<ComboBoxItem>Up</ComboBoxItem>
-										<ComboBoxItem>Y</ComboBoxItem>
-										<ComboBoxItem>N</ComboBoxItem>
-										<ComboBoxItem>T</ComboBoxItem>
-									</ComboBox>
-									<TextBlock VerticalAlignment="Center" Grid.Column="2" Grid.Row="1">RB</TextBlock>
-									<ComboBox Name="ComboRB" Grid.Column="3" Grid.Row="1" Width="80">
-										<ComboBoxItem>None</ComboBoxItem>
-										<ComboBoxItem>Fire</ComboBoxItem>
-										<ComboBoxItem>Space</ComboBoxItem>
-										<ComboBoxItem>Up</ComboBoxItem>
-										<ComboBoxItem>Y</ComboBoxItem>
-										<ComboBoxItem>N</ComboBoxItem>
-										<ComboBoxItem>T</ComboBoxItem>
-									</ComboBox>
-									<TextBlock VerticalAlignment="Center" Grid.Column="2" Grid.Row="2">LS</TextBlock>
-									<ComboBox Name="ComboLS" Grid.Column="3" Grid.Row="2" Width="80">
-										<ComboBoxItem>None</ComboBoxItem>
-										<ComboBoxItem>Fire</ComboBoxItem>
-										<ComboBoxItem>Space</ComboBoxItem>
-										<ComboBoxItem>Up</ComboBoxItem>
-										<ComboBoxItem>Y</ComboBoxItem>
-										<ComboBoxItem>N</ComboBoxItem>
-										<ComboBoxItem>T</ComboBoxItem>
-									</ComboBox>
-									<TextBlock VerticalAlignment="Center" Grid.Column="2" Grid.Row="3">RS</TextBlock>
-									<ComboBox Name="ComboRS" Grid.Column="3" Grid.Row="3" Width="80">
-										<ComboBoxItem>None</ComboBoxItem>
-										<ComboBoxItem>Fire</ComboBoxItem>
-										<ComboBoxItem>Space</ComboBoxItem>
-										<ComboBoxItem>Up</ComboBoxItem>
-										<ComboBoxItem>Y</ComboBoxItem>
-										<ComboBoxItem>N</ComboBoxItem>
-										<ComboBoxItem>T</ComboBoxItem>
-									</ComboBox>
-								</Grid>
-							</StackPanel>
-						</Border>
-					</UniformGrid>
-				</StackPanel>
-			</TabItem>
+                <StackPanel Margin="0,16,0,8" Spacing="0">
 
-			<TabItem>
-				<TabItem.Header>
-					<StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-						<Svg Path="avares://ASE/Assets/Icons/folder.svg" Width="18" Height="18" VerticalAlignment="Center"/>
-						<TextBlock Text="Directories" VerticalAlignment="Center"/>
-					</StackPanel>
-				</TabItem.Header>
-				<StackPanel Orientation="Vertical" Margin="0,14,0,0" Spacing="12">
-					<Border Classes="card">
-						<StackPanel Spacing="6">
-							<TextBlock Classes="section" Text="Default directories"/>
-							<Label>Screenshots (Shift+F11)</Label>
-							<Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-								<TextBox Grid.Column="0" Name="TextScreenshotsDir"/>
-								<Button Grid.Column="1" Content="Browse…" Click="OnBrowseScreenshotsDirClick" />
-							</Grid>
-							<Label Margin="0,8,0,0">Snapshots (F11)</Label>
-							<Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-								<TextBox Grid.Column="0" Name="TextSnapshotsDir"/>
-								<Button Grid.Column="1" Content="Browse…" Click="OnBrowseSnapshotsDirClick" />
-							</Grid>
-							<Label Margin="0,8,0,0">Disk images</Label>
-							<Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-								<TextBox Grid.Column="0" Name="TextDiskImagesDir"/>
-								<Button Grid.Column="1" Content="Browse…" Click="OnBrowseDiskImagesDirClick" />
-							</Grid>
-							<Label Margin="0,8,0,0">TOS ROMs</Label>
-							<Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-								<TextBox Grid.Column="0" Name="TextTOSRomsDir"/>
-								<Button Grid.Column="1" Content="Browse…" Click="OnBrowseTOSRomsDirClick" />
-							</Grid>
-						</StackPanel>
-					</Border>
-				</StackPanel>
-			</TabItem>
-		</TabControl>
+                    <!-- Monitor mode is always visible. In monochrome high resolution the colour
+                         CRT shader and border controls below are bypassed. -->
+                    <Border Classes="card">
+                        <StackPanel Spacing="11">
+                            <StackPanel Spacing="2">
+                                <TextBlock Classes="section" Text="Monitor" />
 
-		<StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0" Spacing="8" Grid.Row="1">
-			<Button Content="OK" Classes="accent" Width="90" HorizontalContentAlignment="Center" Click="OnOkClick" />
-			<Button Content="Cancel" HorizontalContentAlignment="Center" Click="OnCancelClick" Width="90" />
-		</StackPanel>
+                            </StackPanel>
 
-	</Grid>
+                            <!-- Two selectable cards rather than a switch: both monitors are
+                                 valid hardware, so neither may look like the "off" position. -->
+                            <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
 
+                                <RadioButton Grid.Column="0"
+                                             Classes="optionCard"
+                                             Name="RadioColourMonitor"
+                                             GroupName="MonitorType"
+                                             Width="204">
+                                    <StackPanel Spacing="7">
+                                        <Svg Path="avares://ASE/Assets/Icons/SC1224.svg"
+                                             Width="64" Height="52"
+                                             HorizontalAlignment="Center" />
+
+                                        <TextBlock Classes="optionTitle" Text="Colour · SC1224 / TV" />
+                                        <TextBlock Classes="optionSpecs" Text="320×200 · 50Hz · CRT effects" />
+                                    </StackPanel>
+                                </RadioButton>
+
+                                <RadioButton Grid.Column="1"
+                                             Classes="optionCard"
+                                             Name="RadioMonochromeMonitor"
+                                             GroupName="MonitorType"
+                                             Width="204"
+                                             IsCheckedChanged="RadioMonochromeMonitor_OnIsCheckedChanged">
+                                    <StackPanel Spacing="7">
+                                        <Svg Path="avares://ASE/Assets/Icons/SM124.svg"
+                                             Width="64" Height="52"
+                                             HorizontalAlignment="Center" />
+
+                                        <TextBlock Classes="optionTitle" Text="Monochrome · SM124" />
+                                        <TextBlock Classes="optionSpecs" Text="640×400 · 71Hz · no effects" />
+                                    </StackPanel>
+                                </RadioButton>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- The physical height still collapses so the space is reclaimed, but the
+                         content fades and moves slightly first; code-behind wires the transitions. -->
+                    <Border x:Name="CrtEffectsClip"
+                            ClipToBounds="True"
+                            VerticalAlignment="Top">
+                        <Border Classes="card" Margin="0,12,0,0">
+                            <StackPanel Spacing="11">
+
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+                                    <StackPanel Grid.Column="0" Spacing="2">
+                                        <TextBlock Classes="section" Text="CRT effects" />
+                                        <TextBlock Classes="description"
+                                                   Text="Fine-tune the colour display shader. Values are preserved when effects are switched off." />
+                                    </StackPanel>
+
+                                    <!-- Checked means effects are enabled. The stored configuration
+                                         flag is DisableCrtEffects, so code-behind keeps them inverted. -->
+                                    <ToggleSwitch Grid.Column="1"
+                                                  Name="ToggleEffects"
+                                                  VerticalAlignment="Center"
+                                                  MinWidth="0"
+                                                  OffContent="Effects off"
+                                                  OnContent="Effects on"
+                                                  IsCheckedChanged="ToggleEffects_OnIsCheckedChanged" />
+                                </Grid>
+
+                                <!-- Three compact columns keep every CRT control visible without scrolling. -->
+                                <Grid Name="GridEffectSliders"
+                                      ColumnDefinitions="*,18,*,18,*"
+                                      RowDefinitions="Auto,Auto"
+                                      RowSpacing="7">
+
+                                    <StackPanel Grid.Column="0" Grid.Row="0" Spacing="1">
+                                        <Grid ColumnDefinitions="*,Auto">
+                                            <TextBlock Classes="fieldLabel" Text="CURVATURE" />
+                                            <TextBlock Grid.Column="1" Classes="valueBadge"
+                                                       Text="{Binding #SliderCurvature.Value, StringFormat={}{0:0.000}}" />
+                                        </Grid>
+                                        <Slider x:Name="SliderCurvature"
+                                                Minimum="0" Maximum="0.05"
+                                                ValueChanged="SliderCurvature_OnValueChanged" />
+                                    </StackPanel>
+
+                                    <StackPanel Grid.Column="2" Grid.Row="0" Spacing="1">
+                                        <Grid ColumnDefinitions="*,Auto">
+                                            <TextBlock Classes="fieldLabel" Text="VIGNETTE" />
+                                            <TextBlock Grid.Column="1" Classes="valueBadge"
+                                                       Text="{Binding #SliderVignette.Value, StringFormat={}{0:0.000}}" />
+                                        </Grid>
+                                        <Slider x:Name="SliderVignette"
+                                                Minimum="0" Maximum="1.0"
+                                                ValueChanged="SliderVignette_OnValueChanged" />
+                                    </StackPanel>
+
+                                    <StackPanel Grid.Column="4" Grid.Row="0" Spacing="1">
+                                        <Grid ColumnDefinitions="*,Auto">
+                                            <TextBlock Classes="fieldLabel" Text="SCANLINE" />
+                                            <TextBlock Grid.Column="1" Classes="valueBadge"
+                                                       Text="{Binding #SliderScanline.Value, StringFormat={}{0:0.000}}" />
+                                        </Grid>
+                                        <Slider x:Name="SliderScanline"
+                                                Minimum="-5.0" Maximum="5.0"
+                                                ValueChanged="SliderScanline_OnValueChanged" />
+                                    </StackPanel>
+
+                                    <StackPanel Grid.Column="0" Grid.Row="1" Spacing="1">
+                                        <Grid ColumnDefinitions="*,Auto">
+                                            <TextBlock Classes="fieldLabel" Text="ABERRATION" />
+                                            <TextBlock Grid.Column="1" Classes="valueBadge"
+                                                       Text="{Binding #SliderAberration.Value, StringFormat={}{0:0.000}}" />
+                                        </Grid>
+                                        <Slider x:Name="SliderAberration"
+                                                Minimum="0.0" Maximum="2.0"
+                                                ValueChanged="SliderAberration_OnValueChanged" />
+                                    </StackPanel>
+
+                                    <StackPanel Grid.Column="2" Grid.Row="1" Spacing="1">
+                                        <Grid ColumnDefinitions="*,Auto">
+                                            <TextBlock Classes="fieldLabel" Text="BLOOM" />
+                                            <TextBlock Grid.Column="1" Classes="valueBadge"
+                                                       Text="{Binding #SliderBloom.Value, StringFormat={}{0:0.000}}" />
+                                        </Grid>
+                                        <Slider x:Name="SliderBloom"
+                                                Minimum="0.0" Maximum="2.0"
+                                                ValueChanged="SliderBloom_OnValueChanged" />
+                                    </StackPanel>
+
+                                    <StackPanel Grid.Column="4" Grid.Row="1" Spacing="1">
+                                        <Grid ColumnDefinitions="*,Auto">
+                                            <TextBlock Classes="fieldLabel" Text="MASK" />
+                                            <TextBlock Grid.Column="1" Classes="valueBadge"
+                                                       Text="{Binding #SliderMask.Value, StringFormat={}{0:0.000}}" />
+                                        </Grid>
+                                        <Slider x:Name="SliderMask"
+                                                Minimum="0.0" Maximum="2.0"
+                                                ValueChanged="SliderMask_OnValueChanged" />
+                                    </StackPanel>
+                                </Grid>
+
+                                <!-- Match the same three-column geometry as the six sliders above.
+                                     Noise therefore has exactly the same width as every other slider. -->
+                                <Grid ColumnDefinitions="*,18,*,18,*" ColumnSpacing="0">
+                                    <StackPanel Name="PanelNoiseSlider" Grid.Column="0" Spacing="1">
+                                        <Grid ColumnDefinitions="*,Auto">
+                                            <TextBlock Classes="fieldLabel" Text="NOISE" />
+                                            <TextBlock Grid.Column="1" Classes="valueBadge"
+                                                       Text="{Binding #SliderNoise.Value, StringFormat={}{0:0.000}}" />
+                                        </Grid>
+                                        <Slider x:Name="SliderNoise"
+                                                Minimum="0.0" Maximum="1.0"
+                                                ValueChanged="SliderNoise_OnValueChanged" />
+                                    </StackPanel>
+
+                                    <Button Grid.Column="2"
+                                            Name="ButtonDefaultGLValues"
+                                            Classes="compact"
+                                            HorizontalAlignment="Left"
+                                            VerticalAlignment="Center"
+                                            Click="ButtonDefaultGLValues_OnClick"
+                                            Content="Set default values" />
+                                    
+                                    <CheckBox Grid.Column="4"
+                                              Name="chkShowBorders"
+                                              HorizontalAlignment="Right"
+                                              VerticalAlignment="Center"
+                                              IsCheckedChanged="ChkShowBorders_OnIsCheckedChanged">
+                                        Show borders
+                                    </CheckBox>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+                    </Border>
+                </StackPanel>
+            </TabItem>
+
+            <!-- INPUT -->
+            <TabItem>
+                <TabItem.Header>
+                    <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                        <Svg Path="avares://ASE/Assets/Icons/joystick.svg" Width="17" Height="17" VerticalAlignment="Center" />
+                        <TextBlock Text="Input" VerticalAlignment="Center" />
+                    </StackPanel>
+                </TabItem.Header>
+
+                    <StackPanel Margin="0,16,0,8" Spacing="12">
+                        <Border Classes="card">
+                            <StackPanel Spacing="12">
+                                <StackPanel Spacing="3">
+                                    <TextBlock Classes="section" Text="Mouse" />
+                                    <TextBlock Classes="description" Text="How far the ST pointer travels for the same movement of your mouse." />
+                                </StackPanel>
+
+                                <!--
+                                  The slider edits Config.MousePointerSpeed, not the stored
+                                  MouseSensitivity: the emulator divides by that one, so its number
+                                  grows as the pointer gets slower, which reads backwards on a
+                                  settings page. Speed runs low to high, left to right, matching
+                                  the slow/fast cursor icons at either end.
+                                -->
+                                <Grid ColumnDefinitions="32,*,32" ColumnSpacing="10">
+                                    <Svg Path="avares://ASE/Assets/Icons/mousecursorslow.svg"
+                                         Width="22" Height="22" Grid.Column="0"
+                                         VerticalAlignment="Center" />
+
+                                    <StackPanel Grid.Column="1" Spacing="4">
+                                        <Grid ColumnDefinitions="*,Auto">
+                                            <TextBlock Classes="fieldLabel" Text="Pointer speed" />
+                                            <TextBlock Grid.Column="1" Classes="valueBadge"
+                                                       Text="{Binding #SliderMouseSpeed.Value, StringFormat=×{0:0.0}}" />
+                                        </Grid>
+                                        <Slider x:Name="SliderMouseSpeed"
+                                                Value="{Binding MousePointerSpeed, Mode=TwoWay}"
+                                                Minimum="0.4" Maximum="4.0"
+                                                TickFrequency="0.2"
+                                                IsSnapToTickEnabled="True" />
+                                    </StackPanel>
+
+                                    <Svg Path="avares://ASE/Assets/Icons/mousecursorfast.svg"
+                                         Width="22" Height="22" Grid.Column="2"
+                                         VerticalAlignment="Center" />
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <Grid ColumnDefinitions="*,12,*">
+                            <Border Grid.Column="0" Classes="card">
+                                <StackPanel Spacing="14">
+                                    <StackPanel Spacing="3">
+                                        <TextBlock Classes="section" Text="Joystick mapped to keys" />
+                                        <TextBlock Classes="description" Text="Keyboard controls for joystick directions and fire." />
+                                    </StackPanel>
+
+                                    <Grid ColumnDefinitions="*,Auto,Auto"
+                                          RowDefinitions="Auto,Auto,Auto,Auto,Auto"
+                                          ColumnSpacing="10" RowSpacing="8">
+                                        <TextBlock Grid.Column="0" Grid.Row="0" VerticalAlignment="Center" Text="Up" />
+                                        <Border Grid.Column="1" Grid.Row="0" Classes="keycap">
+                                            <TextBlock x:Name="TextUp" FontWeight="SemiBold" Text="8" />
+                                        </Border>
+                                        <Button x:Name="btnRedefineUp" Grid.Column="2" Grid.Row="0" Classes="compact" Click="OnRedefine">Redefine</Button>
+
+                                        <TextBlock Grid.Column="0" Grid.Row="1" VerticalAlignment="Center" Text="Down" />
+                                        <Border Grid.Column="1" Grid.Row="1" Classes="keycap">
+                                            <TextBlock x:Name="TextDown" FontWeight="SemiBold" Text="8" />
+                                        </Border>
+                                        <Button x:Name="btnRedefineDown" Grid.Column="2" Grid.Row="1" Classes="compact" Click="OnRedefine">Redefine</Button>
+
+                                        <TextBlock Grid.Column="0" Grid.Row="2" VerticalAlignment="Center" Text="Left" />
+                                        <Border Grid.Column="1" Grid.Row="2" Classes="keycap">
+                                            <TextBlock x:Name="TextLeft" FontWeight="SemiBold" Text="8" />
+                                        </Border>
+                                        <Button x:Name="btnRedefineLeft" Grid.Column="2" Grid.Row="2" Classes="compact" Click="OnRedefine">Redefine</Button>
+
+                                        <TextBlock Grid.Column="0" Grid.Row="3" VerticalAlignment="Center" Text="Right" />
+                                        <Border Grid.Column="1" Grid.Row="3" Classes="keycap">
+                                            <TextBlock x:Name="TextRight" FontWeight="SemiBold" Text="8" />
+                                        </Border>
+                                        <Button x:Name="btnRedefineRight" Grid.Column="2" Grid.Row="3" Classes="compact" Click="OnRedefine">Redefine</Button>
+
+                                        <TextBlock Grid.Column="0" Grid.Row="4" VerticalAlignment="Center" Text="Fire" />
+                                        <Border Grid.Column="1" Grid.Row="4" Classes="keycap">
+                                            <TextBlock x:Name="TextFire" FontWeight="SemiBold" Text="8" />
+                                        </Border>
+                                        <Button x:Name="btnRedefineFire" Grid.Column="2" Grid.Row="4" Classes="compact" Click="OnRedefine">Redefine</Button>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Grid.Column="2" Classes="card">
+                                <StackPanel Spacing="14">
+                                    <StackPanel Spacing="3">
+                                        <TextBlock Classes="section" Text="Gamepad buttons" />
+                                        <TextBlock Classes="description" Text="Assign common Atari actions and keys to gamepad buttons." />
+                                    </StackPanel>
+
+                                    <Grid ColumnDefinitions="Auto,*,18,Auto,*"
+                                          RowDefinitions="Auto,Auto,Auto,Auto"
+                                          ColumnSpacing="8" RowSpacing="9">
+                                        <TextBlock Grid.Column="0" Grid.Row="0" VerticalAlignment="Center" FontWeight="SemiBold" Text="Y" />
+                                        <ComboBox Name="ComboY" Grid.Column="1" Grid.Row="0" HorizontalAlignment="Stretch">
+                                            <ComboBoxItem>None</ComboBoxItem><ComboBoxItem>Fire</ComboBoxItem><ComboBoxItem>Space</ComboBoxItem><ComboBoxItem>Up</ComboBoxItem><ComboBoxItem>Y</ComboBoxItem><ComboBoxItem>N</ComboBoxItem><ComboBoxItem>T</ComboBoxItem>
+                                        </ComboBox>
+
+                                        <TextBlock Grid.Column="0" Grid.Row="1" VerticalAlignment="Center" FontWeight="SemiBold" Text="X" />
+                                        <ComboBox Name="ComboX" Grid.Column="1" Grid.Row="1" HorizontalAlignment="Stretch">
+                                            <ComboBoxItem>None</ComboBoxItem><ComboBoxItem>Fire</ComboBoxItem><ComboBoxItem>Space</ComboBoxItem><ComboBoxItem>Up</ComboBoxItem><ComboBoxItem>Y</ComboBoxItem><ComboBoxItem>N</ComboBoxItem><ComboBoxItem>T</ComboBoxItem>
+                                        </ComboBox>
+
+                                        <TextBlock Grid.Column="0" Grid.Row="2" VerticalAlignment="Center" FontWeight="SemiBold" Text="B" />
+                                        <ComboBox Name="ComboB" Grid.Column="1" Grid.Row="2" HorizontalAlignment="Stretch">
+                                            <ComboBoxItem>None</ComboBoxItem><ComboBoxItem>Fire</ComboBoxItem><ComboBoxItem>Space</ComboBoxItem><ComboBoxItem>Up</ComboBoxItem><ComboBoxItem>Y</ComboBoxItem><ComboBoxItem>N</ComboBoxItem><ComboBoxItem>T</ComboBoxItem>
+                                        </ComboBox>
+
+                                        <TextBlock Grid.Column="0" Grid.Row="3" VerticalAlignment="Center" FontWeight="SemiBold" Text="A" />
+                                        <ComboBox Name="ComboA" Grid.Column="1" Grid.Row="3" HorizontalAlignment="Stretch">
+                                            <ComboBoxItem>None</ComboBoxItem><ComboBoxItem>Fire</ComboBoxItem><ComboBoxItem>Space</ComboBoxItem><ComboBoxItem>Up</ComboBoxItem><ComboBoxItem>Y</ComboBoxItem><ComboBoxItem>N</ComboBoxItem><ComboBoxItem>T</ComboBoxItem>
+                                        </ComboBox>
+
+                                        <TextBlock Grid.Column="3" Grid.Row="0" VerticalAlignment="Center" FontWeight="SemiBold" Text="LB" />
+                                        <ComboBox Name="ComboLB" Grid.Column="4" Grid.Row="0" HorizontalAlignment="Stretch">
+                                            <ComboBoxItem>None</ComboBoxItem><ComboBoxItem>Fire</ComboBoxItem><ComboBoxItem>Space</ComboBoxItem><ComboBoxItem>Up</ComboBoxItem><ComboBoxItem>Y</ComboBoxItem><ComboBoxItem>N</ComboBoxItem><ComboBoxItem>T</ComboBoxItem>
+                                        </ComboBox>
+
+                                        <TextBlock Grid.Column="3" Grid.Row="1" VerticalAlignment="Center" FontWeight="SemiBold" Text="RB" />
+                                        <ComboBox Name="ComboRB" Grid.Column="4" Grid.Row="1" HorizontalAlignment="Stretch">
+                                            <ComboBoxItem>None</ComboBoxItem><ComboBoxItem>Fire</ComboBoxItem><ComboBoxItem>Space</ComboBoxItem><ComboBoxItem>Up</ComboBoxItem><ComboBoxItem>Y</ComboBoxItem><ComboBoxItem>N</ComboBoxItem><ComboBoxItem>T</ComboBoxItem>
+                                        </ComboBox>
+
+                                        <TextBlock Grid.Column="3" Grid.Row="2" VerticalAlignment="Center" FontWeight="SemiBold" Text="LS" />
+                                        <ComboBox Name="ComboLS" Grid.Column="4" Grid.Row="2" HorizontalAlignment="Stretch">
+                                            <ComboBoxItem>None</ComboBoxItem><ComboBoxItem>Fire</ComboBoxItem><ComboBoxItem>Space</ComboBoxItem><ComboBoxItem>Up</ComboBoxItem><ComboBoxItem>Y</ComboBoxItem><ComboBoxItem>N</ComboBoxItem><ComboBoxItem>T</ComboBoxItem>
+                                        </ComboBox>
+
+                                        <TextBlock Grid.Column="3" Grid.Row="3" VerticalAlignment="Center" FontWeight="SemiBold" Text="RS" />
+                                        <ComboBox Name="ComboRS" Grid.Column="4" Grid.Row="3" HorizontalAlignment="Stretch">
+                                            <ComboBoxItem>None</ComboBoxItem><ComboBoxItem>Fire</ComboBoxItem><ComboBoxItem>Space</ComboBoxItem><ComboBoxItem>Up</ComboBoxItem><ComboBoxItem>Y</ComboBoxItem><ComboBoxItem>N</ComboBoxItem><ComboBoxItem>T</ComboBoxItem>
+                                        </ComboBox>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+                    </StackPanel>
+                
+            </TabItem>
+
+            <!-- DIRECTORIES -->
+            <TabItem>
+                <TabItem.Header>
+                    <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                        <Svg Path="avares://ASE/Assets/Icons/folder.svg" Width="17" Height="17" VerticalAlignment="Center" />
+                        <TextBlock Text="Directories" VerticalAlignment="Center" />
+                    </StackPanel>
+                </TabItem.Header>
+
+
+                    <StackPanel Margin="0,16,0,8">
+                        <Border Classes="card">
+                            <StackPanel Spacing="15">
+                                <StackPanel Spacing="3">
+                                    <TextBlock Classes="section" Text="Default directories" />
+                                    <TextBlock Classes="description" Text="Choose where ASE stores and looks for frequently used files." />
+                                </StackPanel>
+
+                                <StackPanel Spacing="6">
+                                    <TextBlock Classes="fieldLabel" Text="SCREENSHOTS  ·  SHIFT+F11" />
+                                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                                        <TextBox Grid.Column="0" Name="TextScreenshotsDir" />
+                                        <Button Grid.Column="1" Classes="compact" Content="Browse…" Click="OnBrowseScreenshotsDirClick" />
+                                    </Grid>
+                                </StackPanel>
+
+                                <StackPanel Spacing="6">
+                                    <TextBlock Classes="fieldLabel" Text="SNAPSHOTS  ·  F11" />
+                                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                                        <TextBox Grid.Column="0" Name="TextSnapshotsDir" />
+                                        <Button Grid.Column="1" Classes="compact" Content="Browse…" Click="OnBrowseSnapshotsDirClick" />
+                                    </Grid>
+                                </StackPanel>
+
+                                <StackPanel Spacing="6">
+                                    <TextBlock Classes="fieldLabel" Text="DISK IMAGES" />
+                                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                                        <TextBox Grid.Column="0" Name="TextDiskImagesDir" />
+                                        <Button Grid.Column="1" Classes="compact" Content="Browse…" Click="OnBrowseDiskImagesDirClick" />
+                                    </Grid>
+                                </StackPanel>
+
+                                <StackPanel Spacing="6">
+                                    <TextBlock Classes="fieldLabel" Text="TOS ROMS" />
+                                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                                        <TextBox Grid.Column="0" Name="TextTOSRomsDir" />
+                                        <Button Grid.Column="1" Classes="compact" Content="Browse…" Click="OnBrowseTOSRomsDirClick" />
+                                    </Grid>
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+            </TabItem>
+            
+                        <!-- MIDI -->
+            <TabItem>
+                <TabItem.Header>
+                    <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                        <Svg Path="avares://ASE/Assets/Icons/music-note-beamed.svg" Width="17" Height="17" VerticalAlignment="Center" />
+                        <TextBlock Text="MIDI" VerticalAlignment="Center" />
+                    </StackPanel>
+                </TabItem.Header>
+
+                <StackPanel Margin="0,16,0,8" Spacing="12">
+                    <Border Classes="card">
+                        <StackPanel Spacing="12">
+                            <StackPanel Grid.Column="0" Spacing="3">
+                                <TextBlock Classes="section" Text="MIDI" />
+                                <TextBlock Classes="description" Text="Choose the emulated MIDI options." />
+                            </StackPanel>
+                            <Grid ColumnDefinitions="160,*" RowDefinitions="Auto,Auto" RowSpacing="12" ColumnSpacing="18">
+
+                                <TextBlock Grid.Row="0" Grid.Column="0" Classes="fieldLabel" VerticalAlignment="Center" Text="EMULATION" />
+                                <ComboBox Name="ComboMidiEmulation"
+                                          Grid.Row="0" Grid.Column="1"
+                                          MaxDropDownHeight="140"
+                                          HorizontalAlignment="Stretch"
+                                          VerticalAlignment="Center"
+                                          SelectedIndex="{Binding MidiEmulation, Mode=TwoWay}"
+                                          SelectionChanged="MidiEmulation_SelectionChanged">
+                                    <ComboBoxItem>Not emulated</ComboBoxItem>
+                                    <ComboBoxItem>System managed MIDI</ComboBoxItem>
+                                    <ComboBoxItem>Built-in Roland MT-32 emulation</ComboBoxItem>
+                                </ComboBox>
+
+                                <!-- Options for System managed. Both option grids share row 1:
+                                     only the one belonging to the selected mode is visible
+                                     (ConfigurationWindow.UpdateMidiVisibility). -->
+                                <Grid Name="GridMidiSystem"
+                                      Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2"
+                                      IsVisible="False"
+                                      ColumnDefinitions="160,*" RowDefinitions="Auto,Auto,Auto" RowSpacing="12" ColumnSpacing="18">
+                                    <!-- MIDI In -->
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Classes="fieldLabel" VerticalAlignment="Center" Text="MIDI IN" />
+                                    <ComboBox Name="ComboMidiIn"
+                                              Grid.Row="0" Grid.Column="1"
+                                              MaxDropDownHeight="220"
+                                              HorizontalAlignment="Stretch" />
+                                    <!-- MIDI Out -->
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Classes="fieldLabel" VerticalAlignment="Center" Text="MIDI OUT" />
+                                    <ComboBox Name="ComboMidiOut"
+                                              Grid.Row="1" Grid.Column="1"
+                                              MaxDropDownHeight="220"
+                                              HorizontalAlignment="Stretch" />
+
+                                    <TextBlock Grid.Row="2" Grid.Column="1"
+                                               Classes="description"
+                                               Text="Ports published by the operating system. The ST MIDI OUT is sent to the output port, and whatever arrives at the input port reaches its MIDI IN." />
+                                </Grid>
+
+                                <!-- Options for Built-in MT32 emulation -->
+                                <Grid Name="GridMidiMt32"
+                                      Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2"
+                                      IsVisible="False"
+                                      ColumnDefinitions="160,*" RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="12" ColumnSpacing="18">
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Classes="fieldLabel" VerticalAlignment="Center" Text="MT32 ROMS" />
+                                    <Grid Grid.Row="0" Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                                        <TextBox Grid.Column="0" Name="TextMt32RomDir" />
+                                        <Button Grid.Column="1" Classes="compact" Content="Browse…" Click="OnBrowseMt32RomsClick" />
+                                    </Grid>
+
+                                    <TextBlock Grid.Row="1" Grid.Column="1"
+                                               Classes="description"
+                                               Text="Folder with the Roland control and PCM ROM images, which are not supplied with ASE. Their file names do not matter, I'll identify the ROMs automatically." />
+
+                                    <!-- The module's volume knob: applied live, no reset needed. -->
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Classes="fieldLabel" VerticalAlignment="Center" Text="VOLUME" />
+                                    <Grid Grid.Row="2" Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                                        <!-- Maximum comes from Mt32Backend.MaxVolume, assigned in the
+                                             constructor: the knob's ceiling belongs with the mixer that
+                                             enforces it, and x:Static cannot feed this double property. -->
+                                        <Slider Grid.Column="0" x:Name="SliderMt32Volume"
+                                                Minimum="0"
+                                                TickFrequency="5" IsSnapToTickEnabled="True"
+                                                VerticalAlignment="Center"
+                                                ValueChanged="SliderMt32Volume_OnValueChanged" />
+                                        <TextBlock Grid.Column="1" Classes="valueBadge" VerticalAlignment="Center"
+                                                   Text="{Binding #SliderMt32Volume.Value, StringFormat={}{0:0}%}" />
+                                    </Grid>
+
+                                    <TextBlock Grid.Row="3" Grid.Column="1"
+                                               Classes="description"
+                                               Text="Level of the emulated module in the mix, like the volume knob on the real Roland. Open the MT32 Toolbox to change while running." />
+                                </Grid>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </TabItem>
+            
+        </TabControl>
+
+        <!-- Footer -->
+        <Border Grid.Row="2"
+                Margin="0,12,0,0"
+                Padding="24,14"
+                Background="{DynamicResource CardBackgroundBrush}"
+                BorderBrush="{DynamicResource CardBorderBrush}"
+                BorderThickness="0,1,0,0">
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="10">
+                <Button Content="Cancel"
+                        HorizontalContentAlignment="Center"
+                        Click="OnCancelClick"
+                        Width="100" />
+                <Button Content="OK"
+                        Classes="accent"
+                        Width="100"
+                        HorizontalContentAlignment="Center"
+                        Click="OnOkClick" />
+            </StackPanel>
+        </Border>
+    </Grid>
 </Window>

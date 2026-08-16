@@ -305,14 +305,14 @@ public partial class ScraperWindow : Window
         {
             Id = GameInfo.Data.Id,
             Filename = Path.GetFileName(filenameOrName),
-            Developer = GameInfo.Data.Developpeur.Text,
-            Publisher = GameInfo.Data.Editeur.Text
+            Developer = GameInfo.Data.Developpeur == null ? "" : GameInfo.Data.Developpeur.Text,
+            Publisher = GameInfo.Data.Editeur == null ? "" : GameInfo.Data.Editeur.Text
         };
 
         item.Name = new List<LibraryItem.RegionText>();
 
         // Region program names
-        if (GameInfo.Data.Noms.Count == 0)
+        if (GameInfo.Data.Noms != null && GameInfo.Data.Noms.Count == 0)
             item.Name.Add(new LibraryItem.RegionText { Region = "ss", Text = item.Filename });
         else
         {
@@ -328,7 +328,7 @@ public partial class ScraperWindow : Window
         }
 
         // Language synopsis
-        if (GameInfo.Data.Synopsis.Count > 0)
+        if (GameInfo.Data.Synopsis != null && GameInfo.Data.Synopsis.Count > 0)
         {
             item.Synopsis = new List<LibraryItem.RegionText>();
             foreach (var Synopsis in GameInfo.Data.Synopsis)
@@ -339,7 +339,7 @@ public partial class ScraperWindow : Window
         }
 
         // Region release date
-        if (GameInfo.Data.Dates.Count > 0)
+        if (GameInfo.Data.Dates != null && GameInfo.Data.Dates.Count > 0)
         {
             item.Date = new List<LibraryItem.RegionText>();
             foreach (var _date in GameInfo.Data.Dates)
@@ -350,7 +350,7 @@ public partial class ScraperWindow : Window
         }
 
         // Genre
-        if (GameInfo.Data.Genres.Count > 0 && GameInfo.Data.Genres[0].Noms.Count > 0)
+        if (GameInfo.Data.Genres != null && GameInfo.Data.Genres.Count > 0 && GameInfo.Data.Genres[0].Noms.Count > 0)
         {
             item.Genre = new List<LibraryItem.RegionText>();
             foreach (var genre in GameInfo.Data.Genres[0].Noms)

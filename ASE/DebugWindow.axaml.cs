@@ -2,6 +2,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Globalization;
@@ -55,6 +56,14 @@ public partial class DebugWindow : Window
 
     DasmLine _pcLine;
 
+    /// <summary>
+    /// Address of the breakpoint planted by "Run to this line", if it is still armed.
+    /// Static because the window is destroyed while the machine runs and a new one is
+    /// built on every stop (see ASEMain.EmulatorLoop). It is null for as long as the
+    /// window is open: the constructor clears it, and setting it closes the window.
+    /// </summary>
+    static uint? _tempBreakpoint;
+
     public DebugWindow()
     {
         InitializeComponent();
@@ -68,6 +77,7 @@ public partial class DebugWindow : Window
             // state was displayed.
             ASEMain.EnterUiPause();
             ASEMain.RunWhilePaused(() => { }, out _);
+            ClearTemporaryBreakpoint();
             BuildListing(CPU._moira.PC);
             UpdateRegisters();
             UpdateBreakpointControls();
@@ -118,13 +128,8 @@ public partial class DebugWindow : Window
             return;
         }
 
-        if (tglBreakpoint.IsChecked == true)
-            CPU._moira.SetBreakpoint(line.Address);
-        else
-            CPU._moira.RemoveBreakpoint(line.Address);
-
-        line.IsBreakpoint = tglBreakpoint.IsChecked == true;
-        btnRunToBp.IsEnabled = CPU._moira.BreakpointCount > 0;
+        ToggleBreakpoint(line);
+        UpdateBreakpointControls();
     }
 
     public void OnClearBreakpointClick(object sender, RoutedEventArgs e)
@@ -137,6 +142,92 @@ public partial class DebugWindow : Window
 
         // Unchecks the toggle if the selected line had a breakpoint and disables "Run until breakpoint"
         UpdateBreakpointControls();
+    }
+
+    /// <summary>
+    /// Right-clicking selects the line under the pointer, so the context menu always acts
+    /// on what was pointed at (and the Breakpoint button, which follows the selection, agrees
+    /// with it). The menu entries themselves read <c>lstListing.SelectedItem</c>.
+    /// </summary>
+    public void OnListingContextRequested(object sender, ContextRequestedEventArgs e)
+    {
+        if (e.Source is Control c &&
+            c.FindAncestorOfType<ListBoxItem>(true) is { DataContext: DasmLine line })
+            lstListing.SelectedItem = line;
+    }
+
+    /// <summary>Context menu: sets or clears a breakpoint on the selected line.</summary>
+    public void OnContextToggleBreakpointClick(object sender, RoutedEventArgs e)
+    {
+        if (lstListing.SelectedItem is not DasmLine line)
+            return;
+
+        ToggleBreakpoint(line);
+        UpdateBreakpointControls();
+    }
+
+    /// <summary>
+    /// Context menu: resumes emulation until the selected line is reached. Moira has no
+    /// one-shot breakpoints, so a normal one is planted and remembered in
+    /// <see cref="_tempBreakpoint"/>; the next time the machine stops (this line, another
+    /// breakpoint or a manual open of the debugger) the constructor removes it again.
+    /// A line the user had already guarded is left alone — that breakpoint is not ours.
+    /// </summary>
+    public void OnRunToLineClick(object sender, RoutedEventArgs e)
+    {
+        if (lstListing.SelectedItem is not DasmLine line)
+            return;
+
+        if (!CPU._moira.IsBreakpoint(line.Address))
+        {
+            CPU._moira.SetBreakpoint(line.Address);
+            _tempBreakpoint = line.Address;
+        }
+
+        // Closing resumes the machine; breakpoints are always armed (see OnRunToBreakpointClick)
+        Close();
+    }
+
+    /// <summary>
+    /// Context menu: moves the PC to the selected line without executing anything in between.
+    /// </summary>
+    public void OnSetPcToLineClick(object sender, RoutedEventArgs e)
+    {
+        if (lstListing.SelectedItem is not DasmLine line)
+            return;
+
+        JumpTo(line.Address);
+        ShowCurrentPC();
+    }
+
+    /// <summary>
+    /// Sets or clears the breakpoint on a line, both in Moira and in the listing's red mark.
+    /// The decision is taken from Moira's own state so the button and the context menu agree
+    /// whatever the visual state of either was.
+    /// </summary>
+    void ToggleBreakpoint(DasmLine line)
+    {
+        bool wasSet = CPU._moira.IsBreakpoint(line.Address);
+
+        if (wasSet)
+            CPU._moira.RemoveBreakpoint(line.Address);
+        else
+            CPU._moira.SetBreakpoint(line.Address);
+
+        line.IsBreakpoint = !wasSet;
+    }
+
+    /// <summary>
+    /// Removes the breakpoint left behind by "Run to this line". Called when the debugger
+    /// opens, which is what makes it last exactly until the machine stops again.
+    /// </summary>
+    static void ClearTemporaryBreakpoint()
+    {
+        if (_tempBreakpoint is not uint addr)
+            return;
+
+        CPU._moira.RemoveBreakpoint(addr);
+        _tempBreakpoint = null;
     }
 
     /// <summary>
@@ -529,6 +620,7 @@ public partial class DebugWindow : Window
             {
                 Address = (uint)(lineAddr + i * 2),
                 IsPC = (i == 32),
+                IsBreakpoint = (i == 32 || i == 20),
                 DasmCodeLine = $"{lineAddr + i * 2:X8} 1A1B 1C1D 1E1F             move.l #$FFFF0000,(a1)"
             });
         }

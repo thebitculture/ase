@@ -90,6 +90,11 @@ namespace ASE
             stxOp = null;
             stxDmaByteCount = 0;
 
+            // A pending disk change has nothing left to notify after a reset: TOS re-reads the
+            // disk from scratch on the way up.
+            ASEMain.driveA.ClearDiskTransition();
+            ASEMain.driveB.ClearDiskTransition();
+
             if (ASEMain._mfp != null)
                 ASEMain._mfp.SetGPIOBit(5, true);
         }
@@ -384,9 +389,11 @@ namespace ASE
         }
 
         /// <summary>
-        /// Composes the status byte the CPU sees: the stored command result plus the bits that
-        /// change in real time on the WD1772 (bit 7 = motor on, bit 1 = index pulse for Type I).
-        /// Loaders poll these transitions, so they can't be a frozen snapshot.
+        /// Composes the status byte the CPU sees: the stored command result plus the bits the
+        /// WD1772 takes live from its input lines — bit 7 (motor on) always, and after a Type I
+        /// command also bit 1 (index pulse), bit 2 (track 0) and bit 6 (write protect). Loaders
+        /// poll those transitions and TOS polls bit 6 to detect a disk change, so they can't be
+        /// a frozen snapshot of the moment the command ended.
         /// </summary>
         private static byte ComposeStatus()
         {
@@ -401,16 +408,41 @@ namespace ASE
 
             if (lastCommandTypeI)
             {
-                st &= unchecked((byte)~STATUS_INDEX_PULSE);
+                // In Type I form the chip presents the drive's input lines as they are at the
+                // instant of the read, not as they were when the command ended: bit 1 (index
+                // pulse), bit 2 (track 0) and bit 6 (write protect). Programs poll them without
+                // issuing a new command — and bit 6 is where TOS looks to notice a disk change
+                // (see FloppyImage.SignalDiskTransition), so it can't be a frozen snapshot.
+                st &= unchecked((byte)~(STATUS_INDEX_PULSE | STATUS_TRACK0 | STATUS_WRITE_PROTECT));
+
+                // With no drive selected the TR00, INDEX and WPRT inputs are all inactive
+                if (currentDrive == -1)
+                    return st;
+
+                if (headTrack == 0)
+                    st |= STATUS_TRACK0;
 
                 // No index pulses without a spinning motor and a disk in the drive
-                if (motorOn && currentDrive != -1 && ActiveDrive.HasDisk &&
+                if (motorOn && ActiveDrive.HasDisk &&
                     CPU._moira.Clock % CYCLES_PER_REVOLUTION < INDEX_PULSE_WIDTH_CYCLES)
                     st |= STATUS_INDEX_PULSE;
+
+                if (WriteProtectAsserted)
+                    st |= STATUS_WRITE_PROTECT;
             }
 
             return st;
         }
+
+        /// <summary>
+        /// State of the selected drive's write protect line. An empty drive is indistinguishable
+        /// from a write-protected disk (one sensor, no disk-change line on the ST), and the line
+        /// is also held high for a few VBLs after a disk is inserted or ejected: that transition
+        /// is what TOS watches to detect a disk change, see
+        /// <see cref="FloppyImage.SignalDiskTransition"/>.
+        /// </summary>
+        private static bool WriteProtectAsserted =>
+            !ActiveDrive.HasDisk || ActiveDrive.WriteProtected || ActiveDrive.WpTransitionActive;
 
         private static void UpdateTypeIStatus()
         {
@@ -419,9 +451,7 @@ namespace ASE
 
             if (headTrack == 0)
                 statusRegister |= STATUS_TRACK0;
-            // With no disk inserted the write protect sensor reads as protected
-            // (TOS relies on WP transitions for its disk change detection)
-            if (!ActiveDrive.HasDisk || ActiveDrive.WriteProtected)
+            if (WriteProtectAsserted)
                 statusRegister |= STATUS_WRITE_PROTECT;
         }
 

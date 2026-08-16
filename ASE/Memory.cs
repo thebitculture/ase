@@ -161,8 +161,9 @@ namespace ASE
             Ports[STPortAdress.ST_MMU - PortsBase] = mmuConfigExpected;
             ApplyMMUConfig(mmuConfigExpected);
 
-            // Color, PAL
-            Ports[0x260] = 0;
+            // Resolution (low/high) and PAL sync. TOS overwrites $FF8260 during boot from the
+            // monochrome-monitor detect line (MFP GPIP7); this just starts it consistent.
+            Ports[0x260] = (byte)(ConfigOptions.RunninConfig.MonochromeMonitor ? 2 : 0);
             Ports[0x20a] = 2;
         }
 
@@ -513,16 +514,16 @@ namespace ASE
                 if (addr == STPortAdress.ST_ACIADATA)
                     return ACIA.ReadData();
 
-                // MIDI ACIA: not emulated, but it shares the MFP GPIP4 interrupt line with the
-                // keyboard ACIA, so shared level-6 handlers read its status FIRST to see which
-                // chip requested the interrupt. It must read as idle -- TDRE set, IRQ/RDRF clear.
-                // Falling through to the generic $FF (IRQ bit set) made such handlers (Rodland)
-                // attribute every interrupt to MIDI traffic and never read the keyboard data.
+                // MIDI ACIA (second 6850). It shares the MFP GPIP4 interrupt line with the
+                // keyboard ACIA (see AciaIrqLine), so shared level-6 handlers read its status
+                // FIRST to see which chip requested the interrupt — with nothing received and
+                // the transmitter idle it reads as TDRE set, IRQ/RDRF clear, which is what
+                // keeps such handlers (Rodland) reading the keyboard data.
                 if (addr == STPortAdress.ST_MIDICMD)
-                    return ACIA.ACIA_TDRE;
+                    return MidiAcia.ReadStatus();
 
                 if (addr == STPortAdress.ST_MIDIDATA)
-                    return 0;
+                    return MidiAcia.ReadData();
 
                 // Video Address Pointer ($FF8205/07/09): computed live so it advances through
                 // the active display and freezes in the borders, as games that poll it expect.
@@ -800,6 +801,20 @@ namespace ASE
                 if (addr == STPortAdress.ST_ACIADATA)
                 {
                     ACIA.HandleCommand(v);
+                    return;
+                }
+
+                // MIDI ACIA (second 6850): control register, and data bytes leaving through
+                // the ST's MIDI OUT (routed by MidiManager to the configured destination).
+                if (addr == STPortAdress.ST_MIDICMD)
+                {
+                    MidiAcia.WriteControl(v);
+                    return;
+                }
+
+                if (addr == STPortAdress.ST_MIDIDATA)
+                {
+                    MidiAcia.WriteData(v);
                     return;
                 }
 

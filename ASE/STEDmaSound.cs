@@ -334,8 +334,9 @@ namespace ASE
             if (ASEMain._mfp == null)
                 return;
 
-            // GPIP7 = monochrome detect (1 on a colour system) XOR XSINT
-            ASEMain._mfp.SetGPIOBit(7, !high);
+            // GPIP7 = monochrome detect wired with XSINT: high (1) only when idle AND a colour
+            // monitor is attached; a monochrome monitor holds the line low regardless of XSINT.
+            ASEMain._mfp.SetGPIOBit(7, !high && !VideoTiming.Mono);
 
             // Timer A event count input is also driven by XSINT (counts end of frames)
             if (!high)

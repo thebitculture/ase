@@ -124,11 +124,16 @@ namespace ASE
             ASEMain._mfp = new MFP68901();
 
             ACIA.Reset();
+            MidiAcia.Reset();
             WD1772.Reset();
             Blitter.Reset();
             STEDmaSound.Reset();
             VideoTiming.Reset();
             ASEMain._ym.Reset();
+
+            // Monochrome-monitor detect on MFP GPIP7 (0 = mono). Set after VideoTiming.Reset has
+            // resolved the monitor type; TOS reads it during boot to select high resolution.
+            ASEMain._mfp.SetMonochromeDetect(VideoTiming.Mono);
 
             _moira.Reset();
             return true;

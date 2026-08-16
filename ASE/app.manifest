@@ -3,7 +3,7 @@
   <!-- Required by Avalonia's NativeControlHost (game video previews): without a
        supportedOS list Windows runs the process in compatibility mode and the
        native child window creation fails. -->
-  <assemblyIdentity version="1.9.0.0" name="ASE.app"/>
+  <assemblyIdentity version="1.10.0.0" name="ASE.app"/>
 
   <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
     <application>

@@ -26,6 +26,9 @@
  *           command in flight is completed (flushed) before saving.
  *   "DMAS"  STE DMA sound + Microwire/LMC1992 (ignored on ST/Mega restores).
  *   "BLIT"  Blitter registers and barrel-shifter state.
+ *   "MIDI"  MIDI ACIA 6850 registers and transmit state (the host-side receive
+ *           queue and whatever the port is wired to belong to the session, not
+ *           to the machine). Absent in older snapshots: the chip stays reset.
  *
  * Not included: the floppy image contents themselves (only their paths) and
  * Moira-internal state not exposed by the wrapper (e.g. a pending STOP).
@@ -104,6 +107,7 @@ namespace ASE
         {
             public ConfigOptions.STModels Model;
             public ConfigOptions.RAMConfigurations RamConfig;
+            public bool Mono;
             public string DriveAPath = "";
             public string DriveBPath = "";
             public Dictionary<string, byte[]> Sections = new();
@@ -133,6 +137,8 @@ namespace ASE
                 w.U8((byte)ConfigOptions.RunninConfig.RAMConfiguration);
                 w.Str(ASEMain.driveA.ImagePath);
                 w.Str(ASEMain.driveB.ImagePath);
+                // Appended after the original fields so older readers (which stop here) still load.
+                w.U8((byte)(ConfigOptions.RunninConfig.MonochromeMonitor ? 1 : 0));
             });
 
             WriteSection(fs, "CPU ", WriteCpu);
@@ -156,6 +162,7 @@ namespace ASE
             WriteSection(fs, "FDC ", WD1772.SaveState);
             WriteSection(fs, "DMAS", STEDmaSound.SaveState);
             WriteSection(fs, "BLIT", Blitter.SaveState);
+            WriteSection(fs, "MIDI", MidiAcia.SaveState);
         }
 
         static void WriteSection(Stream fs, string id, Action<Writer> body)
@@ -266,6 +273,8 @@ namespace ASE
             snap.RamConfig = (ConfigOptions.RAMConfigurations)ram;
             snap.DriveAPath = cfg.Str();
             snap.DriveBPath = cfg.Str();
+            // Monitor type is appended after the original fields; absent in older snapshots.
+            snap.Mono = cfg.Remaining > 0 && cfg.Bool();
 
             // Consistency checks that don't need the machine
             int romLen = snap.Sections["ROM "].Length - 4;
@@ -319,6 +328,7 @@ namespace ASE
             if (snap.Sections.TryGetValue("FDC ", out var fdc)) WD1772.LoadState(new Reader(fdc));
             if (snap.Sections.TryGetValue("DMAS", out var dmas)) STEDmaSound.LoadState(new Reader(dmas));
             if (snap.Sections.TryGetValue("BLIT", out var blit)) Blitter.LoadState(new Reader(blit));
+            if (snap.Sections.TryGetValue("MIDI", out var midi)) MidiAcia.LoadState(new Reader(midi));
 
             // The GLUE sync/resolution latches mirror the restored port bytes
             VideoTiming.RestoreFromPorts();

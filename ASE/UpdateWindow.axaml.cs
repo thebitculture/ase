@@ -1,5 +1,9 @@
+using System.Diagnostics;
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Media;
+using Avalonia.Threading;
 
 namespace ASE;
 
@@ -10,9 +14,16 @@ namespace ASE;
 /// </summary>
 public partial class UpdateWindow : Window
 {
+    private DispatcherTimer _animationTimer;
+    private Stopwatch _animationClock;
+    private TranslateTransform _retroDudeTransform;
+
     public UpdateWindow()
     {
         InitializeComponent();
+
+        _retroDudeTransform = new TranslateTransform();
+        RetroDude.RenderTransform = _retroDudeTransform;
     }
 
     protected override void OnOpened(EventArgs e)
@@ -48,11 +59,68 @@ public partial class UpdateWindow : Window
             ? "Available now"
             : $"Published {release.PublishedAt.ToLocalTime():d MMMM yyyy}";
 
-        LinkRelease.Content = release.HtmlUrl;
+        LinkRelease.Text = release.HtmlUrl;
+
+        StartBackgroundAnimations();
     }
+
+    /// <summary>Idle animation for the mascot, matching the About window: it bobs while the
+    /// glow behind it breathes out of phase, so the halo does not read as part of the sprite.
+    /// The starfield is not driven from here — it owns its own clock (see Starfield.cs).</summary>
+    private void StartBackgroundAnimations()
+    {
+        StopBackgroundAnimations();
+
+        _animationClock = Stopwatch.StartNew();
+
+        _animationTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(16)
+        };
+
+        _animationTimer.Tick += AnimationTimer_Tick;
+        _animationTimer.Start();
+
+        // Draw the first animated state immediately rather than waiting for a timer tick.
+        UpdateBackgroundAnimations(0);
+    }
+
+    private void StopBackgroundAnimations()
+    {
+        if (_animationTimer != null)
+        {
+            _animationTimer.Stop();
+            _animationTimer.Tick -= AnimationTimer_Tick;
+            _animationTimer = null;
+        }
+
+        _animationClock?.Stop();
+        _animationClock = null;
+    }
+
+    private void AnimationTimer_Tick(object sender, EventArgs e)
+    {
+        if (_animationClock == null)
+            return;
+
+        UpdateBackgroundAnimations(_animationClock.Elapsed.TotalSeconds);
+    }
+
+    private void UpdateBackgroundAnimations(double t)
+    {
+        _retroDudeTransform.Y = Math.Sin(t * 1.75) * 4.0;
+        RetroDude.Opacity = 0.95 + Osc01(t * 1.75 + 0.4) * 0.05;
+
+        AvatarGlow.Opacity = 0.38 + Osc01(t * 0.85 + 2.2) * 0.30;
+    }
+
+    private static double Osc01(double phase)
+        => 0.5 + Math.Sin(phase) * 0.5;
 
     protected override void OnClosed(EventArgs e)
     {
+        StopBackgroundAnimations();
+
         base.OnClosed(e);
 
         // Applied here rather than in the buttons so closing with the title bar keeps the choice.
@@ -72,7 +140,7 @@ public partial class UpdateWindow : Window
         Close();
     }
 
-    private async void OpenRelease_Click(object sender, RoutedEventArgs e)
+    private async void ReleaseCard_Tapped(object sender, TappedEventArgs e)
     {
         await OpenReleasePage();
     }

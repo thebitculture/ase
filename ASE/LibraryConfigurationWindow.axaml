@@ -2,53 +2,187 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        mc:Ignorable="d" Width="500" SizeToContent="Height" 
+        xmlns:svg="clr-namespace:Avalonia.Svg;assembly=Svg.Controls.Avalonia"
+        mc:Ignorable="d"
+        x:Class="ASE.LibraryConfigurationWindow"
+        Title="Library configuration"
+        Classes="aseDialog"
+        Width="640"
+        SizeToContent="Height"
         CanResize="False"
         WindowStartupLocation="CenterScreen"
-        UseLayoutRounding="True"
-        x:Class="ASE.LibraryConfigurationWindow"
-        Title="Library configuration">
+        UseLayoutRounding="True">
 
-        <StackPanel Orientation="Vertical" Margin="20" Spacing="10">
+    <Grid RowDefinitions="Auto,Auto,Auto">
 
-                <Border Classes="card">
-                        <StackPanel Spacing="10">
-                                <TextBlock Classes="section" Text="Library path"/>
-                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                                        <TextBox Grid.Column="0" x:Name="TextLibraryPath" IsReadOnly="True" />
-                                        <Button Grid.Column="1" Content="Browse…" Click="OnLibraryPathClick" />
-                                </Grid>
-                        </StackPanel>
-                </Border>
-                <Border Classes="card">
-                        <StackPanel Spacing="10">
-                                <TextBlock Classes="section" Text="Screenscraper"/>
-                                <Grid ColumnDefinitions="Auto,200" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="10" RowSpacing="10" HorizontalAlignment="Center">
-                                        <TextBlock Grid.Row="0" Grid.Column="0" VerticalAlignment="Center" Text="User" />
-                                        <TextBox Grid.Column="1" Grid.Row="0" x:Name="TextSSUser" PlaceholderText="User ID" />
-                                        <TextBlock Grid.Row="1" Grid.Column="0" VerticalAlignment="Center" Text="Password" />
-                                        <TextBox Grid.Column="1" Grid.Row="1" x:Name="TextSSPass" PlaceholderText="Password" PasswordChar="*" />
-                                        <TextBlock Grid.Column="0" Grid.Row="2" VerticalAlignment="Center">Download media</TextBlock>
-                                        <ToggleSwitch Grid.Column="1" Grid.Row="2" x:Name="SwitchDownloadMedia"></ToggleSwitch>
-                                </Grid>
-                                <Button HorizontalAlignment="Right" Content="Download Metadata &amp; Artwork" Click="OnScanLibraryClick" />
-                        </StackPanel>
-                </Border>
-                <Border Classes="card" x:Name="CardVlcPath">
-                        <StackPanel Spacing="10">
-                                <TextBlock Classes="section" Text="Game preview videos (VLC)"/>
-                                <TextBlock TextWrapping="Wrap" Opacity="0.7" FontSize="12" Text="If you have VLC installed somewhere other than the default location, point this at its installation folder." />
-                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                                        <TextBox Grid.Column="0" x:Name="TextVlcPath" IsReadOnly="True" PlaceholderText="Default: Program Files\VideoLAN\VLC" />
-                                        <Button Grid.Column="1" Content="Browse…" Click="OnVlcPathClick" />
-                                </Grid>
-                        </StackPanel>
-                </Border>
+        <!-- Header -->
+        <Grid Grid.Row="0"
+              ColumnDefinitions="Auto,*"
+              Margin="24,20,24,16"
+              ColumnSpacing="14">
 
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0" Spacing="8">
-                        <Button Content="OK" Classes="accent" Width="90" HorizontalContentAlignment="Center" Click="OnOkClick" />
-                        <Button Content="Cancel" HorizontalContentAlignment="Center" Click="OnCancelClick" Width="90" />
+            <Border Classes="dialogHeaderIcon">
+                <Svg Path="avares://ASE/Assets/Icons/folder.svg"
+                         Width="22"
+                         Height="22"
+                         HorizontalAlignment="Center"
+                         VerticalAlignment="Center"/>
+            </Border>
+
+            <StackPanel Grid.Column="1"
+                        Spacing="2"
+                        VerticalAlignment="Center">
+                <TextBlock Classes="windowTitle"
+                           Text="Library configuration"/>
+                <TextBlock Classes="description"
+                           Text="Library location, metadata service and game preview settings"/>
+            </StackPanel>
+        </Grid>
+
+        <!-- Settings -->
+        <StackPanel Grid.Row="1"
+                    Margin="24,0,24,0"
+                    Spacing="12">
+
+            <!-- Library path -->
+            <Border Classes="card">
+                <StackPanel Spacing="12">
+
+                    <StackPanel Spacing="3">
+                        <TextBlock Classes="section"
+                                   Text="Library path"/>
+                        <TextBlock Classes="description"
+                                   Text="Choose the folder ASE uses as the root of the game library."/>
+                    </StackPanel>
+
+                    <Grid ColumnDefinitions="*,Auto"
+                          ColumnSpacing="10">
+                        <TextBox Grid.Column="0"
+                                 x:Name="TextLibraryPath"
+                                 IsReadOnly="True"/>
+                        <Button Grid.Column="1"
+                                Classes="compact"
+                                Content="Browse&#x2026;"
+                                Click="OnLibraryPathClick"/>
+                    </Grid>
+
                 </StackPanel>
-                
+            </Border>
+
+            <!-- ScreenScraper -->
+            <Border Classes="card">
+                <StackPanel Spacing="14">
+
+                    <StackPanel Spacing="3">
+                        <TextBlock Classes="section"
+                                   Text="ScreenScraper"/>
+                        <TextBlock Classes="description"
+                                   Text="Account and download options used to retrieve game metadata and artwork."/>
+                    </StackPanel>
+
+                    <Grid ColumnDefinitions="130,*"
+                          RowDefinitions="Auto,Auto,Auto"
+                          ColumnSpacing="18"
+                          RowSpacing="10">
+
+                        <TextBlock Grid.Row="0"
+                                   Grid.Column="0"
+                                   Classes="fieldLabel"
+                                   VerticalAlignment="Center"
+                                   Text="USER"/>
+                        <TextBox Grid.Row="0"
+                                 Grid.Column="1"
+                                 x:Name="TextSSUser"
+                                 PlaceholderText="User ID"/>
+
+                        <TextBlock Grid.Row="1"
+                                   Grid.Column="0"
+                                   Classes="fieldLabel"
+                                   VerticalAlignment="Center"
+                                   Text="PASSWORD"/>
+                        <TextBox Grid.Row="1"
+                                 Grid.Column="1"
+                                 x:Name="TextSSPass"
+                                 PlaceholderText="Password"
+                                 PasswordChar="*"/>
+
+                        <TextBlock Grid.Row="2"
+                                   Grid.Column="0"
+                                   Classes="fieldLabel"
+                                   VerticalAlignment="Center"
+                                   Text="DOWNLOAD MEDIA"/>
+                        <ToggleSwitch Grid.Row="2"
+                                      Grid.Column="1"
+                                      x:Name="SwitchDownloadMedia"
+                                      HorizontalAlignment="Left"
+                                      MinWidth="0"
+                                      OffContent="Off"
+                                      OnContent="On"/>
+                    </Grid>
+
+                    <Grid ColumnDefinitions="*,Auto"
+                          ColumnSpacing="16">
+                        <TextBlock Grid.Column="0"
+                                   Classes="description"
+                                   VerticalAlignment="Center"
+                                   Text="Scan the library and download available metadata and artwork."/>
+                        <Button Grid.Column="1"
+                                Classes="accent compact"
+                                Content="Download metadata &amp; artwork"
+                                Click="OnScanLibraryClick"/>
+                    </Grid>
+
+                </StackPanel>
+            </Border>
+
+            <!-- VLC -->
+            <Border Classes="card"
+                    x:Name="CardVlcPath">
+                <StackPanel Spacing="12">
+
+                    <StackPanel Spacing="3">
+                        <TextBlock Classes="section"
+                                   Text="Game preview videos"/>
+                        <TextBlock Classes="description"
+                                   Text="If VLC is installed somewhere other than the default location, point ASE at its installation folder."/>
+                    </StackPanel>
+
+                    <Grid ColumnDefinitions="*,Auto"
+                          ColumnSpacing="10">
+                        <TextBox Grid.Column="0"
+                                 x:Name="TextVlcPath"
+                                 IsReadOnly="True"
+                                 PlaceholderText="Default: Program Files\VideoLAN\VLC"/>
+                        <Button Grid.Column="1"
+                                Classes="compact"
+                                Content="Browse&#x2026;"
+                                Click="OnVlcPathClick"/>
+                    </Grid>
+
+                </StackPanel>
+            </Border>
+
         </StackPanel>
+
+        <!-- Footer -->
+        <Border Grid.Row="2"
+                Classes="dialogFooter"
+                Margin="0,18,0,0">
+
+            <StackPanel Orientation="Horizontal"
+                        HorizontalAlignment="Right"
+                        Spacing="10">
+
+                <Button Classes="dialogAction"
+                        Content="Cancel"
+                        Click="OnCancelClick"/>
+
+                <Button Classes="accent dialogAction"
+                        Content="OK"
+                        Click="OnOkClick"/>
+
+            </StackPanel>
+        </Border>
+
+    </Grid>
 </Window>

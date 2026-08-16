@@ -1,0 +1,172 @@
+﻿<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        x:Class="ASE.MT32.Mt32Toolbox"
+        Width="400"
+        Height="240"
+
+        CanResize="False"
+        CanMinimize="False"
+        CanMaximize="False"
+        ShowInTaskbar="False"
+
+        WindowDecorations="None"
+        ExtendClientAreaToDecorationsHint="True">
+
+    <Border
+        BorderThickness="1"
+        BorderBrush="#666" Background="#181818">
+
+        <Border Margin="5">
+            <Border.Background>
+                <ImageBrush Source="avares://ASE/Assets/Mt32/r.png"
+                            Opacity="0.1"
+                            AlignmentX="Left"
+                            AlignmentY="Bottom"
+                            TileMode="None"/>
+            </Border.Background>
+
+            <Grid RowDefinitions="26,*">
+
+                <Grid
+                    Grid.Row="0"
+                    Background="#303030"
+                    ColumnDefinitions="*,Auto"
+                    PointerPressed="OnTitleBarPressed"
+                    WindowDecorationProperties.ElementRole="TitleBar">
+
+                    <TextBlock
+                        Text="Roland MT32 Toolbox"
+                        Margin="8,0,0,0"
+                        VerticalAlignment="Center"
+                        FontSize="12"/>
+
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" Margin="0,0,10,0">
+                        <!-- Saves the current YM->MT-32 mapping as the loaded game's profile.
+                        Only shown for games launched from the library: anything else has no
+                        catalogue entry to write it into (see Mt32Profiles).
+                        ElementRole="User" is load-bearing: this strip is the window's title
+                        bar, so without a role of its own the button is part of the caption
+                        and its clicks drag the window instead of pressing it — the way the
+                        close button next to it needs its own CloseButton role. -->
+                        <Button
+                            x:Name="btnSavePresetsProfile"
+                            Padding="0"
+                            BorderThickness="1"
+                            CornerRadius="2"
+                            Width="18"
+                            Height="18"
+                            IsVisible="False"
+                            ToolTip.Tip="Save these instruments for the loaded game"
+                            HorizontalAlignment="Right"
+                            HorizontalContentAlignment="Center" Click="OnSavePresetsProfile"
+                            VerticalContentAlignment="Center"
+                            WindowDecorationProperties.ElementRole="User">
+                            <Svg Path="avares://ASE/Assets/Icons/disk.svg" />
+                        </Button>
+                        <Button
+                            Padding="0"
+                            BorderThickness="1"
+                            CornerRadius="2"
+                            Classes="accent"
+                            Width="18"
+                            Height="18"
+                            HorizontalAlignment="Right"
+                            HorizontalContentAlignment="Center"
+                            VerticalContentAlignment="Center" Click="OnClose"
+                            WindowDecorationProperties.ElementRole="CloseButton">
+                            <Svg Path="avares://ASE/Assets/Icons/x-lg.svg" />
+                        </Button>
+                    </StackPanel>
+                </Grid>
+
+                <Border Grid.Row="1" Margin="6" Padding="14" VerticalAlignment="Center" 
+                        BorderBrush="#10FFFFFF" BorderThickness="1" CornerRadius="8"
+                        BoxShadow="0 3 0 0 #80000000"
+                        >
+                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="20">
+
+                        <!-- Volume control. The knob turns between -135° and +135°, neutral
+                        (straight up) being the default 200% amplification; the drag itself
+                        lives in the code-behind. The Border is what the pointer actually
+                        hits: an Svg only draws a picture, so the transparent background is
+                        what makes the whole knob area a hit-test target.
+                        Svg.Css="" opts these two out of App.axaml's icon-tinting style,
+                        which repaints every fill and would flatten the knob's gradients. -->
+                        <Grid Grid.Column="0" x:Name="VolumePanel" ColumnDefinitions="Auto" RowDefinitions="Auto,Auto" RowSpacing="4">
+                            <Border Grid.Column="0" Grid.Row="0" x:Name="VolumeKnob"
+                                    Background="Transparent"
+                                    Cursor="SizeWestEast"
+                                    PointerPressed="OnVolumeDialPressed"
+                                    PointerMoved="OnVolumeDialMoved"
+                                    PointerReleased="OnVolumeDialReleased"
+                                    PointerCaptureLost="OnVolumeDialCaptureLost">
+                                <Grid>
+                                    <Svg Path="avares://ASE/Assets/Mt32/volumecontrol.svg" Svg.Css="" Width="64" Height="64" />
+                                    <Svg x:Name="SvgVolumeDial" Path="avares://ASE/Assets/Mt32/volumedial.svg" Svg.Css="" Width="64" Height="64" />
+                                </Grid>
+                            </Border>
+                            <TextBlock Grid.Column="0" Grid.Row="1" VerticalAlignment="Bottom" HorizontalAlignment="Center"
+                                       FontSize="10" Foreground="#80FFFFFF">Volume</TextBlock>
+                        </Grid>
+
+                        <!-- LCD. Named so the code-behind can dim it when the module is not
+                        running: an unlit backlight is what an MT-32 with no power looks
+                        like, and it reads at a glance that the panel is inert. -->
+                        <StackPanel Grid.Column="1" VerticalAlignment="Top">
+                            <Border
+                                x:Name="LcdPanel"
+                                Background="#A8B77A"
+                                BorderBrush="#596442"
+                                BorderThickness="2"
+                                CornerRadius="2"
+                                Padding="12,2" >
+
+                                <TextBlock
+                                    x:Name="TxtMt32Lcd"
+                                    Text="Roland MT32"
+                                    FontFamily="{StaticResource LcdFont}"
+                                    FontSize="18"
+                                    FontWeight="Bold"
+                                    Foreground="#233018"
+                                    >
+
+                                    <TextBlock.Effect>
+                                        <DropShadowEffect
+                                            OffsetX="1"
+                                            OffsetY="1"
+                                            BlurRadius="1"
+                                            Color="#66734B"
+                                            Opacity="0.6"/>
+                                    </TextBlock.Effect>
+                                </TextBlock>
+                            </Border>
+
+                            <Grid x:Name="MappingPanel" ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto" ColumnSpacing="10" RowSpacing="8" Margin="10">
+                                <TextBlock Grid.Column="0" Grid.Row="0" Classes="fieldLabel" VerticalAlignment="Center" Text="YM #1" />
+                                <ComboBox Grid.Column="1" Grid.Row="0" x:Name="cmbMapYM1" HorizontalAlignment="Stretch" FontSize="11" MinHeight="0" SelectionChanged="OnMapChanged" />
+
+                                <TextBlock Grid.Column="0" Grid.Row="1" Classes="fieldLabel" VerticalAlignment="Center" Text="YM #2" />
+                                <ComboBox Grid.Column="1" Grid.Row="1" x:Name="cmbMapYM2" HorizontalAlignment="Stretch" FontSize="11" MinHeight="0" SelectionChanged="OnMapChanged" />
+
+                                <TextBlock Grid.Column="0" Grid.Row="2" Classes="fieldLabel" VerticalAlignment="Center" Text="YM #3" />
+                                <ComboBox Grid.Column="1" Grid.Row="2" x:Name="cmbMapYM3" HorizontalAlignment="Stretch" FontSize="11" MinHeight="0" SelectionChanged="OnMapChanged" />
+
+                                <TextBlock Grid.Column="0" Grid.Row="3" Classes="fieldLabel" VerticalAlignment="Center" Text="Noise" />
+                                <CheckBox Grid.Column="1" Grid.Row="3" x:Name="chkDrums" Content="Map to drums (experimental)"
+                                          FontSize="11" MinHeight="0" Padding="6,0,0,0"
+                                          IsCheckedChanged="OnDrumsChanged" />
+                            </Grid>
+
+                        </StackPanel>
+                    </Grid>
+
+                </Border>
+
+            </Grid>
+        </Border>
+    </Border>
+
+</Window>

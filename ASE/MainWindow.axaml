@@ -43,10 +43,19 @@
 				</MenuItem>
 			</MenuItem>
 
-			<MenuItem Header="Emulation">
+			<MenuItem Header="Emulation" SubmenuOpened="OnEmulationMenuOpened">
 				<MenuItem Header="Configuration…" Click="OnConfigurationClick">
 					<MenuItem.Icon>
 						<Svg Path="avares://ASE/Assets/Icons/gear.svg" Width="16" Height="16"/>
+					</MenuItem.Icon>
+				</MenuItem>
+				<!-- Greyed out while the toolbox is up (it is a single-instance window) and
+				     whenever the ST is not wired to the built-in module, which is all the
+				     toolbox is a front panel for. Both are decided when this submenu opens
+				     (see MainWindow.OnEmulationMenuOpened / OnMt32ToolboxClick). -->
+				<MenuItem Header="MT32 Toolbox" Name="ItemMenuMt32Toolbox" Click="OnMt32ToolboxClick">
+					<MenuItem.Icon>
+						<Svg Path="avares://ASE/Assets/Icons/tools.svg" Width="16" Height="16"/>
 					</MenuItem.Icon>
 				</MenuItem>
 				<MenuItem Header="Debug…" Click="OnDebugClick">
@@ -55,12 +64,24 @@
 					</MenuItem.Icon>
 				</MenuItem>
 				<Separator/>
-				<MenuItem Header="Reset" Click="OnResetClick" />
-			</MenuItem>
+				<MenuItem Header="Reset" Click="OnResetClick">
+					<MenuItem.Icon>
+						<Svg Path="avares://ASE/Assets/Icons/arrow-clockwise.svg" Width="16" Height="16"/>
+					</MenuItem.Icon>
+				</MenuItem>
+				</MenuItem>
 
 			<MenuItem Header="Help">
-				<MenuItem Header="About ASE…" Click="OnAboutClick" />
-				<MenuItem Header="Manual…" Click="OnManualClick" />
+				<MenuItem Header="About ASE…" Click="OnAboutClick" >
+					<MenuItem.Icon>
+						<Svg Path="avares://ASE/Assets/Icons/question-circle.svg" Width="16" Height="16"/>
+					</MenuItem.Icon>
+				</MenuItem>
+					<MenuItem Header="Manual…" Click="OnManualClick">
+					<MenuItem.Icon>
+						<Svg Path="avares://ASE/Assets/Icons/book.svg" Width="16" Height="16"/>
+					</MenuItem.Icon>
+				</MenuItem>
 			</MenuItem>
 
 		</Menu>

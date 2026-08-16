@@ -232,7 +232,16 @@ namespace ASE
                 case 12:
                     UpdatePeriods();
                     break;
+                case 8:
+                case 9:
+                case 10:
+                    // Write-rate counters for the YM->MT-32 mapper: sample playback
+                    // (digidrums, SID-voice) hammers the volume registers at timer speed,
+                    // which is how the mapper tells it from music. Consumed per frame.
+                    _psgVolWrites[_selectedReg - 8]++;
+                    break;
                 case 13:
+                    _psgEnvWrites++;    // same idea: retriggered at audio rate = sync-buzzer
                     _envShape = val & 0x0F;
                     _envPos = 0;
                     _cntEnv = 0;
@@ -241,6 +250,30 @@ namespace ASE
                     HandlePortA(val);
                     break;
             }
+        }
+
+        // ==================== YM->MT-32 mapper hooks (emulation thread) ====================
+
+        // Per-channel volume-register (R8-R10) and envelope-shape (R13) write counters,
+        // consumed once per frame by YmMidiMapper.OnFrame.
+        private readonly int[] _psgVolWrites = new int[3];
+        private int _psgEnvWrites;
+
+        /// <summary>Register contents as the mapper samples them; no side effects.</summary>
+        public byte ReadRegister(int index) => _regs[index & 0x0F];
+
+        /// <summary>Hands over and resets the write counters accumulated since the last
+        /// call. <paramref name="volWrites"/> must hold 3 entries (channels A/B/C).</summary>
+        public void ConsumePsgWriteCounts(int[] volWrites, out int envWrites)
+        {
+            for (int i = 0; i < 3; i++)
+            {
+                volWrites[i] = _psgVolWrites[i];
+                _psgVolWrites[i] = 0;
+            }
+
+            envWrites = _psgEnvWrites;
+            _psgEnvWrites = 0;
         }
 
         public byte PSGRegisterData()
@@ -424,6 +457,14 @@ namespace ASE
 
         private int GetChannelVolume(int ch, int mixer, int toneOut, int envVol5bit)
         {
+            // A channel the YM->MT-32 mapper is substituting this frame is silenced here:
+            // the built-in module is playing its note instead. The mask is recomputed
+            // every frame with the mapper's exclusions (noise, digitized sound), so an
+            // excluded channel falls back to the YM automatically. Same thread as the
+            // mapper (both run inside the emulation loop), no synchronisation needed.
+            if ((YmMidiMapper.MuteMask & (1 << ch)) != 0)
+                return 0;
+
             // Mixer: Bit ch = Tone Disable (1), Bit ch+3 = Noise Disable (1)
             bool toneOn = ((mixer >> ch) & 1) == 0;
             bool noiseOn = ((mixer >> (3 + ch)) & 1) == 0;
@@ -494,6 +535,11 @@ namespace ASE
                     _marshalBuf[read++] = ym._lastOut;
                 }
             }
+
+            // Fold in the built-in MT-32's output (a no-op unless the module is active).
+            // Rendering here, clocked by the audio device itself, is what keeps Munt in
+            // step with the stream and frozen while the device is paused.
+            MidiManager.MixAudio(_marshalBuf, samplesNeeded);
 
             Marshal.Copy(_marshalBuf, 0, stream, samplesNeeded);
         }

@@ -1,0 +1,236 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:svg="clr-namespace:Avalonia.Svg;assembly=Svg.Controls.Avalonia">
+
+  <!--
+    Shared visual language for ASE secondary/dialog windows.
+
+    Opt in per window with:
+        Classes="aseDialog"
+
+    Explicit utility classes such as compact, keycap, description, etc. can
+    also be reused in controls outside an aseDialog if desired.
+  -->
+
+  <!-- Dialog surface -->
+  <Style Selector="Window.aseDialog">
+    <Setter Property="Background" Value="{DynamicResource DialogBackgroundBrush}"/>
+  </Style>
+
+  <!-- Typography -->
+  <Style Selector="TextBlock.windowTitle">
+    <Setter Property="FontSize" Value="22"/>
+    <Setter Property="FontWeight" Value="SemiBold"/>
+  </Style>
+
+  <!-- App.axaml already defines TextBlock.section's accent colour/weight. -->
+  <Style Selector="Window.aseDialog TextBlock.section">
+    <Setter Property="FontSize" Value="15"/>
+  </Style>
+
+  <Style Selector="TextBlock.description">
+    <Setter Property="FontSize" Value="12"/>
+    <Setter Property="Opacity" Value="0.66"/>
+    <Setter Property="TextWrapping" Value="Wrap"/>
+  </Style>
+
+  <Style Selector="TextBlock.fieldLabel">
+    <Setter Property="FontSize" Value="11"/>
+    <Setter Property="FontWeight" Value="SemiBold"/>
+    <Setter Property="Opacity" Value="0.62"/>
+  </Style>
+
+  <Style Selector="TextBlock.valueBadge">
+    <Setter Property="FontSize" Value="11"/>
+    <Setter Property="FontWeight" Value="SemiBold"/>
+    <Setter Property="Foreground" Value="{DynamicResource AccentTextBrush}"/>
+    <Setter Property="VerticalAlignment" Value="Center"/>
+  </Style>
+
+  <!-- Reusable surfaces -->
+  <Style Selector="Border.keycap">
+    <Setter Property="Background" Value="{DynamicResource AccentSoftBrush}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource CardBorderBrush}"/>
+    <Setter Property="BorderThickness" Value="1"/>
+    <Setter Property="CornerRadius" Value="6"/>
+    <Setter Property="Padding" Value="8,3"/>
+    <Setter Property="MinWidth" Value="44"/>
+    <Setter Property="HorizontalAlignment" Value="Center"/>
+  </Style>
+
+  <Style Selector="Border.statusPill">
+    <Setter Property="Background" Value="{DynamicResource AccentSoftBrush}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource CardBorderBrush}"/>
+    <Setter Property="BorderThickness" Value="1"/>
+    <Setter Property="CornerRadius" Value="12"/>
+    <Setter Property="Padding" Value="8,3"/>
+    <Setter Property="HorizontalAlignment" Value="Left"/>
+  </Style>
+
+  <Style Selector="TextBlock.statusPill">
+    <Setter Property="FontSize" Value="11"/>
+    <Setter Property="FontWeight" Value="SemiBold"/>
+    <Setter Property="Foreground" Value="{DynamicResource AccentTextBrush}"/>
+  </Style>
+
+  <!--
+    Option card: a RadioButton drawn as a selectable panel, for choices between
+    equivalent alternatives (monitor type, …) that deserve an illustration and a
+    line of specs rather than a bare label. Preferred over a ToggleSwitch there,
+    whose off position suggests the option is disabled rather than not chosen.
+    The border thickness stays at 2 in both states so selecting does not shift
+    the layout by a pixel; only the brushes change. The template drops the radio
+    glyph: the border and fill are what show the selection.
+  -->
+  <Style Selector="RadioButton.optionCard">
+    <Setter Property="Background" Value="{DynamicResource DialogBackgroundBrush}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource CardBorderBrush}"/>
+    <Setter Property="BorderThickness" Value="2"/>
+    <Setter Property="CornerRadius" Value="9"/>
+    <Setter Property="Padding" Value="12,11"/>
+    <Setter Property="MinWidth" Value="0"/>
+    <Setter Property="MinHeight" Value="0"/>
+    <Setter Property="HorizontalAlignment" Value="Stretch"/>
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border Background="{TemplateBinding Background}"
+                BorderBrush="{TemplateBinding BorderBrush}"
+                BorderThickness="{TemplateBinding BorderThickness}"
+                CornerRadius="{TemplateBinding CornerRadius}"
+                Padding="{TemplateBinding Padding}">
+          <ContentPresenter Content="{TemplateBinding Content}"
+                            ContentTemplate="{TemplateBinding ContentTemplate}"
+                            Foreground="{TemplateBinding Foreground}"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center"/>
+        </Border>
+      </ControlTemplate>
+    </Setter>
+    <Setter Property="Transitions">
+      <Transitions>
+        <BrushTransition Property="Background" Duration="0:0:0.12"/>
+        <BrushTransition Property="BorderBrush" Duration="0:0:0.12"/>
+      </Transitions>
+    </Setter>
+  </Style>
+
+  <Style Selector="RadioButton.optionCard:pointerover">
+    <Setter Property="BorderBrush" Value="{DynamicResource AccentSoftHoverBrush}"/>
+  </Style>
+
+  <!-- Foreground is inherited by the card's text, which tints with the selection. -->
+  <Style Selector="RadioButton.optionCard:checked">
+    <Setter Property="Background" Value="{DynamicResource AccentSoftBrush}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource AccentSelectedBrush}"/>
+    <Setter Property="Foreground" Value="{DynamicResource AccentTextBrush}"/>
+  </Style>
+
+  <Style Selector="RadioButton.optionCard:disabled">
+    <Setter Property="Opacity" Value="0.5"/>
+  </Style>
+
+  <!--
+    An option card's illustration is a multi-coloured SVG, not a monochrome
+    glyph: the app-wide "* { fill: … }" tint would flatten it to a single
+    colour, so it is cleared here. This style is included after App.axaml's
+    generic Svg one, which is what lets it win.
+  -->
+  <Style Selector="RadioButton.optionCard Svg">
+    <Setter Property="Svg.Css" Value=""/>
+  </Style>
+
+  <!-- Title / specs lines inside an option card. -->
+  <Style Selector="RadioButton.optionCard TextBlock.optionTitle">
+    <Setter Property="FontSize" Value="12"/>
+    <Setter Property="FontWeight" Value="SemiBold"/>
+    <Setter Property="HorizontalAlignment" Value="Center"/>
+  </Style>
+
+  <Style Selector="RadioButton.optionCard TextBlock.optionSpecs">
+    <Setter Property="FontSize" Value="11"/>
+    <Setter Property="Opacity" Value="0.66"/>
+    <Setter Property="HorizontalAlignment" Value="Center"/>
+  </Style>
+
+  <!-- Standard icon panel used at the left of a dialog heading. -->
+  <Style Selector="Border.dialogHeaderIcon">
+    <Setter Property="Width" Value="44"/>
+    <Setter Property="Height" Value="44"/>
+    <Setter Property="CornerRadius" Value="10"/>
+    <Setter Property="Background" Value="{DynamicResource AccentSoftBrush}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource CardBorderBrush}"/>
+    <Setter Property="BorderThickness" Value="1"/>
+    <Setter Property="VerticalAlignment" Value="Center"/>
+  </Style>
+
+  <!-- Footer strip used by OK/Cancel dialogs. Layout/margin stays local. -->
+  <Style Selector="Border.dialogFooter">
+    <Setter Property="Background" Value="{DynamicResource CardBackgroundBrush}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource CardBorderBrush}"/>
+    <Setter Property="BorderThickness" Value="0,1,0,0"/>
+    <Setter Property="Padding" Value="24,14"/>
+  </Style>
+
+  <!-- Buttons -->
+  <Style Selector="Button.compact">
+    <Setter Property="MinHeight" Value="30"/>
+    <Setter Property="Padding" Value="10,4"/>
+    <Setter Property="FontSize" Value="12"/>
+  </Style>
+
+  <Style Selector="Button.dialogAction">
+    <Setter Property="Width" Value="100"/>
+    <Setter Property="HorizontalContentAlignment" Value="Center"/>
+  </Style>
+
+  <!-- Tabs -->
+  <!--
+    Only tabs inside Window.aseDialog use the filled Fuji-orange pill style.
+    This intentionally leaves legacy/main-window TabControls untouched.
+  -->
+  <Style Selector="Window.aseDialog TabItem">
+    <Setter Property="Padding" Value="14,8"/>
+    <Setter Property="Margin" Value="0,0,6,0"/>
+    <Setter Property="CornerRadius" Value="7"/>
+    <Setter Property="Background" Value="Transparent"/>
+    <Setter Property="FontWeight" Value="Medium"/>
+  </Style>
+
+  <!-- Hide FluentTheme's selected underline/pipe. -->
+  <Style Selector="Window.aseDialog TabItem /template/ Border#PART_SelectedPipe">
+    <Setter Property="Opacity" Value="0"/>
+    <Setter Property="IsHitTestVisible" Value="False"/>
+  </Style>
+
+  <!-- Normal hover. Fluent paints the template root, so style that part. -->
+  <Style Selector="Window.aseDialog TabItem:pointerover /template/ Border#PART_LayoutRoot">
+    <Setter Property="Background" Value="{DynamicResource AccentSoftHoverBrush}"/>
+  </Style>
+
+  <Style Selector="Window.aseDialog TabItem:selected">
+    <Setter Property="Background" Value="{DynamicResource AccentSelectedBrush}"/>
+    <Setter Property="Foreground" Value="White"/>
+    <Setter Property="FontWeight" Value="SemiBold"/>
+  </Style>
+
+  <Style Selector="Window.aseDialog TabItem:selected /template/ Border#PART_LayoutRoot">
+    <Setter Property="Background" Value="{DynamicResource AccentSelectedBrush}"/>
+    <Setter Property="TextElement.Foreground" Value="White"/>
+  </Style>
+
+  <Style Selector="Window.aseDialog TabItem:selected:pointerover /template/ Border#PART_LayoutRoot">
+    <Setter Property="Background" Value="{DynamicResource AccentSelectedHoverBrush}"/>
+    <Setter Property="TextElement.Foreground" Value="White"/>
+  </Style>
+
+  <Style Selector="Window.aseDialog TabItem:selected:pressed /template/ Border#PART_LayoutRoot">
+    <Setter Property="Background" Value="{DynamicResource SystemAccentColorDark1}"/>
+    <Setter Property="TextElement.Foreground" Value="White"/>
+  </Style>
+
+  <!-- App's legacy selected-tab icon is orange; on a filled orange tab it must be white. -->
+  <Style Selector="Window.aseDialog TabItem:selected Svg">
+    <Setter Property="Svg.Css" Value="{DynamicResource SelectedTabIconCss}"/>
+  </Style>
+
+</Styles>

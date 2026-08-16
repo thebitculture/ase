@@ -1,52 +1,290 @@
 <Window xmlns="https://github.com/avaloniaui"
-		xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-		xmlns:svg="clr-namespace:Avalonia.Svg;assembly=Svg.Controls.Avalonia"
-		xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-		xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-		mc:Ignorable="d"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:svg="clr-namespace:Avalonia.Svg;assembly=Svg.Controls.Avalonia"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
         xmlns:local="clr-namespace:ASE"
         x:Class="ASE.UpdateWindow"
         Title="ASE update available"
-		CanResize="False"
-		WindowStartupLocation="CenterOwner"
-		UseLayoutRounding="True"
-		Width="500" Height="380">
+        CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        UseLayoutRounding="True"
+        Width="640"
+        Height="470"
+        Background="#04050A">
 
-	<Grid RowDefinitions="Auto,Auto,*,Auto" Margin="24,20">
+    <!-- Deliberately built on the same pieces as AboutWindow (starfield, hero card,
+         hairlines, version pill): both windows talk about the same thing, and the
+         update notice used to look like a different application. -->
 
-		<StackPanel Grid.Row="0" HorizontalAlignment="Center" Spacing="6">
-			<Image Source="./Assets/logo.png" Height="52"/>
-			<TextBlock Name="TextNewVersion" HorizontalAlignment="Center" FontWeight="SemiBold"
-					   Foreground="{DynamicResource AccentTextBrush}">⭐ New version {{version}} available! ⭐</TextBlock>
-			<TextBlock Name="TextCurrentVersion" HorizontalAlignment="Center" Opacity="0.7">You are using version {{version}}</TextBlock>
-		</StackPanel>
+    <Window.Resources>
+        <SolidColorBrush x:Key="UpdateAccentSoftBrush"
+                         Color="{DynamicResource SystemAccentColor}"
+                         Opacity="0.13"/>
+        <SolidColorBrush x:Key="UpdateAccentBorderBrush"
+                         Color="{DynamicResource SystemAccentColor}"
+                         Opacity="0.32"/>
+        <SolidColorBrush x:Key="UpdateSecondaryTextBrush"
+                         Color="#D8D8D8"
+                         Opacity="0.72"/>
+    </Window.Resources>
 
-		<Border Grid.Row="1" Classes="card" Margin="0,16,0,0">
-			<StackPanel Spacing="6">
-				<TextBlock Name="TextReleaseName" Classes="section" IsVisible="False" TextWrapping="Wrap"/>
-				<TextBlock Name="TextPublished" Opacity="0.7"/>
-				<StackPanel Orientation="Horizontal" Spacing="8">
-					<Svg Path="avares://ASE/Assets/Icons/github.svg" Width="18" Height="18" VerticalAlignment="Center"/>
-					<HyperlinkButton Name="LinkRelease" Click="OpenRelease_Click" Padding="0" VerticalAlignment="Center"/>
-				</StackPanel>
-			</StackPanel>
-		</Border>
+    <Window.Styles>
 
-		<TextBlock Grid.Row="2" TextWrapping="Wrap" Opacity="0.7" VerticalAlignment="Center" Margin="0,14,0,0"
-				   Text="Update opens the download page in your browser and the emulator carries on running, so you can install the new version whenever it suits you."/>
+        <Style Selector="TextBlock.heroSubtitle">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="LineHeight" Value="18"/>
+            <Setter Property="Foreground" Value="{DynamicResource UpdateSecondaryTextBrush}"/>
+        </Style>
 
-		<Grid Grid.Row="3" ColumnDefinitions="*,Auto,Auto" Margin="0,16,0,0" VerticalAlignment="Center">
-			<StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-				<ToggleSwitch Name="SwitchCheckForUpdates" OnContent="" OffContent="" VerticalAlignment="Center"/>
-				<TextBlock Text="Check for updates" VerticalAlignment="Center"/>
-			</StackPanel>
-			<Button Grid.Column="1" Content="Continue" Width="90" Margin="0,0,8,0"
-					HorizontalContentAlignment="Center"
-					Name="ButtonContinue" Click="ButtonContinue_Click"/>
-			<Button Grid.Column="2" Classes="accent" Content="Update" Width="90"
-					HorizontalContentAlignment="Center"
-					Name="ButtonUpdate" Click="ButtonUpdate_Click"/>
-		</Grid>
-	</Grid>
+        <Style Selector="TextBlock.eyebrow">
+            <Setter Property="FontSize" Value="10"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="LetterSpacing" Value="1.3"/>
+            <Setter Property="Foreground" Value="{DynamicResource AccentTextBrush}"/>
+        </Style>
+
+        <!-- Intentionally translucent: the starfield stays visible through the card. -->
+        <Style Selector="Border.heroCard">
+            <Setter Property="Background" Value="#A0070910"/>
+            <Setter Property="BorderBrush" Value="#3A3F49"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="18"/>
+            <Setter Property="BoxShadow" Value="0 18 50 0 #88000000"/>
+        </Style>
+
+        <!-- Hairline separator that fades out at both ends. -->
+        <Style Selector="Border.hairline">
+            <Setter Property="Height" Value="1"/>
+            <Setter Property="Background">
+                <LinearGradientBrush StartPoint="0%,50%" EndPoint="100%,50%">
+                    <GradientStop Color="#00FFFFFF" Offset="0"/>
+                    <GradientStop Color="#3CFFFFFF" Offset="0.5"/>
+                    <GradientStop Color="#00FFFFFF" Offset="1"/>
+                </LinearGradientBrush>
+            </Setter>
+        </Style>
+
+        <Style Selector="Border.versionPill">
+            <Setter Property="Background" Value="{DynamicResource UpdateAccentSoftBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource UpdateAccentBorderBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="14"/>
+            <Setter Property="Padding" Value="14,5"/>
+            <Setter Property="HorizontalAlignment" Value="Center"/>
+        </Style>
+
+        <Style Selector="Border.releaseCard">
+            <Setter Property="Background" Value="#B817181B"/>
+            <Setter Property="BorderBrush" Value="#42454A"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="11"/>
+            <Setter Property="Padding" Value="12,9"/>
+        </Style>
+
+        <Style Selector="Border.releaseCard:pointerover">
+            <Setter Property="Background" Value="#EF212226"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource UpdateAccentBorderBrush}"/>
+        </Style>
+
+        <Style Selector="TextBlock.releaseLink">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+            <Setter Property="Foreground" Value="{DynamicResource AccentTextBrush}"/>
+        </Style>
+
+        <Style Selector="Button.updateAction">
+            <Setter Property="CornerRadius" Value="9"/>
+            <Setter Property="Width" Value="104"/>
+            <Setter Property="Height" Value="36"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+        </Style>
+
+    </Window.Styles>
+
+    <Grid ClipToBounds="True">
+
+        <Grid.Background>
+            <LinearGradientBrush StartPoint="0%,0%"
+                                 EndPoint="100%,100%">
+                <GradientStop Color="#04050A" Offset="0"/>
+                <GradientStop Color="#070910" Offset="0.5"/>
+                <GradientStop Color="#100A06" Offset="1"/>
+            </LinearGradientBrush>
+        </Grid.Background>
+
+        <!-- Animated background: perspective starfield, drawn and clocked by the
+             control itself (see Starfield.cs). -->
+        <local:Starfield/>
+
+        <Border Classes="heroCard"
+                Margin="20"
+                Padding="24,18,24,16">
+
+            <Grid RowDefinitions="Auto,*,Auto">
+
+                <!-- ============================ ROW 0: logo ============================ -->
+                <StackPanel Grid.Row="0" Spacing="5">
+                    <Svg Path="avares://ASE/Assets/logo.svg"
+                         Height="62"
+                         HorizontalAlignment="Center"/>
+                    <Border Classes="hairline"/>
+                </StackPanel>
+
+                <!-- ====================== ROW 1: mascot | release ====================== -->
+                <Grid Grid.Row="1"
+                      ColumnDefinitions="Auto,*"
+                      ColumnSpacing="24"
+                      Margin="0,18,0,0">
+
+                    <StackPanel Grid.Column="0"
+                                Width="172"
+                                Spacing="14"
+                                VerticalAlignment="Center">
+
+                        <!-- Fixed height so the mascot's idle bob never reflows the column. -->
+                        <Panel Height="136">
+                            <Ellipse x:Name="AvatarGlow"
+                                     Width="136"
+                                     Height="136"
+                                     Opacity="0.55">
+                                <Ellipse.Fill>
+                                    <RadialGradientBrush>
+                                        <GradientStop Color="#59EE7326" Offset="0"/>
+                                        <GradientStop Color="#1EEE7326" Offset="0.55"/>
+                                        <GradientStop Color="#00EE7326" Offset="1"/>
+                                    </RadialGradientBrush>
+                                </Ellipse.Fill>
+                            </Ellipse>
+
+                            <Image x:Name="RetroDude"
+                                   Source="./Assets/retrodude.png"
+                                   Height="116"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   Opacity="0.97"/>
+                        </Panel>
+
+                        <Border Classes="versionPill">
+                            <TextBlock Name="TextCurrentVersion"
+                                       FontSize="12"
+                                       FontWeight="SemiBold"
+                                       Foreground="{DynamicResource AccentTextBrush}"
+                                       Text="You are on {{version}}"/>
+                        </Border>
+
+                    </StackPanel>
+
+                    <StackPanel Grid.Column="1"
+                                Spacing="11"
+                                VerticalAlignment="Center">
+
+                        <TextBlock Classes="eyebrow"
+                                   Text="UPDATE AVAILABLE"/>
+
+                        <TextBlock Name="TextNewVersion"
+                                   FontSize="20"
+                                   FontWeight="SemiBold"
+                                   Foreground="White"
+                                   TextWrapping="Wrap"
+                                   Text="Version {{version}} is ready"/>
+
+                        <!-- The whole card is the link, the same way the About window's
+                             update notice works. -->
+                        <Border Classes="releaseCard"
+                                Cursor="Hand"
+                                Tapped="ReleaseCard_Tapped">
+                            <Grid ColumnDefinitions="Auto,*,Auto"
+                                  ColumnSpacing="10">
+
+                                <Svg Path="avares://ASE/Assets/Icons/github.svg"
+                                     Width="19"
+                                     Height="19"
+                                     VerticalAlignment="Center"/>
+
+                                <StackPanel Grid.Column="1"
+                                            Spacing="1"
+                                            VerticalAlignment="Center">
+                                    <TextBlock Name="TextReleaseName"
+                                               IsVisible="False"
+                                               FontSize="13"
+                                               FontWeight="SemiBold"
+                                               Foreground="White"
+                                               TextWrapping="Wrap"/>
+                                    <TextBlock Name="LinkRelease"
+                                               Classes="releaseLink"/>
+                                    <TextBlock Name="TextPublished"
+                                               FontSize="10"
+                                               Opacity="0.55"/>
+                                </StackPanel>
+
+                                <TextBlock Grid.Column="2"
+                                           Text="›"
+                                           FontSize="24"
+                                           Foreground="White"
+                                           Opacity="0.6"
+                                           VerticalAlignment="Center"/>
+                            </Grid>
+                        </Border>
+
+                        <TextBlock Classes="heroSubtitle"
+                                   TextWrapping="Wrap"
+                                   Text="Update opens the download page in your browser and the emulator carries on running, so you can install the new version whenever it suits you."/>
+
+                    </StackPanel>
+
+                </Grid>
+
+                <!-- =========================== ROW 2: footer =========================== -->
+                <StackPanel Grid.Row="2"
+                            Spacing="14"
+                            Margin="0,16,0,0">
+
+                    <Border Classes="hairline"/>
+
+                    <Grid ColumnDefinitions="*,Auto,Auto"
+                          ColumnSpacing="8">
+
+                        <StackPanel Grid.Column="0"
+                                    Orientation="Horizontal"
+                                    Spacing="9"
+                                    VerticalAlignment="Center">
+                            <ToggleSwitch Name="SwitchCheckForUpdates"
+                                          OnContent=""
+                                          OffContent=""
+                                          VerticalAlignment="Center"/>
+                            <StackPanel Spacing="0"
+                                        VerticalAlignment="Center">
+                                <TextBlock Text="Check for updates"
+                                           FontSize="12"
+                                           Foreground="White"/>
+                                <TextBlock Text="Automatically look for new ASE releases"
+                                           FontSize="10"
+                                           Opacity="0.50"/>
+                            </StackPanel>
+                        </StackPanel>
+
+                        <Button Grid.Column="1"
+                                Classes="updateAction"
+                                Content="Continue"
+                                Name="ButtonContinue"
+                                Click="ButtonContinue_Click"/>
+
+                        <Button Grid.Column="2"
+                                Classes="accent updateAction"
+                                Content="Update"
+                                Name="ButtonUpdate"
+                                Click="ButtonUpdate_Click"/>
+
+                    </Grid>
+
+                </StackPanel>
+
+            </Grid>
+        </Border>
+
+    </Grid>
 
 </Window>

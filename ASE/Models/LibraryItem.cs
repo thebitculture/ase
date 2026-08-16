@@ -1,5 +1,6 @@
 ﻿#nullable enable
 
+using ASE.MT32;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -35,5 +36,11 @@ namespace ASE.Models
             public string? Text { get; set; }
         }
 
+        /// <summary>Which MT-32 instruments this game's YM voices are substituted by (see
+        /// <see cref="Mt32Profiles"/>), or null when it has no mapping — which is the case
+        /// for nearly every entry, so it is left out of Library.json entirely rather than
+        /// adding a null line per game to a catalogue of thousands.</summary>
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public Mt32Toolbox.PresetsProfile? Mt32PresetsProfile { get; set; }
     }
 }

@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="iso-8859-1"?>
+<!-- Generator: Adobe Illustrator 30.6.0, SVG Export Plug-In . SVG Version: 9.03 Build 0)  -->
+<svg version="1.1" id="Capa_1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px"
+	 viewBox="0 0 64 64" style="enable-background:new 0 0 64 64;" xml:space="preserve">
+<g id="Marcas" style="display:none;">
+	
+		<line style="display:inline;fill:none;stroke:#606060;stroke-linecap:round;stroke-miterlimit:10;" x1="32.5" y1="1" x2="32.5" y2="4.185"/>
+	
+		<line style="display:inline;fill:none;stroke:#606060;stroke-linecap:round;stroke-miterlimit:10;" x1="21.907" y1="2.868" x2="22.997" y2="5.86"/>
+	
+		<line style="display:inline;fill:none;stroke:#606060;stroke-linecap:round;stroke-miterlimit:10;" x1="12.593" y1="8.246" x2="14.64" y2="10.685"/>
+	
+		<line style="display:inline;fill:none;stroke:#606060;stroke-linecap:round;stroke-miterlimit:10;" x1="5.679" y1="16.485" x2="8.437" y2="18.078"/>
+	
+		<line style="display:inline;fill:none;stroke:#606060;stroke-linecap:round;stroke-miterlimit:10;" x1="2" y1="26.593" x2="5.136" y2="27.146"/>
+	
+		<line style="display:inline;fill:none;stroke:#606060;stroke-linecap:round;stroke-miterlimit:10;" x1="2" y1="37.349" x2="5.136" y2="36.796"/>
+	
+		<line style="display:inline;fill:none;stroke:#606060;stroke-linecap:round;stroke-miterlimit:10;" x1="5.679" y1="47.456" x2="8.437" y2="45.864"/>
+	
+		<line style="display:inline;fill:none;stroke:#606060;stroke-linecap:round;stroke-miterlimit:10;" x1="12.593" y1="55.695" x2="14.64" y2="53.256"/>
+	
+		<line style="display:inline;fill:none;stroke:#606060;stroke-linecap:round;stroke-miterlimit:10;" x1="52.407" y1="55.695" x2="50.36" y2="53.256"/>
+	
+		<line style="display:inline;fill:none;stroke:#606060;stroke-linecap:round;stroke-miterlimit:10;" x1="59.321" y1="47.456" x2="56.563" y2="45.864"/>
+	
+		<line style="display:inline;fill:none;stroke:#606060;stroke-linecap:round;stroke-miterlimit:10;" x1="63" y1="37.349" x2="59.864" y2="36.796"/>
+	
+		<line style="display:inline;fill:none;stroke:#606060;stroke-linecap:round;stroke-miterlimit:10;" x1="63" y1="26.593" x2="59.864" y2="27.146"/>
+	
+		<line style="display:inline;fill:none;stroke:#606060;stroke-linecap:round;stroke-miterlimit:10;" x1="59.321" y1="16.485" x2="56.563" y2="18.078"/>
+	
+		<line style="display:inline;fill:none;stroke:#606060;stroke-linecap:round;stroke-miterlimit:10;" x1="52.407" y1="8.246" x2="50.36" y2="10.685"/>
+	
+		<line style="display:inline;fill:none;stroke:#606060;stroke-linecap:round;stroke-miterlimit:10;" x1="43.093" y1="2.868" x2="42.003" y2="5.86"/>
+</g>
+<g id="Emplazamiento_del_mando" style="display:none;">
+	<radialGradient id="SVGID_1_" cx="20.6101" cy="19.4029" r="25.841" gradientUnits="userSpaceOnUse">
+		<stop  offset="0" style="stop-color:#666666"/>
+		<stop  offset="0.1024" style="stop-color:#565656"/>
+		<stop  offset="0.2816" style="stop-color:#3F3F3F"/>
+		<stop  offset="0.4768" style="stop-color:#2F2F2F"/>
+		<stop  offset="0.6978" style="stop-color:#262626"/>
+		<stop  offset="1" style="stop-color:#232323"/>
+	</radialGradient>
+	<circle style="display:inline;fill:url(#SVGID_1_);" cx="32.021" cy="32.013" r="26.5"/>
+	
+		<linearGradient id="SVGID_00000049183270495327043490000013701294864705254031_" gradientUnits="userSpaceOnUse" x1="13.2832" y1="13.2745" x2="50.7598" y2="50.7512">
+		<stop  offset="0.5396" style="stop-color:#000000"/>
+		<stop  offset="0.608" style="stop-color:#1A1A1A"/>
+		<stop  offset="0.6865" style="stop-color:#313131"/>
+		<stop  offset="0.7719" style="stop-color:#414141"/>
+		<stop  offset="0.8685" style="stop-color:#4A4A4A"/>
+		<stop  offset="1" style="stop-color:#4D4D4D"/>
+	</linearGradient>
+	<path style="display:inline;fill:url(#SVGID_00000049183270495327043490000013701294864705254031_);" d="M32.021,6.222
+		c14.221,0,25.791,11.57,25.791,25.791s-11.57,25.791-25.791,25.791S6.23,46.234,6.23,32.013S17.8,6.222,32.021,6.222 M32.021,5.513
+		c-14.636,0-26.5,11.864-26.5,26.5s11.864,26.5,26.5,26.5s26.5-11.864,26.5-26.5S46.657,5.513,32.021,5.513L32.021,5.513z"/>
+</g>
+<g>
+	<path style="fill:#808080;" d="M29.508,8.14v9.889c0,1.291,1.05,2.341,2.341,2.341h1.302c1.291,0,2.341-1.05,2.341-2.341V8.255
+		c11.784,1.693,20.537,11.72,20.537,23.758c0,13.238-10.77,24.008-24.008,24.008S8.014,45.251,8.014,32.013
+		C8.014,19.691,17.372,9.402,29.508,8.14 M30.5,7.063C17.402,7.85,7.022,18.717,7.022,32.013c0,13.807,11.193,25,25,25
+		c13.807,0,25-11.193,25-25c0-12.971-9.878-23.632-22.522-24.877v10.893c0,0.745-0.604,1.349-1.349,1.349h-1.302
+		c-0.745,0-1.349-0.604-1.349-1.349V7.063L30.5,7.063z"/>
+</g>
+</svg>

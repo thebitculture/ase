@@ -33,6 +33,50 @@ namespace ASE
 
         public bool HasDisk => Data != null || Stx != null;
 
+        // ---------------- Disk change detection ----------------
+        //
+        // The ST's floppy connector leaves pin 34 (DSKCHG) unconnected, so there is no signal
+        // that says "the disk was swapped". TOS detects it by watching the write protect line
+        // instead: every 8 VBLs it checks one drive's WPRT bit (bit 6 of the FDC status register
+        // in Type I form) and treats any change as a media change — which is what makes GEMDOS
+        // throw away its cached boot sector, FAT and directory, and what "insert disk 2" prompts
+        // rely on. A drive with no disk reads exactly like a write-protected one (the sensor
+        // cannot tell them apart), so removing and inserting a disk produces the transition.
+        //
+        // Swapping images in an emulator is instantaneous, so that transition has to be
+        // reproduced explicitly: WPRT is forced high for a while after every insert or eject
+        // (Hatari does the same in floppy.c, Floppy_DriveTransitionUpdateState). The window is
+        // measured in VBLs because that is what TOS counts: 18 VBLs covers one full poll period
+        // even with two drives connected, in which case each is only checked every 16 VBLs.
+        //
+        // Consequences that match the real machine: swapping two unprotected disks reads
+        // 0 -> 1 -> 0 and is detected, while swapping two write-protected disks reads 1 -> 1 -> 1
+        // and cannot be detected at all.
+        const long WpTransitionVbls = 18;
+
+        // VBL at which the forced write protect ends; 0 (or any past VBL) means no transition.
+        // Written from the UI thread (a disk is inserted from a menu, a drop or a dialog) and read
+        // from the emulation thread, hence Volatile: nothing else has to be synchronized, the
+        // value is a plain deadline the reader only compares against.
+        long _wpForcedUntilVbl;
+
+        /// <summary>
+        /// Registers a disk insert/eject on this drive so the FDC reports "write protected" for
+        /// the next few VBLs, which is how TOS notices the disk changed. Called from
+        /// <see cref="Insert"/> and <see cref="Eject"/>, so every path that swaps a disk (menu,
+        /// drag &amp; drop, zip entry, game library, command line) signals it.
+        /// </summary>
+        public void SignalDiskTransition() =>
+            Volatile.Write(ref _wpForcedUntilVbl, ASEMain.VblCount + WpTransitionVbls);
+
+        /// <summary>True while the insert/eject transition is holding the write protect line
+        /// high. Read by the WD1772 when it composes the Type I status.</summary>
+        public bool WpTransitionActive => ASEMain.VblCount < Volatile.Read(ref _wpForcedUntilVbl);
+
+        /// <summary>Cancels a pending transition. Used on a machine reset: TOS re-reads
+        /// everything from scratch, so there is nothing left to notify.</summary>
+        public void ClearDiskTransition() => Volatile.Write(ref _wpForcedUntilVbl, 0);
+
         public FloppyImage()
         {
             // Make array of disk configurations from file sizes.
@@ -48,7 +92,28 @@ namespace ASE
                         });
         }
 
+        /// <summary>
+        /// Loads a disk image into this drive. On success the disk change is signalled to the FDC
+        /// (see <see cref="SignalDiskTransition"/>) so TOS and the running program notice it: this
+        /// is the single entry point for every way of inserting a disk (menu, drag &amp; drop, zip
+        /// entry, game library, command line, snapshot restore).
+        /// Returns false when nothing was inserted, with the reason — or, for a zip holding
+        /// several images, its file list — in <paramref name="message"/>.
+        /// </summary>
         public bool Insert(string path, out string message)
+        {
+            bool inserted = LoadImage(path, out message);
+
+            // Only a successful insert is signalled here: the failure paths eject, and Eject
+            // signals the transition itself. The "several images in the zip" path does neither,
+            // it leaves the current disk in place until the user picks one.
+            if (inserted)
+                SignalDiskTransition();
+
+            return inserted;
+        }
+
+        bool LoadImage(string path, out string message)
         {
             string ZipVolume = "";
             ZipArchive zip = null;
@@ -112,6 +177,7 @@ namespace ASE
                 foreach (string str in ImagesInZip)
                     fileList += str + "|";
 
+                zip.Dispose();
                 message = fileList.TrimEnd('|');
                 return false;
             }
@@ -283,10 +349,15 @@ namespace ASE
             else
             {
                 // Unsupported format
+                zip?.Dispose();
                 Eject();
                 message = $"Floppy image format not supported: [[red]]{path}[[/red]]";
                 return false;
             }
+
+            // The image is fully in memory by now; keeping the archive open would hold a file
+            // handle on the zip (on Windows the user could not move or delete it afterwards).
+            zip?.Dispose();
 
             ImagePath = string.IsNullOrEmpty(ZipVolume) ? path : $"{ZipVolume}|{path}";
 
@@ -299,6 +370,11 @@ namespace ASE
             ImagePath = "";
             Data = null;
             Stx = null;
+
+            // An empty drive reads as write protected, but the change from the disk that was in
+            // it has to be signalled all the same: without it TOS keeps using its cached
+            // directory as if the disk were still there.
+            SignalDiskTransition();
         }
 
     }

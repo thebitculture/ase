@@ -7,29 +7,34 @@
   <Application.Styles>
     <FluentTheme/>
 
-    <!-- SVG icon tinting -->
+    <!-- SVG icon tinting used throughout ASE. -->
     <Style Selector="Svg">
       <Setter Property="Svg.Css" Value="{DynamicResource IconCssNormal}"/>
     </Style>
     <Style Selector=":disabled Svg">
       <Setter Property="Svg.Css" Value="{DynamicResource IconCssDisabled}"/>
     </Style>
+
+    <!-- Keep the legacy/main-window selected-tab behaviour for windows that
+         have not opted into the new aseDialog visual language yet. -->
     <Style Selector="TabItem:selected Svg">
       <Setter Property="Svg.Css" Value="{DynamicResource IconCssSelected}"/>
     </Style>
 
-    <!-- Softer, rounded controls -->
+    <!-- Softer, rounded controls. -->
     <Style Selector="Button">
       <Setter Property="CornerRadius" Value="6"/>
+      <Setter Property="VerticalContentAlignment" Value="Center"></Setter>
     </Style>
     <Style Selector="TextBox">
       <Setter Property="CornerRadius" Value="6"/>
+      <Setter Property="VerticalContentAlignment" Value="Center"></Setter>
     </Style>
     <Style Selector="ComboBox">
       <Setter Property="CornerRadius" Value="6"/>
     </Style>
 
-    <!-- Card: rounded panel that groups related settings -->
+    <!-- Card: rounded panel that groups related settings. -->
     <Style Selector="Border.card">
       <Setter Property="Background" Value="{DynamicResource CardBackgroundBrush}"/>
       <Setter Property="BorderBrush" Value="{DynamicResource CardBorderBrush}"/>
@@ -38,17 +43,25 @@
       <Setter Property="Padding" Value="14"/>
     </Style>
 
-    <!-- Section title inside a card -->
+    <!-- Section title inside a card. -->
     <Style Selector="TextBlock.section">
       <Setter Property="FontWeight" Value="SemiBold"/>
       <Setter Property="Foreground" Value="{DynamicResource AccentTextBrush}"/>
     </Style>
+
+    <!-- Shared styling for the new family of ASE dialogs/windows. -->
+    <StyleInclude Source="/Styles/AseDialogs.axaml"/>
+    
   </Application.Styles>
 
   <Application.Resources>
     <ResourceDictionary>
 
-      <!-- Atari Fuji orange accent -->
+      <FontFamily x:Key="LcdFont">
+        avares://ASE/Assets/Fonts#Modern DOS 8x14
+      </FontFamily>
+      
+      <!-- Atari Fuji orange accent. -->
       <Color x:Key="SystemAccentColor">#EE7326</Color>
       <Color x:Key="SystemAccentColorDark1">#D5641F</Color>
       <Color x:Key="SystemAccentColorDark2">#B95518</Color>
@@ -57,26 +70,45 @@
       <Color x:Key="SystemAccentColorLight2">#F5A16F</Color>
       <Color x:Key="SystemAccentColorLight3">#F9B893</Color>
 
+      <!-- Shared dialog brushes. These derive from the accent so the whole
+           secondary-window family changes consistently if the ASE accent changes. -->
+      <SolidColorBrush x:Key="AccentSoftBrush"
+                       Color="{DynamicResource SystemAccentColor}"
+                       Opacity="0.10"/>
+      <SolidColorBrush x:Key="AccentSoftHoverBrush"
+                       Color="{DynamicResource SystemAccentColor}"
+                       Opacity="0.16"/>
+      <SolidColorBrush x:Key="AccentSelectedBrush"
+                       Color="{DynamicResource SystemAccentColor}"/>
+      <SolidColorBrush x:Key="AccentSelectedHoverBrush"
+                       Color="{DynamicResource SystemAccentColorLight1}"/>
+      <x:String x:Key="SelectedTabIconCss">* { fill: #fff; }</x:String>
+
       <ResourceDictionary.ThemeDictionaries>
 
         <ResourceDictionary x:Key="Light">
           <x:String x:Key="IconCssNormal">* { fill: #111; }</x:String>
           <x:String x:Key="IconCssDisabled">* { fill: #888; }</x:String>
           <x:String x:Key="IconCssSelected">* { fill: #D5641F; }</x:String>
+
+          <SolidColorBrush x:Key="DialogBackgroundBrush">#FAFAFA</SolidColorBrush>
           <SolidColorBrush x:Key="CardBackgroundBrush">#F7F7F7</SolidColorBrush>
-          <!-- Game detail card: fades the title-screen backdrop into the card colour -->
+          <SolidColorBrush x:Key="CardBorderBrush">#E0E0E0</SolidColorBrush>
+          <SolidColorBrush x:Key="AccentTextBrush">#C55A17</SolidColorBrush>
+          <SolidColorBrush x:Key="LibraryBarBrush">#C8C8C8</SolidColorBrush>
+
+          <!-- Game detail card: fades the title-screen backdrop into the card colour. -->
           <LinearGradientBrush x:Key="DetailBackdropFade" StartPoint="50%,0%" EndPoint="50%,100%">
             <GradientStop Color="#00F7F7F7" Offset="0.0"/>
             <GradientStop Color="#B3F7F7F7" Offset="0.65"/>
             <GradientStop Color="#FFF7F7F7" Offset="1.0"/>
           </LinearGradientBrush>
-          <SolidColorBrush x:Key="CardBorderBrush">#E0E0E0</SolidColorBrush>
-          <SolidColorBrush x:Key="AccentTextBrush">#C55A17</SolidColorBrush>
-          <SolidColorBrush x:Key="LibraryBarBrush">#C8C8C8</SolidColorBrush>
+
           <LinearGradientBrush x:Key="LibraryBackgroundBrush" StartPoint="50%,0%" EndPoint="50%,100%">
             <GradientStop Color="#D8D8D8" Offset="0.0"/>
             <GradientStop Color="#FAFAFA" Offset="1.0"/>
           </LinearGradientBrush>
+
           <BoxShadows x:Key="LibraryBarShadow">0 10 10 0 #40000000</BoxShadows>
           <BoxShadows x:Key="TileShadow">0 2 2 0 #40000000</BoxShadows>
           <BoxShadows x:Key="TileShadowHover">0 10 10 0 #55000000</BoxShadows>
@@ -87,20 +119,26 @@
           <x:String x:Key="IconCssNormal">* { fill: #f2f2f2; }</x:String>
           <x:String x:Key="IconCssDisabled">* { fill: #777; }</x:String>
           <x:String x:Key="IconCssSelected">* { fill: #F28A4B; }</x:String>
+
+          <!-- The new dialogs deliberately use a black canvas around the cards. -->
+          <SolidColorBrush x:Key="DialogBackgroundBrush">#000000</SolidColorBrush>
           <SolidColorBrush x:Key="CardBackgroundBrush">#232323</SolidColorBrush>
-          <!-- Game detail card: fades the title-screen backdrop into the card colour -->
+          <SolidColorBrush x:Key="CardBorderBrush">#373737</SolidColorBrush>
+          <SolidColorBrush x:Key="AccentTextBrush">#F5A16F</SolidColorBrush>
+          <SolidColorBrush x:Key="LibraryBarBrush">#101010</SolidColorBrush>
+
+          <!-- Game detail card: fades the title-screen backdrop into the card colour. -->
           <LinearGradientBrush x:Key="DetailBackdropFade" StartPoint="50%,0%" EndPoint="50%,100%">
             <GradientStop Color="#00232323" Offset="0.0"/>
             <GradientStop Color="#B3232323" Offset="0.65"/>
             <GradientStop Color="#FF232323" Offset="1.0"/>
           </LinearGradientBrush>
-          <SolidColorBrush x:Key="CardBorderBrush">#373737</SolidColorBrush>
-          <SolidColorBrush x:Key="AccentTextBrush">#F5A16F</SolidColorBrush>
-          <SolidColorBrush x:Key="LibraryBarBrush">#101010</SolidColorBrush>
+
           <LinearGradientBrush x:Key="LibraryBackgroundBrush" StartPoint="50%,0%" EndPoint="50%,100%">
             <GradientStop Color="#101010" Offset="0.0"/>
             <GradientStop Color="#303030" Offset="1.0"/>
           </LinearGradientBrush>
+
           <BoxShadows x:Key="LibraryBarShadow">0 10 10 0 #80000000</BoxShadows>
           <BoxShadows x:Key="TileShadow">0 2 2 0 #000000</BoxShadows>
           <BoxShadows x:Key="TileShadowHover">0 10 10 0 #000000</BoxShadows>

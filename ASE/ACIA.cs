@@ -25,6 +25,12 @@ namespace ASE
 
         public static Queue<byte> IkbdRx = new();
 
+        // Parallel to IkbdRx: true for a byte that continues the packet an earlier byte
+        // started. The receiver-overrun path below drops whole packets rather than single
+        // bytes: losing just the $F8 header of a mouse packet leaves TOS reading its dx/dy
+        // as key scancodes -- a phantom key stuck down, with its click repeating.
+        private static Queue<bool> IkbdRxCont = new();
+
         public static byte AciaKbdStatus;   // ACIA Status register
         public static byte AciaKbdControl;  // ACIA Control register
 
@@ -60,8 +66,25 @@ namespace ASE
         // for the mouse -> bit 0 = No button, 1 = right, 2 = left
         public static int _mouseButtons = 0;
 
+        // *** Mouse sampling ***
+        // A host mouse reports motion far faster than an IKBD ever could: at 500-1000 Hz it
+        // would be 1500-3000 bytes/s down a 7812.5 baud line that carries 780. Sending a
+        // packet per host event kept the receive queue permanently full, so any moment TOS
+        // took longer than a byte time (1.28 ms) to service the ACIA cost a byte to overrun.
+        // Instead the deltas are accumulated here and turned into a packet at the rate the
+        // IKBD scans the mouse, which keeps the queue nearly always empty.
+        private const int MOUSE_PACKET_CYCLES = 80_000;   // ~100 packets/s at 8 MHz
+        private static int _mouseSampleCountdown = MOUSE_PACKET_CYCLES;
+        private static int _mouseAccumX = 0;
+        private static int _mouseAccumY = 0;
+
         private static byte _latchedData = 0;
         private static bool _hasLatchedData = false;
+
+        // How long the latched byte has been waiting for the CPU to read it, and whether the
+        // (edge-triggered) MFP request was already re-asserted for it. See Sync().
+        private static int _cyclesSinceLatch = 0;
+        private static bool _irqReasserted = false;
 
         // IKBD command length table
         // Key = first byte (command), Value = total bytes expected (including command byte)
@@ -163,13 +186,18 @@ namespace ASE
             lock (_syncLock)
             {
                 IkbdRx.Clear();
+                IkbdRxCont.Clear();
                 _commandBuffer.Clear();
                 _mouseButtons = 0;
                 JoystickState = 0;
+                _mouseAccumX = _mouseAccumY = 0;
+                _mouseSampleCountdown = MOUSE_PACKET_CYCLES;
 
                 _hasLatchedData = false;
                 _latchedData = 0;
                 _cyclesUntilNextByte = 0;
+                _cyclesSinceLatch = 0;
+                _irqReasserted = false;
 
                 AciaKbdStatus = ACIA_TDRE;
                 AciaKbdControl = 0;
@@ -179,8 +207,8 @@ namespace ASE
                 MouseEnabled = true;
                 JoystickMonitoring = false;
 
-                // MFP IRQ On
-                ASEMain._mfp.SetGPIOBit(4, true);
+                // Release our side of the shared /IRQ line (the MIDI ACIA may still hold it).
+                AciaIrqLine.SetKeyboard(false);
             }
         }
 
@@ -230,10 +258,21 @@ namespace ASE
                 _monitoringPeriodCycles = r.I64();
                 _monitoringCountdown = r.I64();
 
+                // Transient, not stored in the snapshot: a restored latched byte simply starts
+                // its wait again, and the rescue request belongs to the session that saved it.
+                _cyclesSinceLatch = 0;
+                _irqReasserted = false;
+                _mouseAccumX = _mouseAccumY = 0;
+                _mouseSampleCountdown = MOUSE_PACKET_CYCLES;
+
+                // The snapshot stores the queued bytes but not their packet boundaries (the
+                // format predates them): restoring them as separate packets only costs a
+                // stricter overrun in the unlikely case of one firing right after a restore.
                 IkbdRx.Clear();
+                IkbdRxCont.Clear();
                 int rxCount = r.U16();
                 for (int i = 0; i < rxCount; i++)
-                    IkbdRx.Enqueue(r.U8());
+                    PushIkbd_Internal(r.U8());
 
                 _commandBuffer.Clear();
                 int cmdCount = r.U16();
@@ -246,6 +285,15 @@ namespace ASE
         {
             lock (_syncLock)
             {
+                // Mouse sampling: whatever the host reported since the last tick becomes one
+                // packet, at the IKBD's rate instead of the host's event rate.
+                _mouseSampleCountdown -= cycles;
+                if (_mouseSampleCountdown <= 0)
+                {
+                    _mouseSampleCountdown += MOUSE_PACKET_CYCLES;
+                    EmitMousePacket(force: false);
+                }
+
                 // Joystick monitoring runs on its own sample clock, independent of whether the
                 // program is keeping up with the receiver (unread packets are simply lost to
                 // the overrun logic below, like on real hardware).
@@ -260,8 +308,7 @@ namespace ASE
                         // reply, so port-0 and port-1 readers both work with a single stick.
                         byte fires = (byte)(((JoystickState & JOY_FIRE) >> 6) | ((JoystickState & JOY_FIRE) >> 7));
                         byte dirs = (byte)(((JoystickState & 0x0F) << 4) | (JoystickState & 0x0F));
-                        PushIkbd_Internal(fires);
-                        PushIkbd_Internal(dirs);
+                        PushIkbdPacket(fires, dirs);
                     }
                 }
 
@@ -276,6 +323,8 @@ namespace ASE
                 // from minutes ago and the fire button appeared dead.
                 if (_hasLatchedData)
                 {
+                    _cyclesSinceLatch += cycles;
+
                     // The 6850 holds its IRQ line asserted (by level) as long as the
                     // receive register is full, i.e. until the CPU reads the data. The MFP
                     // GPIP4 input, however, is edge triggered: if the program cleared the
@@ -284,8 +333,28 @@ namespace ASE
                     // and this byte -- plus every key/joystick byte queued behind it --
                     // would never be delivered. Re-assert the pending bit to emulate the
                     // level-sensitive line and keep the receiver from dead-locking.
-                    if ((ASEMain._mfp.IPRB & MFP68901.RegB.ACIA) == 0)
+                    //
+                    // The two guards keep that rescue out of a NORMAL interrupt. The IACK
+                    // clears IPRB and (software EOI) sets ISRB, so between the acknowledge and
+                    // the ISR's read of $FFFC02 the pending bit is legitimately clear.
+                    // Re-asserting inside that window queues a second keyboard interrupt for a
+                    // byte that is about to be consumed, and TOS reads $FFFC02 again getting the
+                    // SAME byte twice. A duplicated byte desynchronises its 3-byte mouse packet
+                    // parser, after which the dx/dy bytes are read as key scancodes: a phantom
+                    // key stuck down, with its click repeating until the stream realigns. So:
+                    //   * the channel must not be in service (we are not inside its ISR), and
+                    //   * the byte must have been stranded for a whole byte time, far longer
+                    //     than any ISR takes to reach its read.
+                    // The bug showed up on a monochrome monitor because Sync() runs once per
+                    // scanline -- every 224 cycles instead of the 512 of a colour line -- which
+                    // made landing inside that window the common case rather than a rare one.
+                    if (_cyclesSinceLatch >= CYCLES_PER_BYTE
+                        && (ASEMain._mfp.IPRB & MFP68901.RegB.ACIA) == 0
+                        && (ASEMain._mfp.ISRB & MFP68901.RegB.ACIA) == 0)
+                    {
                         ASEMain._mfp.SetInterruptPending(MFP68901.RegB.ACIA, true);
+                        _irqReasserted = true;
+                    }
 
                     if (IkbdRx.Count == 0)
                     {
@@ -296,8 +365,15 @@ namespace ASE
                     _cyclesUntilNextByte -= cycles;
                     if (_cyclesUntilNextByte <= 0)
                     {
-                        // Byte lost in transit (receiver overrun)
-                        IkbdRx.Dequeue();
+                        // Byte lost in transit (receiver overrun). The whole packet it opens
+                        // goes with it: handing TOS a mouse report with its header missing is
+                        // what turns the dx/dy bytes into key scancodes. (A packet already
+                        // half-delivered cannot be rescued this way, but the drop always lands
+                        // on a packet boundary in practice — the byte times line up with it.)
+                        DequeueRx();
+                        while (IkbdRx.Count > 0 && IkbdRxCont.Peek())
+                            DequeueRx();
+
                         AciaKbdStatus |= ACIA_OVRN;
                         _cyclesUntilNextByte = CYCLES_PER_BYTE;
 
@@ -320,14 +396,16 @@ namespace ASE
                 if (_cyclesUntilNextByte <= 0)
                 {
                     // Next register
-                    _latchedData = IkbdRx.Dequeue();
+                    _latchedData = DequeueRx();
                     _hasLatchedData = true;
+                    _cyclesSinceLatch = 0;
+                    _irqReasserted = false;
 
                     // activate flags
                     AciaKbdStatus |= (ACIA_RDRF | ACIA_IRQ);
 
-                    // and set interrupt pending
-                    ASEMain._mfp.SetGPIOBit(4, false);
+                    // and assert the shared ACIA /IRQ line (GPIP4)
+                    AciaIrqLine.SetKeyboard(true);
 
                     if (ConfigOptions.RunninConfig.DebugMode >= ConfigOptions.DebugModes.Full)
                         ColoredConsole.WriteLine(
@@ -362,8 +440,10 @@ namespace ASE
                     _hasLatchedData = false;
                     _latchedData = 0;
                     _cyclesUntilNextByte = 0;
+                    _cyclesSinceLatch = 0;
+                    _irqReasserted = false;
                     AciaKbdStatus = ACIA_TDRE;
-                    ASEMain._mfp.SetGPIOBit(4, true);
+                    AciaIrqLine.SetKeyboard(false);
 
                     if (ConfigOptions.RunninConfig.DebugMode >= ConfigOptions.DebugModes.Information)
                         ColoredConsole.WriteLine("[[cyan]]ACIA[[/cyan]] 6850 master reset (chip only, IKBD state preserved)");
@@ -390,9 +470,23 @@ namespace ASE
                 byte result = _latchedData;
 
                 _hasLatchedData = false;
+                _cyclesSinceLatch = 0;
                 // clear flags
                 AciaKbdStatus &= unchecked((byte)~(ACIA_RDRF | ACIA_IRQ | ACIA_OVRN | ACIA_FE));
-                ASEMain._mfp.SetGPIOBit(4, true);
+                AciaIrqLine.SetKeyboard(false);
+
+                // Retire the rescue request made for THIS byte if the CPU got here first (it
+                // stands in for a lost edge, and the edge's byte is now gone). Left pending it
+                // would run the keyboard ISR once more and hand over the same byte twice.
+                if (_irqReasserted)
+                {
+                    _irqReasserted = false;
+                    if ((ASEMain._mfp.IPRB & MFP68901.RegB.ACIA) != 0)
+                    {
+                        ASEMain._mfp.IPRB &= unchecked((byte)~MFP68901.RegB.ACIA);
+                        ASEMain._mfp.UpdateIRQ();
+                    }
+                }
 
                 if (ConfigOptions.RunninConfig.DebugMode >= ConfigOptions.DebugModes.Full)
                     ColoredConsole.WriteLine($"[[blue]]CPU[[/blue]] read ACIA data [[green]]${result:X2}[[/green]] (PC=${CPU._moira.PC0:X6})");
@@ -469,13 +563,15 @@ namespace ASE
                     if (_commandBuffer[1] == 0x01)
                     {
                         IkbdRx.Clear();
+                        IkbdRxCont.Clear();
                         JoystickState = 0;
+                        _mouseAccumX = _mouseAccumY = 0;
 
                         _hasLatchedData = false;
                         _cyclesUntilNextByte = 0;
 
                         AciaKbdStatus &= unchecked((byte)~(ACIA_RDRF | ACIA_IRQ));
-                        ASEMain._mfp.SetGPIOBit(4, true);
+                        AciaIrqLine.SetKeyboard(false);
 
                         // After reset, both mouse and joystick are active
                         MouseEnabled = true;
@@ -559,9 +655,9 @@ namespace ASE
                     // it's likely using port 0 as a joystick, so we mirror the
                     // emulated stick to Joy 0 too. This makes both port-0 and
                     // port-1 readers work with a single host joystick.
-                    PushIkbd_Internal(0xFD);
-                    PushIkbd_Internal(MouseEnabled ? (byte)0x00 : JoystickState); // Joy 0
-                    PushIkbd_Internal(JoystickState);                              // Joy 1
+                    PushIkbdPacket(0xFD,
+                                   MouseEnabled ? (byte)0x00 : JoystickState,  // Joy 0
+                                   JoystickState);                             // Joy 1
                     break;
 
                 case 0x17: // SET JOYSTICK MONITORING
@@ -598,13 +694,8 @@ namespace ASE
                     break;
 
                 case 0x1C: // INTERROGATE TIME-OF-DAY CLOCK, I dont know how to implement
-                    PushIkbd_Internal(0xFC);
-                    PushIkbd_Internal(0); // YY
-                    PushIkbd_Internal(0); // MM
-                    PushIkbd_Internal(0); // DD
-                    PushIkbd_Internal(0); // hh
-                    PushIkbd_Internal(0); // mm
-                    PushIkbd_Internal(0); // ss
+                    //             YY MM DD hh mm ss
+                    PushIkbdPacket(0xFC, 0, 0, 0, 0, 0, 0);
                     break;
 
                 // Memory commands
@@ -633,20 +724,31 @@ namespace ASE
             }
         }
 
+        /// <summary>Host mouse motion: accumulated, and reported on the IKBD's next sample tick.</summary>
+        public static void MouseMotion(int dx, int dy)
+        {
+            lock (_syncLock)
+            {
+                if (!MouseEnabled) return;
+
+                _mouseAccumX += dx;
+                _mouseAccumY += dy;
+            }
+        }
+
+        /// <summary>
+        /// Sends a mouse packet right away, carrying any motion accumulated so far. For button
+        /// changes, which must not wait for the sample tick.
+        /// </summary>
         public static void SendMousePacket(int dx, int dy)
         {
             lock (_syncLock)
             {
                 if (!MouseEnabled) return;
 
-                dx = (int)(dx / ConfigOptions.RunninConfig.MouseSensitivity);
-                dy = (int)(dy / ConfigOptions.RunninConfig.MouseSensitivity);
-                if (dx < -127) dx = -127; if (dx > 127) dx = 127;
-                if (dy < -127) dy = -127; if (dy > 127) dy = 127;
-
-                PushIkbd_Internal((byte)(0xF8 | _mouseButtons));
-                PushIkbd_Internal((byte)dx);
-                PushIkbd_Internal((byte)dy);
+                _mouseAccumX += dx;
+                _mouseAccumY += dy;
+                EmitMousePacket(force: true);
             }
         }
 
@@ -668,6 +770,64 @@ namespace ASE
         private static void PushIkbd_Internal(byte b)
         {
             IkbdRx.Enqueue(b);
+            IkbdRxCont.Enqueue(false);
+        }
+
+        /// <summary>Queues a multi-byte IKBD report as one indivisible packet (see IkbdRxCont).</summary>
+        private static void PushIkbdPacket(params byte[] bytes)
+        {
+            for (int i = 0; i < bytes.Length; i++)
+            {
+                IkbdRx.Enqueue(bytes[i]);
+                IkbdRxCont.Enqueue(i > 0);
+            }
+        }
+
+        /// <summary>Takes the next byte off the receive queue, keeping both queues in step.</summary>
+        private static byte DequeueRx()
+        {
+            IkbdRxCont.Dequeue();
+            return IkbdRx.Dequeue();
+        }
+
+        /// <summary>
+        /// Emits the relative mouse packet for the motion accumulated since the last one.
+        /// Called on the IKBD's sample tick, and immediately (<paramref name="force"/>) when a
+        /// button changes, where the report must not wait for the tick.
+        /// </summary>
+        private static void EmitMousePacket(bool force)
+        {
+            // Already inside _syncLock.
+            if (!MouseEnabled)
+                return;
+
+            // While monitoring the sticks the IKBD does not scan the mouse at all.
+            if (JoystickMonitoring)
+            {
+                _mouseAccumX = _mouseAccumY = 0;
+                return;
+            }
+
+            double sens = ConfigOptions.RunninConfig.MouseSensitivity;
+            if (sens < 0.1) sens = 1.0;
+
+            int dx = (int)(_mouseAccumX / sens);
+            int dy = (int)(_mouseAccumY / sens);
+
+            if (dx == 0 && dy == 0 && !force)
+                return;    // sub-pixel motion: keep accumulating instead of sending nothing
+
+            if (dx < -127) dx = -127; else if (dx > 127) dx = 127;
+            if (dy < -127) dy = -127; else if (dy > 127) dy = 127;
+
+            // Only what the packet actually carries leaves the accumulator, so both the
+            // clamped excess of a fast flick and the fraction the division dropped ride on
+            // the next packet -- slow movement is no longer truncated away per event.
+            _mouseAccumX -= (int)(dx * sens);
+            _mouseAccumY -= (int)(dy * sens);
+
+            _mouseSampleCountdown = MOUSE_PACKET_CYCLES;
+            PushIkbdPacket((byte)(0xF8 | _mouseButtons), (byte)dx, (byte)dy);
         }
 
         public static void UpdateJoystick(byte mask, bool pressed)
@@ -702,9 +862,7 @@ namespace ASE
                     else
                         _mouseButtons &= ~0x01;
 
-                    PushIkbd_Internal((byte)(0xF8 | _mouseButtons));
-                    PushIkbd_Internal(0);
-                    PushIkbd_Internal(0);
+                    EmitMousePacket(force: true);
                     return;
                 }
 
@@ -716,8 +874,7 @@ namespace ASE
                     byte report = MouseEnabled ? (byte)(JoystickState & ~JOY_FIRE) : JoystickState;
                     if (ConfigOptions.RunninConfig.DebugMode >= ConfigOptions.DebugModes.Full)
                         ColoredConsole.WriteLine($"[[magenta]]HOST[[/magenta]] joy event -> packet [[yellow]]FF ${report:X2}[[/yellow]] (fireBit={((report & JOY_FIRE) != 0)})");
-                    PushIkbd_Internal(0xFF);
-                    PushIkbd_Internal(report);
+                    PushIkbdPacket(0xFF, report);
                 }
             }
         }

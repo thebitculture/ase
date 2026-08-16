@@ -47,6 +47,11 @@ namespace ASE
                 None, Fire, Space, Up, Y, N, T
             }
 
+            public enum MIDIEmulationOptions
+            {
+                None, System, BuiltInMT32
+            }
+            
             /// <summary>
             /// Console debug verbosity. Each level is a superset of the previous one.
             /// </summary>
@@ -70,7 +75,31 @@ namespace ASE
             public RAMConfigurations RAMConfiguration { get; set; } = RAMConfigurations.RAM_1MB;
             public  bool MaxSpeed { get; set; } = false;
             public string FloppyImagePath { get; set; } = "";
+            /// <summary>
+            /// Divisor applied to the host mouse movement before it reaches the ST
+            /// (<c>dx = accumulated / MouseSensitivity</c>, see ACIA.cs), so a bigger number
+            /// means a *slower* pointer. Stored and taken from --mouse-sensitivity in this
+            /// form; the Configuration window shows <see cref="MousePointerSpeed"/> instead.
+            /// </summary>
             public float MouseSensitivity { get; set; } = 2;
+
+            /// <summary>
+            /// The same setting the other way round: how fast the ST pointer moves, relative
+            /// to the default (x1.0 == the default divisor of 2). This is what the slider in
+            /// the Configuration window edits — a divisor is an implementation detail, and a
+            /// control where a higher number means slower reads backwards to everyone.
+            /// Not serialized: <see cref="MouseSensitivity"/> is the stored form.
+            /// </summary>
+            [JsonIgnore]
+            public float MousePointerSpeed
+            {
+                get => MouseSensitivity >= 0.1f ? DefaultMouseSensitivity / MouseSensitivity : 1f;
+                set => MouseSensitivity = value >= 0.1f ? DefaultMouseSensitivity / value : 1f;
+            }
+
+            /// <summary>Divisor that <see cref="MousePointerSpeed"/> calls x1.0.</summary>
+            const float DefaultMouseSensitivity = 2f;
+
             public int SampleRate { get; set; } = 44100;
 
             // Granularity (in CPU cycles) at which the CPU is interleaved with the MFP timers and
@@ -83,6 +112,11 @@ namespace ASE
             // Screen flags
 
             public bool ShowBorders { get; set; } = true;   // show the screen borders (overscan) around the 320x200 display
+
+            // Monochrome (SM124) monitor instead of a colour one. Detected by TOS through MFP
+            // GPIP bit 7 at boot, which then selects high resolution (640x400, 1 plane, ~71 Hz).
+            // Changing it requires a machine reset (the whole video geometry differs).
+            public bool MonochromeMonitor { get; set; } = false;
 
             public bool CheckForUpdates { get; set; } = true;   // query GitHub for a newer release at startup
 
@@ -147,6 +181,46 @@ namespace ASE
             public GamepadButtonsMapping GamepadButtonRS { get; set; } = GamepadButtonsMapping.N;
             public GamepadButtonsMapping GamepadButtonLB { get; set; } = GamepadButtonsMapping.T;
             public GamepadButtonsMapping GamepadButtonRB { get; set; } = GamepadButtonsMapping.Space;
+
+            // MIDI
+
+            /// <summary>
+            /// What the ST's MIDI ports are connected to: nothing, the host's own MIDI devices
+            /// (<see cref="MIDIEmulationOptions.System"/>, mapped through
+            /// <see cref="MidiInDevice"/>/<see cref="MidiOutDevice"/>) or the built-in Roland
+            /// MT-32 emulation (Munt, ROMs in <see cref="MT32Rompath"/>). Changing it takes
+            /// effect on a machine reset: MT-32 titles probe and initialise the module while
+            /// loading, so attaching one to a running machine would go unnoticed.
+            /// </summary>
+            public MIDIEmulationOptions MidiEmulation { get; set; } = MIDIEmulationOptions.None;
+
+            /// <summary>
+            /// Host MIDI ports the emulated ST is wired to in <see cref="MIDIEmulationOptions.System"/>
+            /// mode, or "" for none. Stored as the *name* the operating system gives the port and
+            /// not as its index: an index is only a position in the driver's list and shifts as
+            /// soon as a device is plugged, unplugged or reordered, so a saved index quietly ends
+            /// up addressing a different instrument. <see cref="HostMidi"/> enumerates the ports
+            /// and is where the name is resolved back to a platform handle.
+            /// </summary>
+            public string MidiInDevice { get; set; } = "";
+            /// <inheritdoc cref="MidiInDevice"/>
+            public string MidiOutDevice { get; set; } = "";
+
+            /// <summary>
+            /// Directory holding the Roland MT-32 control and PCM ROM images, used by the built-in
+            /// emulation. The file names do not matter: libmt32emu identifies every image by its
+            /// SHA-1 (see Mt32Synth.LoadRoms). The ROMs are copyrighted and not shipped with ASE.
+            /// </summary>
+            public string MT32Rompath { get; set; } = "";
+
+            /// <summary>
+            /// Output level of the built-in MT-32 in the mix, in percent — the real
+            /// module's front-panel volume knob. 100 folds Munt's line level 1:1 over the
+            /// PSG's, which turns out noticeably quieter than the ST's own sound, so the
+            /// default boosts it; 0 mutes, 400 is the ceiling. Read live by the audio
+            /// mixer (Mt32Backend.MixInto), so the slider works without a reset.
+            /// </summary>
+            public int Mt32Volume { get; set; } = 200;
 
             // Screenscraper
             public string ScreenScraperUser { get; set; }
@@ -338,6 +412,47 @@ namespace ASE
                         ConfigOptions.RunninConfig.DisableCrtEffects =
                             parts.Length < 2 || !bool.TryParse(parts[1], out bool _nfx) || _nfx;
                         break;
+                    case "--mono":
+                    case "--monochrome":
+                        ConfigOptions.RunninConfig.MonochromeMonitor =
+                            parts.Length < 2 || !bool.TryParse(parts[1], out bool _mono) || _mono;
+                        break;
+                    case "--midi":
+                        if (parts.Length > 1 && TryParseMidiMode(parts[1], out ConfigOptions.MIDIEmulationOptions _midi))
+                        {
+                            ConfigOptions.RunninConfig.MidiEmulation = _midi;
+                        }
+                        else
+                        {
+                            ColoredConsole.WriteLine($"Invalid MIDI mode [[red]]{(parts.Length > 1 ? parts[1] : "")}[[/red]]. Use none|system|mt32.");
+                            ColoredConsole.WriteLine("Keeping the configured mode [[cyan]]" + ConfigOptions.RunninConfig.MidiEmulation + "[[/cyan]].");
+                        }
+                        break;
+                    // The port names are the ones the host OS publishes (see HostMidi); they carry
+                    // spaces, so on the command line they need quoting: --midi-out="USB MIDI".
+                    case "--midi-in":
+                        if (parts.Length > 1)
+                            ConfigOptions.RunninConfig.MidiInDevice = parts[1];
+                        break;
+                    case "--midi-out":
+                        if (parts.Length > 1)
+                            ConfigOptions.RunninConfig.MidiOutDevice = parts[1];
+                        break;
+                    case "--mt32-roms":
+                        if (parts.Length > 1)
+                            ConfigOptions.RunninConfig.MT32Rompath = parts[1];
+                        break;
+                    case "--mt32-volume":
+                        if (parts.Length > 1 && int.TryParse(parts[1], out int _mtv))
+                        {
+                            ConfigOptions.RunninConfig.Mt32Volume = Math.Clamp(_mtv, 0, Mt32Backend.MaxVolume);
+                        }
+                        else
+                        {
+                            ColoredConsole.WriteLine($"Invalid MT-32 volume. Use [[cyan]]--mt32-volume=N[[/cyan]] with N in percent (0-{Mt32Backend.MaxVolume}).");
+                            ColoredConsole.WriteLine($"Keeping the configured volume [[cyan]]{ConfigOptions.RunninConfig.Mt32Volume}%[[/cyan]].");
+                        }
+                        break;
 
                     default:
                         // Anything unrecognized lands here as well, so name it before the list —
@@ -349,6 +464,34 @@ namespace ASE
                         Environment.Exit(0);
                         break;
                 }
+            }
+        }
+
+        /// <summary>
+        /// Reads the value of <c>--midi</c>. Accepts the friendly spellings a user would try
+        /// rather than the enum names, since "BuiltInMT32" is an implementation detail.
+        /// </summary>
+        static bool TryParseMidiMode(string value, out ConfigOptions.MIDIEmulationOptions mode)
+        {
+            switch (value.ToLower())
+            {
+                case "none":
+                case "off":
+                    mode = ConfigOptions.MIDIEmulationOptions.None;
+                    return true;
+                case "system":
+                case "host":
+                case "os":
+                    mode = ConfigOptions.MIDIEmulationOptions.System;
+                    return true;
+                case "mt32":
+                case "mt-32":
+                case "builtinmt32":
+                    mode = ConfigOptions.MIDIEmulationOptions.BuiltInMT32;
+                    return true;
+                default:
+                    mode = ConfigOptions.MIDIEmulationOptions.None;
+                    return false;
             }
         }
 
@@ -376,8 +519,16 @@ namespace ASE
             HelpOption("--screenshots-dir", "=<path>", "Where Shift+F11 saves PNG screenshots");
 
             HelpSection("Display and input");
+            HelpOption("--monochrome", "[=true|false]", "Monochrome (SM124) monitor: 640x400 high resolution");
             HelpOption("--no-effects", "[=true|false]", "Bypass the CRT shader: faster on weak GPUs");
-            HelpOption("--mouse-sensitivity", "=N", $"Mouse sensitivity, e.g. 2.5 (default: {def.MouseSensitivity})");
+            HelpOption("--mouse-sensitivity", "=N", $"Mouse movement divisor: higher is slower (default: {def.MouseSensitivity})");
+
+            HelpSection("MIDI");
+            HelpOption("--midi", "=<mode>", "MIDI emulation: none|system|mt32");
+            HelpOption("--midi-in", "=<name>", "Host MIDI input port, by name (system mode)");
+            HelpOption("--midi-out", "=<name>", "Host MIDI output port, by name (system mode)");
+            HelpOption("--mt32-roms", "=<path>", "Folder with the Roland MT-32 ROM images (mt32 mode)");
+            HelpOption("--mt32-volume", "=N", $"Built-in MT-32 volume in percent, 0-{Mt32Backend.MaxVolume} (default: {def.Mt32Volume})");
 
             HelpSection("Timing (advanced)");
             HelpOption("--cycleexact", "[=true|false]", $"Cycle-exact bus wait states (default: {(def.CycleExactBus ? "on" : "off")})");

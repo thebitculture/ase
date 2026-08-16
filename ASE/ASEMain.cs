@@ -21,11 +21,11 @@ namespace ASE
 {
     public static class ASEMain
     {
-        // The texture handed to OpenGL is BUFFER_WIDTH x BUFFER_HEIGHT (display + borders).
-        // ScreenHeight is the *visual* height: each ST scanline is shown at double height, so the window aspect ratio and GLControl's
-        public const int ScreenWidth = VideoTiming.BUFFER_WIDTH;
-        public const int ScreenHeight = VideoTiming.BUFFER_HEIGHT * 2;
-        public const int ScreenViewSize = VideoTiming.BUFFER_WIDTH * VideoTiming.BUFFER_HEIGHT;
+        // The framebuffers (and the GL texture) are allocated at the largest geometry of both
+        // monitor types (see VideoTiming.MAX_*). The active mode — colour 832x288 @ 50 Hz or
+        // monochrome 640x400 @ 71 Hz — fills a tightly-packed sub-region whose size is
+        // VideoTiming.BUFFER_WIDTH x BUFFER_HEIGHT, and the GL thread resizes its texture to it.
+        public const int ScreenViewSize = VideoTiming.MAX_VIEW_SIZE;
 
         public static Memory _mem;
         public static MFP68901 _mfp;
@@ -86,6 +86,16 @@ namespace ASE
         /// <summary>Incremented on every published frame; the GL thread compares it against the
         /// one it last uploaded to know whether there is anything new to push to the texture.</summary>
         static long _frameSeq;
+
+        static long _vblCount;
+
+        /// <summary>VBLs (emulated frames) elapsed since the process started. Written only by the
+        /// emulation thread. The floppy media-change detection measures its window in VBLs, like
+        /// the TOS routine that polls it (see <see cref="FloppyImage.SignalDiskTransition"/>): the
+        /// counter stops while the machine is paused, so a disk swapped from a dialog is still
+        /// seen when the machine resumes instead of the window expiring in dead time.</summary>
+        public static long VblCount => Volatile.Read(ref _vblCount);
+
         public static bool IsMouseCaptured = false;
         public static MainWindow MainWindow;
 
@@ -103,6 +113,26 @@ namespace ASE
 
             if (_audiodev != 0)
                 SDL.SDL_PauseAudioDevice(_audiodev, pause ? 1 : 0);
+        }
+
+        /// <summary>
+        /// Runs <paramref name="action"/> with the SDL audio device locked, i.e. with the
+        /// audio callback guaranteed not to be executing. This is how state the callback
+        /// reads (the MT-32 backend, see <see cref="MidiManager"/>) is swapped or torn
+        /// down without racing a render in flight. Works before the device exists too.
+        /// </summary>
+        public static void WithAudioLocked(Action action)
+        {
+            uint dev = _audiodev;
+            if (dev == 0)
+            {
+                action();
+                return;
+            }
+
+            SDL.SDL_LockAudioDevice(dev);
+            try { action(); }
+            finally { SDL.SDL_UnlockAudioDevice(dev); }
         }
 
         // Depth of the UI-window pause: every emulator dialog (library, configuration,
@@ -228,8 +258,10 @@ namespace ASE
 
         public static void EmulatorLoop()
         {
-            //  Speed control variables
-            const double frame = 1.0 / 50.0; // 1 ST pal frame -> 0.02 s
+            //  Speed control variables. The frame period follows the active monitor: ~0.02 s at
+            //  50 Hz (colour PAL) or ~0.014 s at ~71 Hz (monochrome). Fixed for this thread's life
+            //  because the monitor type only changes through a reset (which restarts the thread).
+            double frame = VideoTiming.FRAME_SECONDS;
             var sw = Stopwatch.StartNew();
             double next = 0.0;
             var last = Stopwatch.StartNew();
@@ -279,7 +311,7 @@ namespace ASE
                     long frameClockBase = CPU._moira.Clock;
                     bool hitBreakpoint = false;
 
-                    for (int scanline = 0; scanline < 313; scanline++)
+                    for (int scanline = 0; scanline < VideoTiming.SCANLINES_PER_FRAME; scanline++)
                     {
                         // Input first: consume whatever the UI thread has pumped into SDL's
                         // queue and feed it to the IKBD at scanline granularity, so a key or
@@ -294,15 +326,18 @@ namespace ASE
 
                         int ElapsedCycles = 0;
 
-                        // Run the CPU until the Display Enable (DE) signal drops.
-                        // At 50Hz, DE drops at cycle 376. This is where Timer B and the HBL MUST fire.
-                        int cyclesToDEStop = 376;
+                        // Run the CPU until the Display Enable (DE) signal drops. This is where
+                        // Timer B and the HBL MUST fire (cycle 376 at 50 Hz colour, 184 in mono).
+                        int cyclesToDEStop = VideoTiming.DE_STOP_CYCLE;
                         if (RunCpuUntil(lineBase + cyclesToDEStop)) { hitBreakpoint = true; break; }
                         ElapsedCycles += cyclesToDEStop;
 
                         // Fire Timer B exactly when Display Enable drops (like the real hardware).
-                        // Check whether this is a visible line (standard PAL: lines 63 to 262).
-                        bool isVisibleLine = (scanline >= 63 && scanline < 263);
+                        // Only on lines that actually display (colour: 63..262; mono: the 400 active
+                        // lines starting at RENDER_TOP_LINE).
+                        bool isVisibleLine = VideoTiming.Mono
+                            ? (scanline >= VideoTiming.RENDER_TOP_LINE && scanline < VideoTiming.RENDER_TOP_LINE + VideoTiming.BUFFER_HEIGHT)
+                            : (scanline >= 63 && scanline < 263);
                         if (isVisibleLine)
                         {
                             _mfp.TickTimerA_EventCount();
@@ -325,6 +360,7 @@ namespace ASE
                         // inside RunCpuUntil: the DMA delivery of STX disks needs a
                         // granularity of a few cycles)
                         ACIA.Sync(ElapsedCycles);
+                        MidiAcia.Sync(ElapsedCycles);
 
                         // Resolve the line (open borders, etc.)
                         VideoTiming.LineInfo line = VideoTiming.ResolveLine();
@@ -366,6 +402,12 @@ namespace ASE
 
                     // Vsync completed
                     _mfp.irqController.RaiseVBL();
+                    Volatile.Write(ref _vblCount, _vblCount + 1);
+
+                    // The YM->MT-32 voice mapper samples the PSG once per VBL — the same
+                    // 50 Hz grid YM register dumps use — and turns it into MIDI for the
+                    // built-in module (a near no-op when nothing is mapped).
+                    YmMidiMapper.OnFrame(_ym);
 
                     // For future use: recording, etc.
                     OnFrameComplete?.Invoke();
@@ -585,22 +627,29 @@ namespace ASE
         }
 
         /// <summary>
-        /// Writes the last published frame as a PNG. Follows ShowBorders (full overscan buffer or
-        /// just the 640x200 display area) and doubles each scanline vertically — the framebuffer
-        /// is already horizontally doubled, so the image keeps the on-screen aspect ratio.
+        /// Writes the last published frame as a PNG. In colour it follows ShowBorders (full
+        /// overscan buffer or just the 640x200 display area) and doubles each scanline vertically —
+        /// the framebuffer is already horizontally doubled, so the image keeps the on-screen aspect
+        /// ratio. In monochrome the buffer is a native 640x400 with square pixels, so it is written
+        /// 1:1 (no crop, no doubling).
         /// </summary>
         static void WriteScreenshotPng(string path)
         {
-            bool borders = ConfigOptions.RunninConfig.ShowBorders;
+            bool mono = VideoTiming.Mono;
+            // Mono has no borders; colour honours ShowBorders (crop to the 320x200 display).
+            bool borders = mono || ConfigOptions.RunninConfig.ShowBorders;
             int srcX = borders ? 0 : VideoTiming.DISPLAY_ORIGIN_X;
             int srcY = borders ? 0 : VideoTiming.DISPLAY_ORIGIN_Y;
             int width = borders ? VideoTiming.BUFFER_WIDTH : VideoTiming.DISPLAY_TEX_WIDTH;
             int height = borders ? VideoTiming.BUFFER_HEIGHT : VideoTiming.DISPLAY_TEX_HEIGHT;
 
+            // Colour scanlines are shown at double height; mono pixels are ~square, written 1:1.
+            int vScale = mono ? 1 : 2;
+
             // Framebuffer pixels are RGBA in memory (0xAABBGGRR), same layout the GL texture uses
             byte[] row = new byte[width * 4];
 
-            using var bmp = new WriteableBitmap(new PixelSize(width, height * 2), new Vector(96, 96),
+            using var bmp = new WriteableBitmap(new PixelSize(width, height * vScale), new Vector(96, 96),
                                                 PixelFormats.Rgba8888, AlphaFormat.Opaque);
             using (var fb = bmp.Lock())
             {
@@ -615,13 +664,15 @@ namespace ASE
                     {
                         System.Buffer.BlockCopy(_lastPublished,
                             ((srcY + y) * VideoTiming.BUFFER_WIDTH + srcX) * 4, row, 0, row.Length);
-                        Marshal.Copy(row, 0, fb.Address + (2 * y) * fb.RowBytes, row.Length);
-                        Marshal.Copy(row, 0, fb.Address + (2 * y + 1) * fb.RowBytes, row.Length);
+                        for (int s = 0; s < vScale; s++)
+                            Marshal.Copy(row, 0, fb.Address + (vScale * y + s) * fb.RowBytes, row.Length);
                     }
                 }
             }
 
-            bmp.Save(path);
+            // The encoder is picked by the options type (the old quality-based overload is
+            // obsolete since Avalonia 12); the file is always a .png, see NewTimestampedPath above.
+            bmp.Save(path, PngBitmapEncoderOptions.Default);
         }
 
         /// <summary>
@@ -641,6 +692,11 @@ namespace ASE
             // TOS in the Configuration window, whose OK triggers a HardReset and lands here again.
             if (!CPU.InitCpu())
                 return false;
+
+            // What the MIDI ACIA's DIN sockets are plugged into is decided at power-on,
+            // so a reset is also what applies a MIDI configuration change (and what
+            // power-cycles the built-in MT-32).
+            MidiManager.Initialize();
 
             _isRunning = true;
             afterInit?.Invoke();
@@ -703,13 +759,17 @@ namespace ASE
 
             var prevModel = ConfigOptions.RunninConfig.STModel;
             var prevRam = ConfigOptions.RunninConfig.RAMConfiguration;
+            var prevMono = ConfigOptions.RunninConfig.MonochromeMonitor;
 
             ConfigOptions.RunninConfig.STModel = snap.Model;
             ConfigOptions.RunninConfig.RAMConfiguration = snap.RamConfig;
+            ConfigOptions.RunninConfig.MonochromeMonitor = snap.Mono;
 
             try
             {
-                return TurnOn(() => Snapshot.Apply(snap));
+                bool ok = TurnOn(() => Snapshot.Apply(snap));
+                MainWindow?.RefreshAspectRatio();   // the snapshot may have a different monitor type
+                return ok;
             }
             catch (Exception ex)
             {
@@ -717,8 +777,10 @@ namespace ASE
                 error = ex.Message;
                 ConfigOptions.RunninConfig.STModel = prevModel;
                 ConfigOptions.RunninConfig.RAMConfiguration = prevRam;
+                ConfigOptions.RunninConfig.MonochromeMonitor = prevMono;
 
                 TurnOn();
+                MainWindow?.RefreshAspectRatio();
                 return false;
             }
         }
@@ -741,6 +803,10 @@ namespace ASE
                 SDL.SDL_CloseAudioDevice(_audiodev);
                 _audiodev = 0;
             }
+
+            // After the audio device: with the callback gone, disposing the MT-32 (and
+            // closing any host MIDI ports) cannot race a render.
+            MidiManager.Shutdown();
             if (GamepadController != nint.Zero)
             {
                 SDL.SDL_GameControllerClose(GamepadController);
@@ -1056,8 +1122,10 @@ namespace ASE
             {
                 if (e.type == SDL.SDL_EventType.SDL_MOUSEMOTION && (e.motion.xrel != 0 || e.motion.yrel != 0))
                 {
-                    // Forwards the relative mouse motion inside the emulator window to the ST
-                    ACIA.SendMousePacket(e.motion.xrel, e.motion.yrel);
+                    // Forwards the relative mouse motion inside the emulator window to the ST.
+                    // The IKBD accumulates it and reports it on its own sample tick: a host
+                    // mouse fires far more often than the 7812.5 baud line can carry.
+                    ACIA.MouseMotion(e.motion.xrel, e.motion.yrel);
                 }
                 else if (e.type == SDL.SDL_EventType.SDL_MOUSEBUTTONDOWN)
                 {

@@ -31,10 +31,12 @@ namespace ASE
     /// </summary>
     public static class VideoTiming
     {
-        // ===================== Horizontal timing (CPU cycles, 8 MHz) =====================
+        // ===================== Colour (PAL) horizontal timing (CPU cycles, 8 MHz) =====================
         // A PAL scanline is 512 cycles. During DE the shifter reads 0.5 bytes/cycle, so the
         // normal 320-cycle display window reads 160 bytes (low and medium resolution alike).
-        public const int CYCLES_PER_LINE = 512;
+        public const int COLOR_CYCLES_PER_LINE = 512;
+        const int COLOR_SCANLINES  = 313;
+        const int COLOR_DE_STOP    = 376;   // where the emulation loop fires the HBL / Timer B
 
         const int DE_START_50 = 56;
         const int DE_STOP_50  = 376;   // (376-56)/2 = 160 bytes
@@ -43,14 +45,29 @@ namespace ASE
         const int DE_START_LEFT_OPEN = 4;     // left border removed  (~ +26 bytes on the left)
         const int DE_STOP_RIGHT_OPEN = 464;   // right border removed (~ +44 bytes on the right)
 
-        // ===================== Vertical timing (scanline numbers) =====================
+        // ===================== Colour vertical timing (scanline numbers) =====================
         const int V_START_50 = 63;
         const int V_STOP_50  = 263;    // 200 visible lines (63..262)
         const int V_START_60 = 34;
         const int V_STOP_60  = 234;
         const int V_STOP_BOTTOM_OPEN = 308;   // safety limit for an opened bottom border
 
-        // ===================== Visible window (what a real TV shows, centred) =====================
+        // ===================== Monochrome (SM124) timing =====================
+        // High resolution: 640x400, one bitplane, ~71.25 Hz. 501 scanlines of 224 CPU cycles.
+        // Each line fetches 40 words (80 bytes) over a ~160-cycle DE window; 80*400 = 32000 bytes,
+        // the ST monochrome screen. There are no colour/border tricks here — the monitor shows the
+        // full 640x400 with only a thin blanking margin — so the model is deliberately simple.
+        const int MONO_CYCLES_PER_LINE = 224;
+        const int MONO_SCANLINES       = 501;
+        const int MONO_WIDTH           = 640;
+        const int MONO_HEIGHT          = 400;
+        const int MONO_BYTES_PER_LINE  = 80;
+        const int MONO_V_START         = 36;                    // first displayed scanline
+        const int MONO_V_STOP          = MONO_V_START + MONO_HEIGHT;   // 436
+        const int MONO_DE_START        = 24;                    // left edge of the fetched data
+        const int MONO_DE_STOP         = MONO_DE_START + 160;   // where the loop fires HBL / Timer B
+
+        // ===================== Visible window (what a real colour TV shows, centred) =====================
         // Horizontal units are "low-res pixels" == DE cycles; each maps to 2 texture pixels
         // (low-res is pixel-doubled). Vertical units are scanlines, 1:1 with texture rows.
         //
@@ -69,16 +86,65 @@ namespace ASE
         public const int VISIBLE_TOP_LINE    = 19;    // 63 - 44   (display centred vertically)
         public const int VISIBLE_BOTTOM_LINE = 307;   // 263 + 44
 
-        public const int BUFFER_WIDTH  = (VISIBLE_RIGHT_CYCLE - VISIBLE_LEFT_CYCLE) * 2; // 832
-        public const int BUFFER_HEIGHT = VISIBLE_BOTTOM_LINE - VISIBLE_TOP_LINE;          // 288
+        const int COLOR_WIDTH  = (VISIBLE_RIGHT_CYCLE - VISIBLE_LEFT_CYCLE) * 2; // 832
+        const int COLOR_HEIGHT = VISIBLE_BOTTOM_LINE - VISIBLE_TOP_LINE;          // 288
 
-        // Texture rectangle of the normal (non-overscan) 320x200 display inside the buffer.
+        // Framebuffers and the GL texture are allocated at the largest of both modes so switching
+        // monitor type (which happens only on a reset) never has to reallocate the shared buffers.
+        public const int MAX_WIDTH     = COLOR_WIDTH;    // 832 (colour overscan is the widest)
+        public const int MAX_HEIGHT    = MONO_HEIGHT;    // 400 (mono is the tallest)
+        public const int MAX_VIEW_SIZE = MAX_WIDTH * MAX_HEIGHT;
+
+        // Texture rectangle of the normal (non-overscan) 320x200 display inside the colour buffer.
         // Used to crop back to the borderless view when ShowBorders is off. With the centred
         // window the display is symmetric inside the buffer (96 px / 44 lines margin each side).
         public const int DISPLAY_ORIGIN_X  = (DE_START_50 - VISIBLE_LEFT_CYCLE) * 2;       // 96
         public const int DISPLAY_ORIGIN_Y  = V_START_50 - VISIBLE_TOP_LINE;                // 44
         public const int DISPLAY_TEX_WIDTH = (DE_STOP_50 - DE_START_50) * 2;               // 640
         public const int DISPLAY_TEX_HEIGHT = V_STOP_50 - V_START_50;                      // 200
+
+        // ===================== Active geometry (chosen at Reset from the monitor type) =====================
+        // These replace the old compile-time constants: colour and monochrome monitors have
+        // completely different resolutions, line counts and refresh rates. The colour values
+        // below are the defaults, so behaviour is unchanged until a monochrome monitor is selected.
+        public static bool Mono { get; private set; }
+        public static int  BUFFER_WIDTH        { get; private set; } = COLOR_WIDTH;   // active stride & width
+        public static int  BUFFER_HEIGHT       { get; private set; } = COLOR_HEIGHT;
+        public static int  CYCLES_PER_LINE     { get; private set; } = COLOR_CYCLES_PER_LINE;
+        public static int  SCANLINES_PER_FRAME { get; private set; } = COLOR_SCANLINES;
+        public static int  DE_STOP_CYCLE       { get; private set; } = COLOR_DE_STOP;       // loop HBL/Timer B split
+        public static int  RENDER_TOP_LINE     { get; private set; } = VISIBLE_TOP_LINE;    // scanline shown at buffer row 0
+        public static double FRAME_SECONDS     { get; private set; } = (double)COLOR_SCANLINES * COLOR_CYCLES_PER_LINE / 8_000_000.0;
+
+        // Bumped whenever the active geometry changes, so the GL thread knows to resize its texture.
+        public static int GeometryGeneration { get; private set; }
+
+        /// <summary>Selects colour or monochrome geometry from the running config. Called by Reset().</summary>
+        static void ConfigureGeometry()
+        {
+            bool mono = ConfigOptions.RunninConfig.MonochromeMonitor;
+
+            if (mono)
+            {
+                BUFFER_WIDTH = MONO_WIDTH; BUFFER_HEIGHT = MONO_HEIGHT;
+                CYCLES_PER_LINE = MONO_CYCLES_PER_LINE; SCANLINES_PER_FRAME = MONO_SCANLINES;
+                DE_STOP_CYCLE = MONO_DE_STOP; RENDER_TOP_LINE = MONO_V_START;
+            }
+            else
+            {
+                BUFFER_WIDTH = COLOR_WIDTH; BUFFER_HEIGHT = COLOR_HEIGHT;
+                CYCLES_PER_LINE = COLOR_CYCLES_PER_LINE; SCANLINES_PER_FRAME = COLOR_SCANLINES;
+                DE_STOP_CYCLE = COLOR_DE_STOP; RENDER_TOP_LINE = VISIBLE_TOP_LINE;
+            }
+
+            FRAME_SECONDS = (double)SCANLINES_PER_FRAME * CYCLES_PER_LINE / 8_000_000.0;
+
+            if (mono != Mono)
+            {
+                Mono = mono;
+                GeometryGeneration++;
+            }
+        }
 
         // ===================== State =====================
         struct VidEvent { public int Cycle; public bool IsRes; public byte Val; }
@@ -136,10 +202,14 @@ namespace ASE
         /// <summary>Resets persistent state (called on cold/hard reset).</summary>
         public static void Reset()
         {
+            // Pick colour vs monochrome geometry for this power-on (the monitor type can only
+            // change through a reset, so the whole video pipeline is fixed for the session).
+            ConfigureGeometry();
+
             _currentSync = 0x02;
-            _currentRes = 0x00;
+            _currentRes = Mono ? (byte)0x02 : (byte)0x00;
             _syncAtLineStart = 0x02;
-            _resAtLineStart = 0x00;
+            _resAtLineStart = _currentRes;
             _videoCounter = 0;
             _lineStartCounter = 0;
             _lineStartClock = 0;
@@ -209,6 +279,15 @@ namespace ASE
         // bottom border is opened. It starts/stops once per frame (no restart).
         static void AdvanceVerticalDisplay(int line, ref bool displayOn, ref bool displayDone)
         {
+            if (Mono)
+            {
+                // No border tricks on a monochrome monitor: display is simply on for the 400
+                // active lines.
+                displayOn = line >= MONO_V_START && line < MONO_V_STOP;
+                displayDone = line >= MONO_V_STOP;
+                return;
+            }
+
             if (!displayOn && !displayDone)
             {
                 int startLine = _topBorderOpen ? V_START_60 : V_START_50;
@@ -316,6 +395,25 @@ namespace ASE
         /// </summary>
         public static LineInfo ResolveLine()
         {
+            if (Mono)
+            {
+                AdvanceVerticalDisplay(_currentLine, ref _vDisplayOn, ref _vDisplayDone);
+
+                LineInfo mono = default;
+                mono.Line = _currentLine;
+                mono.Res = 0x02;                       // high resolution
+                mono.Visible = _currentLine >= MONO_V_START && _currentLine < MONO_V_STOP;
+                mono.HasDisplay = _vDisplayOn;
+                if (!_vDisplayOn)
+                    return mono;                        // outside the 400 active lines: address frozen
+
+                mono.VideoAddr = _lineStartCounter;
+                mono.DeStart = MONO_DE_START;
+                mono.DeStop = MONO_DE_STOP;
+                _videoCounter = (_videoCounter + MONO_BYTES_PER_LINE) & 0xFFFFFFu;
+                return mono;
+            }
+
             // Authoritative vertical decision: now that this line's sync writes are known, the
             // border flags (set in OnSyncWrite) are taken into account.
             AdvanceVerticalDisplay(_currentLine, ref _vDisplayOn, ref _vDisplayDone);
@@ -373,6 +471,16 @@ namespace ASE
         {
             if (!_currentLineHasDisplay)
                 return _lineStartCounter & 0xFFFFFFu;
+
+            if (Mono)
+            {
+                // One word every 4 CPU cycles across the 160-cycle DE window (40 words = 80 bytes).
+                int cyc = (int)(CPU._moira.Clock - _lineStartClock);
+                int mwords = (cyc - MONO_DE_START) / 4;
+                if (mwords < 0) mwords = 0;
+                else if (mwords > MONO_BYTES_PER_LINE / 2) mwords = MONO_BYTES_PER_LINE / 2;
+                return (_lineStartCounter + (uint)(mwords * 2)) & 0xFFFFFFu;
+            }
 
             int cycleInLine = (int)(CPU._moira.Clock - _lineStartClock);
 

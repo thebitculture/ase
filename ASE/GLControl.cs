@@ -302,9 +302,13 @@ namespace ASE
 
         private readonly Stopwatch _timer = new Stopwatch();
 
-        // Atari screen size
-        private const int SrcW = ASEMain.ScreenWidth;
-        private const int SrcH = ASEMain.ScreenHeight / 2;
+        // Atari screen size (the active video geometry). Runtime, not compile-time: a colour
+        // monitor is 832x288 and a monochrome one 640x400, and the user can switch between them
+        // (through a reset). The texture is resized to match whenever VideoTiming's geometry
+        // generation changes; see EnsureTextureGeometry.
+        private int _srcW = VideoTiming.BUFFER_WIDTH;
+        private int _srcH = VideoTiming.BUFFER_HEIGHT;
+        private int _geomGen = -1;   // -1 forces the first render to size the texture
 
         // Sequence number of the frame currently in the texture. The GL thread renders free-running
         // and normally beats the 50 Hz emulation, so this is what stops it from re-uploading the
@@ -445,7 +449,7 @@ namespace ASE
                 // updated each frame from ShowBorders.
                 _gl.UseProgram(p.Id);
                 if (p.Texture    >= 0) _gl.Uniform1(p.Texture, 0);
-                if (p.SourceSize >= 0) _gl.Uniform2(p.SourceSize, (float)SrcW, (float)SrcH);
+                if (p.SourceSize >= 0) _gl.Uniform2(p.SourceSize, (float)_srcW, (float)_srcH);
                 if (p.TexMin     >= 0) _gl.Uniform2(p.TexMin, 0f, 0f);
                 if (p.TexMax     >= 0) _gl.Uniform2(p.TexMax, 1f, 1f);
             }
@@ -454,11 +458,14 @@ namespace ASE
         }
 
         /// <summary>
-        /// Program to draw this frame: the plain blit when the user turned the CRT effects off,
-        /// the full shader otherwise (and also if the plain one failed to build).
+        /// Program to draw this frame: the plain blit when the user turned the CRT effects off —
+        /// or always in monochrome high resolution, where a sharp pixel image is what's wanted and
+        /// CRT effects make no sense — the full shader otherwise (and also if the plain one failed
+        /// to build). The user's DisableCrtEffects preference is left untouched, so it comes back
+        /// when a colour monitor is selected again.
         /// </summary>
         private ShaderProgram ActiveProgram =>
-            Config.ConfigOptions.RunninConfig.DisableCrtEffects && _plainProgram != null && _plainProgram.Valid
+            (VideoTiming.Mono || Config.ConfigOptions.RunninConfig.DisableCrtEffects) && _plainProgram != null && _plainProgram.Valid
                 ? _plainProgram
                 : _crtProgram;
 
@@ -549,14 +556,50 @@ namespace ASE
             _gl.TexParameter(GLEnum.Texture2D, GLEnum.TextureWrapS, (int)GLEnum.ClampToEdge);
             _gl.TexParameter(GLEnum.Texture2D, GLEnum.TextureWrapT, (int)GLEnum.ClampToEdge);
 
-            // Allocated black rather than left undefined: the first frames are drawn before the
-            // emulation has published anything, and nothing is uploaded until it does.
-            uint[] blank = new uint[SrcW * SrcH];
+            // Allocated black at the maximum geometry rather than left undefined: the first
+            // frames are drawn before the emulation has published anything, and nothing is
+            // uploaded until it does. EnsureTextureGeometry resizes it to the active mode on the
+            // first render (and again whenever the monitor type changes).
+            uint[] blank = new uint[VideoTiming.MAX_WIDTH * VideoTiming.MAX_HEIGHT];
             fixed (void* pBlank = blank)
-                _gl.TexImage2D(GLEnum.Texture2D, 0, (int)GLEnum.Rgba, SrcW, SrcH, 0,
+                _gl.TexImage2D(GLEnum.Texture2D, 0, (int)GLEnum.Rgba, VideoTiming.MAX_WIDTH, VideoTiming.MAX_HEIGHT, 0,
                                GLEnum.Rgba, GLEnum.UnsignedByte, pBlank);
 
             _timer.Restart();
+        }
+
+        /// <summary>
+        /// Resizes the texture to the active video geometry (colour 832x288 / mono 640x400) when
+        /// VideoTiming's geometry generation changes — i.e. after a reset that switched the monitor
+        /// type. Also refreshes uSourceSize on both programs. Cheap no-op on the common frame.
+        /// </summary>
+        private unsafe void EnsureTextureGeometry()
+        {
+            int gen = VideoTiming.GeometryGeneration;
+            if (gen == _geomGen) return;
+
+            _geomGen = gen;
+            _srcW = VideoTiming.BUFFER_WIDTH;
+            _srcH = VideoTiming.BUFFER_HEIGHT;
+
+            _gl.BindTexture(GLEnum.Texture2D, _textureId);
+            uint[] blank = new uint[_srcW * _srcH];
+            fixed (void* pBlank = blank)
+                _gl.TexImage2D(GLEnum.Texture2D, 0, (int)GLEnum.Rgba, (uint)_srcW, (uint)_srcH, 0,
+                               GLEnum.Rgba, GLEnum.UnsignedByte, pBlank);
+
+            foreach (var p in new[] { _crtProgram, _plainProgram })
+            {
+                if (p != null && p.Valid && p.SourceSize >= 0)
+                {
+                    _gl.UseProgram(p.Id);
+                    _gl.Uniform2(p.SourceSize, (float)_srcW, (float)_srcH);
+                }
+            }
+
+            // Force the next AcquireFrame to hand over a buffer so the freshly-sized texture is
+            // filled (its bookmark would otherwise still match and skip the upload).
+            _frameSeq = -1;
         }
 
         protected override unsafe void OnOpenGlRender(GlInterface gl, int fb)
@@ -567,6 +610,8 @@ namespace ASE
             long profileRenderStart = FrameProfiler.Stamp();
 
             _gl.BindFramebuffer(GLEnum.Framebuffer, (uint)fb);
+
+            EnsureTextureGeometry();
 
             // DPI-aware viewport: the same pixel size Avalonia gives the framebuffer
             // (Bounds * RenderScaling, truncated), so the picture always fills it exactly.
@@ -631,15 +676,16 @@ namespace ASE
             if (prog.Mask      >= 0) _gl.Uniform1(prog.Mask,      Config.ConfigOptions.RunninConfig.Mask);
             if (prog.Noise     >= 0) _gl.Uniform1(prog.Noise,     Config.ConfigOptions.RunninConfig.Noise);
 
-            // Border crop: identity (full texture) when borders are shown, otherwise the 320x200
-            // display sub-rectangle so the picture fills the window as before.
+            // Border crop: identity (full texture) when borders are shown or in monochrome (which
+            // has none), otherwise the 320x200 display sub-rectangle so the picture fills the
+            // window as before.
             if (prog.TexMin >= 0 || prog.TexMax >= 0)
             {
-                bool showBorders = Config.ConfigOptions.RunninConfig.ShowBorders;
-                float xMin = showBorders ? 0f : (float)VideoTiming.DISPLAY_ORIGIN_X / SrcW;
-                float yMin = showBorders ? 0f : (float)VideoTiming.DISPLAY_ORIGIN_Y / SrcH;
-                float xMax = showBorders ? 1f : (float)(VideoTiming.DISPLAY_ORIGIN_X + VideoTiming.DISPLAY_TEX_WIDTH) / SrcW;
-                float yMax = showBorders ? 1f : (float)(VideoTiming.DISPLAY_ORIGIN_Y + VideoTiming.DISPLAY_TEX_HEIGHT) / SrcH;
+                bool crop = !VideoTiming.Mono && !Config.ConfigOptions.RunninConfig.ShowBorders;
+                float xMin = crop ? (float)VideoTiming.DISPLAY_ORIGIN_X / _srcW : 0f;
+                float yMin = crop ? (float)VideoTiming.DISPLAY_ORIGIN_Y / _srcH : 0f;
+                float xMax = crop ? (float)(VideoTiming.DISPLAY_ORIGIN_X + VideoTiming.DISPLAY_TEX_WIDTH) / _srcW : 1f;
+                float yMax = crop ? (float)(VideoTiming.DISPLAY_ORIGIN_Y + VideoTiming.DISPLAY_TEX_HEIGHT) / _srcH : 1f;
                 if (prog.TexMin >= 0) _gl.Uniform2(prog.TexMin, xMin, yMin);
                 if (prog.TexMax >= 0) _gl.Uniform2(prog.TexMax, xMax, yMax);
             }
@@ -653,7 +699,7 @@ namespace ASE
             {
                 fixed (void* pData = frame)
                 {
-                    _gl.TexSubImage2D(GLEnum.Texture2D, 0, 0, 0, SrcW, SrcH,
+                    _gl.TexSubImage2D(GLEnum.Texture2D, 0, 0, 0, (uint)_srcW, (uint)_srcH,
                                       GLEnum.Rgba, GLEnum.UnsignedByte, pData);
                 }
             }

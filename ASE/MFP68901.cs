@@ -115,6 +115,17 @@ namespace ASE
             irqController.ClearMFP();
         }
 
+        /// <summary>
+        /// Sets the monochrome-monitor detect level on GPIP bit 7 (0 = monochrome monitor
+        /// attached, 1 = colour). TOS reads it at boot to choose the initial resolution. This is a
+        /// static line, so it is set directly without the edge/interrupt logic of SetGPIOBit.
+        /// </summary>
+        public void SetMonochromeDetect(bool mono)
+        {
+            if (mono) GPIP &= 0x7F;
+            else GPIP |= 0x80;
+        }
+
         public bool HasActiveInterrupts()
         {
             byte activeA = (byte)(IPRA & IERA & IMRA);
