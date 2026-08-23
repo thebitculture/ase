@@ -131,7 +131,7 @@
 
   <!--
     An option card's illustration is a multi-coloured SVG, not a monochrome
-    glyph: the app-wide "* { fill: … }" tint would flatten it to a single
+    glyph: the app-wide "* { fill: xxx }" tint would flatten it to a single
     colour, so it is cleared here. This style is included after App.axaml's
     generic Svg one, which is what lets it win.
   -->
@@ -189,10 +189,11 @@
     This intentionally leaves legacy/main-window TabControls untouched.
   -->
   <Style Selector="Window.aseDialog TabItem">
-    <Setter Property="Padding" Value="14,8"/>
+    <Setter Property="Padding" Value="8,8"/>
     <Setter Property="Margin" Value="0,0,6,0"/>
-    <Setter Property="CornerRadius" Value="7"/>
+    <Setter Property="CornerRadius" Value="6"/>
     <Setter Property="Background" Value="Transparent"/>
+    <Setter Property="FontSize" Value="20" />
     <Setter Property="FontWeight" Value="Medium"/>
   </Style>
 

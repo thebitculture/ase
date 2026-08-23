@@ -36,7 +36,7 @@ ASE/native/
   osx-x64/      moira.dylib, libSDL2.dylib, libmt32emu.2.dylib
   osx-arm64/    moira.dylib, libSDL2.dylib, libmt32emu.2.dylib
   linux-x64/    moira.so, libmt32emu.so.2
-  linux-arm64/  moira.so, libmt32emu.so.2
+  linux-arm64/  moira.so, libmt32emu.so.2, libtinyfiledialogs.so
 ```
 
 `SDL2` is bundled only on Windows and macOS; on **Linux** the distribution's own SDL2 is used. `libmt32emu` (see below) is committed **already compiled** for every RID, so it never has to be built as part of ASE. The build scripts place the compiled **Moira** library straight into the matching `native/<rid>/` folder:

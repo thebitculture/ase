@@ -19,11 +19,24 @@ namespace ASE
 
         // Output configuration
         private readonly int _outputSampleRate;
-        private readonly float[] _hostBuffer;         // Temporary buffer to deliver to SDL
 
         // Registers
         private byte[] _regs = new byte[16];
+        // Register the address latch currently points at. This is a full 8-bit value, NOT a
+        // 0-15 one: the YM2149's address register has eight bits and a program is free to load
+        // any of them. Everything above 15 selects nothing, and reads and writes of the data
+        // register must then do nothing at all. Masking it to 0-15 instead (as this did) turned
+        // every such select into register 0 — the channel A period — so a replayer that parks
+        // the latch out of range between notes, or one whose register table carries an
+        // out-of-range entry as a no-op, silently rewrote the pitch of channel A.
         private int _selectedReg = 0;
+
+        // What a read of $FF8800 answers with. It is not simply _regs[_selectedReg]: writing the
+        // data register leaves the value that was written visible here UNMASKED, while selecting
+        // a register latches its stored (masked) contents. Murders In Venice depends on it —
+        // it writes $10 to register 3, whose top four bits the chip does not keep, and expects to
+        // read $10 straight back.
+        private byte _readData = 0xFF;
 
         // Internal counters
         private int _cntA, _perA;
@@ -47,6 +60,13 @@ namespace ASE
         // Oversampling / Downsampling variables
         private uint _resamplePos;
         private uint _resampleStep;
+
+        // Nominal resample step, and the audio flow control that trims it (see
+        // UpdateAudioFlowControl). _queueDepth mirrors AudioQueue's length as an O(1) counter:
+        // ConcurrentQueue.Count walks the segments, and this is read on the synthesis path.
+        private readonly uint _resampleStepBase;
+        private readonly int _queueTarget;
+        private int _queueDepth;
 
         // Leftover CPU cycles not yet converted to 250 kHz ticks. Sync can now be called with any
         // cycle count (the main loop interleaves it with the CPU in fine slices that are not
@@ -95,13 +115,34 @@ namespace ASE
             { ENV_GOUP,   ENV_DOWN, ENV_DOWN }      /* F /___ */
         };
 
-        // DC Filter
-        private float _lastSample = 0;
-        private float _lastOut = 0;
+        // DC Filter. One per output channel: the two sides no longer carry the same
+        // signal, and a shared filter state would leak each channel into the other.
+        private float _lastSampleL = 0, _lastOutL = 0;
+        private float _lastSampleR = 0, _lastOutR = 0;
 
-        // Thread-safe circular queue to pass audio to SDL
-        public System.Collections.Concurrent.ConcurrentQueue<float> AudioQueue
-            = new System.Collections.Concurrent.ConcurrentQueue<float>();
+        /// <summary>
+        /// One output frame: the two interleaved channels the sound card is fed. Queuing the
+        /// pair as a unit is what keeps the sides from ever drifting apart — a queue of loose
+        /// floats drained an odd number of times would swap left and right for the rest of the
+        /// session, and <see cref="UpdateAudioFlowControl"/> does drain it.
+        /// </summary>
+        public readonly struct StereoSample
+        {
+            public readonly float Left;
+            public readonly float Right;
+
+            public StereoSample(float left, float right)
+            {
+                Left = left;
+                Right = right;
+            }
+        }
+
+        // Thread-safe circular queue to pass audio to SDL. It counts FRAMES, not floats:
+        // so do _queueDepth and _queueTarget, and the callback expands each entry into the
+        // two interleaved floats the device expects.
+        public System.Collections.Concurrent.ConcurrentQueue<StereoSample> AudioQueue
+            = new System.Collections.Concurrent.ConcurrentQueue<StereoSample>();
 
         static YM2149()
         {
@@ -111,7 +152,6 @@ namespace ASE
         public YM2149(int sampleRate = 44100, double chipClockHz = 2000000.0)
         {
             _outputSampleRate = sampleRate;
-            _hostBuffer = new float[2048]; // Temporary buffer
 
             // Calculate resampling step.
             // We use 32-bit fixed point (16.16) for precision without floats in the critical loop
@@ -119,6 +159,13 @@ namespace ASE
             // Multiplied by 65536 for fixed point.
             long ratio = ((long)YM_FREQ_INTERNAL << 16) / _outputSampleRate;
             _resampleStep = (uint)ratio;
+            _resampleStepBase = (uint)ratio;
+
+            // How much audio to keep queued ahead of the device: ~67 ms, three SDL buffers.
+            // Deep enough that a frame the host makes us miss does not starve the callback,
+            // shallow enough that the sound stays in step with the picture — and a long way
+            // under the quarter second the old hard ceiling settled at.
+            _queueTarget = Math.Max(3 * 1024, sampleRate / 15);
 
             Reset();
         }
@@ -164,9 +211,11 @@ namespace ASE
 
             _resamplePos = 0;
             _cycleRemainder = 0;
+            _resampleStep = _resampleStepBase;
 
             // Clear queue
             while (AudioQueue.TryDequeue(out _)) { }
+            Volatile.Write(ref _queueDepth, 0);
 
             // Safe default values
             _regs[7] = 0xFF; // Mixer all off
@@ -188,6 +237,9 @@ namespace ASE
             w.I32(_envShape);
             w.I32(_envPos);
             w.I32(_cycleRemainder);
+
+            // Appended: the read-back latch (see _readData)
+            w.U8(_readData);
         }
 
         public void LoadState(Snapshot.Reader r)
@@ -204,19 +256,56 @@ namespace ASE
             _envPos = r.I32();
             _cycleRemainder = r.I32();
 
+            // Older snapshots stop here: derive the latch from the selected register instead.
+            _readData = r.Remaining > 0
+                ? r.U8()
+                : (_selectedReg < NUM_REGS ? _regs[_selectedReg] : (byte)0xFF);
+
             // The periods derive from the registers; the resampler and DC filter are
             // host state and start clean (along with the audio queue)
             UpdatePeriods();
             while (AudioQueue.TryDequeue(out _)) { }
+            Volatile.Write(ref _queueDepth, 0);
+            _resampleStep = _resampleStepBase;
         }
+
+        /// <summary>Registers the YM2149 actually implements; the address latch is wider.</summary>
+        private const int NUM_REGS = 16;
 
         public void PSGRegisterSelect(byte val)
         {
-            _selectedReg = val & 0x0F;
+            _selectedReg = val;
+            _readData = _selectedReg < NUM_REGS ? _regs[_selectedReg] : (byte)0xFF;
         }
 
         public void PSGWriteRegister(byte val)
         {
+            // Nothing is selected: the write goes nowhere (see _selectedReg).
+            if (_selectedReg >= NUM_REGS)
+                return;
+
+            // The value read back straight after a write is the one written, unmasked.
+            _readData = val;
+
+            // The chip has no storage for the unused bits of some registers, and they read back
+            // as zero: 4 bits for the coarse tone periods and the envelope shape, 5 for the
+            // noise period and the three volumes.
+            switch (_selectedReg)
+            {
+                case 1:
+                case 3:
+                case 5:
+                case 13:
+                    val &= 0x0F;
+                    break;
+                case 6:
+                case 8:
+                case 9:
+                case 10:
+                    val &= 0x1F;
+                    break;
+            }
+
             _regs[_selectedReg] = val;
 
             switch (_selectedReg)
@@ -278,7 +367,7 @@ namespace ASE
 
         public byte PSGRegisterData()
         {
-            return _regs[_selectedReg];
+            return _readData;
         }
 
         private void UpdatePeriods()
@@ -326,19 +415,20 @@ namespace ASE
                     // from 250k to 44k, aliasing is low. To improve, a 'totalSample' 
                     // accumulator can be implemented and divided at the end.
 
-                    float sample = Mix();
+                    Mix(out float sampleL, out float sampleR);
 
                     // DC Filter (High Pass) to center the wave at 0
                     // alpha = approx 0.995 for 44kHz
-                    float outSample = sample - _lastSample + 0.995f * _lastOut;
-                    _lastSample = sample;
-                    _lastOut = outSample;
+                    float outL = sampleL - _lastSampleL + 0.995f * _lastOutL;
+                    _lastSampleL = sampleL;
+                    _lastOutL = outL;
 
-                    AudioQueue.Enqueue(outSample);
+                    float outR = sampleR - _lastSampleR + 0.995f * _lastOutR;
+                    _lastSampleR = sampleR;
+                    _lastOutR = outR;
 
-                    // Protection against infinite latency
-                    if (AudioQueue.Count > _outputSampleRate / 4)
-                        AudioQueue.TryDequeue(out _);
+                    AudioQueue.Enqueue(new StereoSample(outL, outR));
+                    Interlocked.Increment(ref _queueDepth);
                 }
             }
         }
@@ -424,7 +514,53 @@ namespace ASE
             }
         }
 
-        private float Mix()
+        /// <summary>
+        /// Keeps the queue that feeds the audio device near <c>_queueTarget</c>. Called once per
+        /// emulated frame.
+        /// <para>
+        /// The emulator and the sound card run off different clocks and never agree exactly, and
+        /// the frame pacer makes it worse: when the host makes the emulator miss its deadline the
+        /// pacer catches up by running the next frames with no wait at all, and those frames
+        /// produce audio far faster than the device drains it. Without this the queue only ever
+        /// grew — and once it hit the old hard ceiling every new sample threw the oldest one away,
+        /// which is a dropout every few samples, continuous audible distortion, on top of a
+        /// quarter second of lag between picture and sound. It never recovered on its own: a
+        /// single hiccup while a game loaded left the sound wrecked for the rest of the session,
+        /// which is exactly what a disk-loading title looked like next to a floppy one.
+        /// </para>
+        /// <para>
+        /// The fix is to steer the production rate instead of throwing samples away: the resample
+        /// step is trimmed by up to ±0.5% (about eight cents — inaudible) to speed the queue up or
+        /// slow it down, so it converges on the target and stays there. A queue that has run far
+        /// past the target is cut back in one go: one discontinuity instead of thousands.
+        /// </para>
+        /// </summary>
+        public void UpdateAudioFlowControl()
+        {
+            int depth = Volatile.Read(ref _queueDepth);
+
+            // Way past the target (a long stall, or a resume after a pause): drop back in one
+            // step rather than waiting minutes for a ±0.5% trim to drain it.
+            if (depth > _queueTarget * 4)
+            {
+                while (depth > _queueTarget && AudioQueue.TryDequeue(out _))
+                    depth = Interlocked.Decrement(ref _queueDepth);
+            }
+
+            // Proportional trim: queue above target -> bigger step -> fewer samples produced.
+            double error = (depth - _queueTarget) / (double)_queueTarget;
+            double adjust = 1.0 + Math.Clamp(error * 0.02, -0.005, 0.005);
+
+            _resampleStep = (uint)(_resampleStepBase * adjust);
+        }
+
+        /// <summary>
+        /// Produces one output frame. The PSG itself is mono — a real YM2149 sums its three
+        /// channels into a single output pin — so it feeds both sides identically; the stereo
+        /// comes from the STE's DMA sound, whose two channels and LMC1992 balance are kept
+        /// apart all the way here (see <see cref="STEDmaSound.CurrentSampleLeft"/>).
+        /// </summary>
+        private void Mix(out float left, out float right)
         {
             // Register 7: Mixer (0 = Enable, 1 = Disable)
             int mixer = _regs[7];
@@ -445,14 +581,16 @@ namespace ASE
             float ymSample = (YmVolTable[volA] + YmVolTable[volB] + YmVolTable[volC]) / (65535.0f * 3.5f);
 
             // On the STE, mix in the DMA sound output (the LMC1992 mixing setting
-            // attenuates or mutes the PSG)
+            // attenuates or mutes the PSG). This is the only stereo source in the machine.
             if (Config.ConfigOptions.RunninConfig.STModel == Config.ConfigOptions.STModels.STE)
             {
                 ymSample *= STEDmaSound.YmMixGain;
-                ymSample += STEDmaSound.CurrentSample * 0.6f;
+                left = ymSample + STEDmaSound.CurrentSampleLeft * 0.6f;
+                right = ymSample + STEDmaSound.CurrentSampleRight * 0.6f;
+                return;
             }
 
-            return ymSample;
+            left = right = ymSample;
         }
 
         private int GetChannelVolume(int ch, int mixer, int toneOut, int envVol5bit)
@@ -507,41 +645,48 @@ namespace ASE
 
         public static void AudioCallback(IntPtr userdata, IntPtr stream, int len)
         {
-            int samplesNeeded = len / sizeof(float);
-            if (_marshalBuf == null || _marshalBuf.Length < samplesNeeded)
-                _marshalBuf = new float[samplesNeeded];
+            // The device is opened as interleaved stereo, so the buffer holds two floats per
+            // frame. Everything downstream of the queue counts frames; only the marshalling
+            // to SDL counts floats.
+            int floatsNeeded = len / sizeof(float);
+            int frames = floatsNeeded / 2;
+
+            if (_marshalBuf == null || _marshalBuf.Length < floatsNeeded)
+                _marshalBuf = new float[floatsNeeded];
 
             // Snapshot the instance: the audio thread can run before TurnOn() has created the
             // chip, and HardReset() replaces it mid-flight — never read ASEMain._ym twice.
             var ym = ASEMain._ym;
             if (ym == null)
             {
-                Array.Clear(_marshalBuf, 0, samplesNeeded);
-                Marshal.Copy(_marshalBuf, 0, stream, samplesNeeded);
+                Array.Clear(_marshalBuf, 0, floatsNeeded);
+                Marshal.Copy(_marshalBuf, 0, stream, floatsNeeded);
                 return;
             }
 
-            int read = 0;
-            while (read < samplesNeeded)
+            for (int i = 0; i < frames; i++)
             {
-                if (ym.AudioQueue.TryDequeue(out float s))
+                if (ym.AudioQueue.TryDequeue(out StereoSample s))
                 {
-                    _marshalBuf[read++] = s;
+                    Interlocked.Decrement(ref ym._queueDepth);
+                    _marshalBuf[2 * i] = s.Left;
+                    _marshalBuf[2 * i + 1] = s.Right;
                 }
                 else
                 {
                     // Underrun: Fill with last value (or silence)
                     // To avoid clicks, repeating the last sample is usually better than abrupt 0
-                    _marshalBuf[read++] = ym._lastOut;
+                    _marshalBuf[2 * i] = ym._lastOutL;
+                    _marshalBuf[2 * i + 1] = ym._lastOutR;
                 }
             }
 
             // Fold in the built-in MT-32's output (a no-op unless the module is active).
             // Rendering here, clocked by the audio device itself, is what keeps Munt in
             // step with the stream and frozen while the device is paused.
-            MidiManager.MixAudio(_marshalBuf, samplesNeeded);
+            MidiManager.MixAudio(_marshalBuf, frames);
 
-            Marshal.Copy(_marshalBuf, 0, stream, samplesNeeded);
+            Marshal.Copy(_marshalBuf, 0, stream, floatsNeeded);
         }
     }
 }

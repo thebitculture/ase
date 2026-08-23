@@ -1,4 +1,4 @@
-<Window xmlns="https://github.com/avaloniaui"
+﻿<Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:svg="clr-namespace:Avalonia.Svg;assembly=Svg.Controls.Avalonia"
         xmlns:local="clr-namespace:ASE"
@@ -41,7 +41,7 @@
             <TabItem>
                 <TabItem.Header>
                     <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                        <Svg Path="avares://ASE/Assets/Icons/gear.svg" Width="17" Height="17" VerticalAlignment="Center" />
+                        <Svg Path="avares://ASE/Assets/Icons/gear.svg" Width="18" Height="18" Margin="0,2,0,0" VerticalAlignment="Center" />
                         <TextBlock Text="Setup" VerticalAlignment="Center" />
                     </StackPanel>
                 </TabItem.Header>
@@ -108,7 +108,7 @@
             <TabItem>
                 <TabItem.Header>
                     <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                        <Svg Path="avares://ASE/Assets/Icons/tv.svg" Width="17" Height="17" VerticalAlignment="Center" />
+                        <Svg Path="avares://ASE/Assets/Icons/tv.svg" Width="18" Height="18" Margin="0,2,0,0" VerticalAlignment="Center" />
                         <TextBlock Text="Video" VerticalAlignment="Center" />
                     </StackPanel>
                 </TabItem.Header>
@@ -301,7 +301,7 @@
             <TabItem>
                 <TabItem.Header>
                     <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                        <Svg Path="avares://ASE/Assets/Icons/joystick.svg" Width="17" Height="17" VerticalAlignment="Center" />
+                        <Svg Path="avares://ASE/Assets/Icons/joystick.svg" Width="18" Height="18" Margin="0,2,0,0" VerticalAlignment="Center" />
                         <TextBlock Text="Input" VerticalAlignment="Center" />
                     </StackPanel>
                 </TabItem.Header>
@@ -447,11 +447,67 @@
                 
             </TabItem>
 
+            <!-- Hard disk -->
+            <TabItem>
+                <TabItem.Header>
+                    <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                        <Svg Path="avares://ASE/Assets/Icons/hdd.svg" Width="18" Height="18" Margin="0,2,0,0" VerticalAlignment="Center" />
+                        <TextBlock Text="Hard disk" VerticalAlignment="Center" />
+                    </StackPanel>
+                </TabItem.Header>
+
+                <StackPanel Margin="0,16,0,8" Spacing="12">
+                    <Border Classes="card">
+                        <StackPanel Spacing="16">
+
+                                <StackPanel Spacing="2">
+                                    <TextBlock Classes="section" Text="Hard disk emulation" />
+                                    <TextBlock Classes="description"
+                                                Text="Mount a folder of this computer as a GEMDOS drive or/and attach an ACSI hard disk image. Changes require reset." />
+                                </StackPanel>
+
+                                <StackPanel Spacing="6">
+                                    <TextBlock Classes="fieldLabel" Text="GEMDOS DRIVE  ·  HOST FOLDER" />
+                                    <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+                                        <CheckBox Name="EnableGemDos" />
+                                        <TextBox Grid.Column="1" Name="TextGEMDOSDir" />
+                                        <Button Grid.Column="2" Classes="compact" Content="Browse…" Click="OnBrowseGemdosDirClick" />
+                                    </Grid>
+                                    <TextBlock Classes="description"
+                                               Text="The folder appears as a hard drive on the GEM desktop, taking the first letter after the ACSI image's partitions." />
+                                </StackPanel>
+
+                                <Border Height="1" Background="#404040" Margin="16,8"/>
+
+                                <StackPanel Spacing="6">
+                                    <TextBlock Classes="fieldLabel" Text="ACSI HARD DISK IMAGE" />
+                                    <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+                                        <CheckBox Name="EnableACSI" />
+                                        <TextBox Grid.Column="1" Name="TextACSIDir" />
+                                        <Button Grid.Column="2" Classes="compact" Content="Browse…" Click="OnBrowseAcsiImageClick" />
+                                    </Grid>
+                                    <TextBlock Classes="description"
+                                               Text="HD image attached to the ACSI bus. Full device emulation." />
+                                </StackPanel>
+
+                                <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="10">
+                                    <CheckBox Grid.Column="0" Name="ChkBootFromHardDisk" Content="Boot from the hard disk (ACSI image only)" VerticalAlignment="Center" />
+                                    <Button Grid.Column="1" Content="Reinstall driver" Click="OnReinstallDriverClick"
+                                            ToolTip.Tip="Writes the ASE HD driver to an existing image, replacing whatever driver it has." />
+                                    <Button Grid.Column="2" Content="Create image" Click="OnCreateAcsiImageClick" />
+                                </Grid>
+
+
+                        </StackPanel>
+                        </Border>
+                </StackPanel>
+            </TabItem>
+
             <!-- DIRECTORIES -->
             <TabItem>
                 <TabItem.Header>
                     <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                        <Svg Path="avares://ASE/Assets/Icons/folder.svg" Width="17" Height="17" VerticalAlignment="Center" />
+                        <Svg Path="avares://ASE/Assets/Icons/folder.svg" Width="18" Height="18" Margin="0,2,0,0" VerticalAlignment="Center" />
                         <TextBlock Text="Directories" VerticalAlignment="Center" />
                     </StackPanel>
                 </TabItem.Header>
@@ -501,11 +557,11 @@
                     </StackPanel>
             </TabItem>
             
-                        <!-- MIDI -->
+            <!-- MIDI -->
             <TabItem>
                 <TabItem.Header>
                     <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                        <Svg Path="avares://ASE/Assets/Icons/music-note-beamed.svg" Width="17" Height="17" VerticalAlignment="Center" />
+                        <Svg Path="avares://ASE/Assets/Icons/music-note-beamed.svg" Width="18" Height="18" Margin="0,2,0,0" VerticalAlignment="Center" />
                         <TextBlock Text="MIDI" VerticalAlignment="Center" />
                     </StackPanel>
                 </TabItem.Header>

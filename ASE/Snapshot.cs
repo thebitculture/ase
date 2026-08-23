@@ -29,6 +29,10 @@
  *   "MIDI"  MIDI ACIA 6850 registers and transmit state (the host-side receive
  *           queue and whatever the port is wired to belong to the session, not
  *           to the machine). Absent in older snapshots: the chip stays reset.
+ *   "GHD "  GEMDOS hard drive hook bookkeeping: the saved RAM has $84 pointing
+ *           into the synthetic cartridge, so the chained TOS vector (and act_pd)
+ *           must travel too. Host-side file handles and directory scans do NOT
+ *           survive a restore — like unplugging and replugging the drive.
  *
  * Not included: the floppy image contents themselves (only their paths) and
  * Moira-internal state not exposed by the wrapper (e.g. a pending STOP).
@@ -163,6 +167,7 @@ namespace ASE
             WriteSection(fs, "DMAS", STEDmaSound.SaveState);
             WriteSection(fs, "BLIT", Blitter.SaveState);
             WriteSection(fs, "MIDI", MidiAcia.SaveState);
+            WriteSection(fs, "GHD ", GemdosHD.SaveState);
         }
 
         static void WriteSection(Stream fs, string id, Action<Writer> body)
@@ -329,6 +334,7 @@ namespace ASE
             if (snap.Sections.TryGetValue("DMAS", out var dmas)) STEDmaSound.LoadState(new Reader(dmas));
             if (snap.Sections.TryGetValue("BLIT", out var blit)) Blitter.LoadState(new Reader(blit));
             if (snap.Sections.TryGetValue("MIDI", out var midi)) MidiAcia.LoadState(new Reader(midi));
+            if (snap.Sections.TryGetValue("GHD ", out var ghd)) GemdosHD.LoadState(new Reader(ghd));
 
             // The GLUE sync/resolution latches mirror the restored port bytes
             VideoTiming.RestoreFromPorts();

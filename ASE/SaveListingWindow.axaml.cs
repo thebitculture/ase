@@ -141,7 +141,11 @@ public partial class SaveListingWindow : Window
     string BuildListing()
     {
         // 1) Collect the instructions to emit (either around the PC or over a From/To segment).
-        List<Instr> instrs = rbWrapPc.IsChecked == true ? CollectWrapPc() : CollectSegment();
+        //    Disassembling reads through the normal bus (Moira's read16Dasm does), so a listing
+        //    covering undecoded space would schedule a bus error on a machine that is merely
+        //    parked — these reads belong to the tool, not to the emulated CPU.
+        List<Instr> instrs = ASEMain._mem.ReadWithoutBusErrors(
+            () => rbWrapPc.IsChecked == true ? CollectWrapPc() : CollectSegment());
         if (instrs == null)
             return null;
 

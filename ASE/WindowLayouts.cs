@@ -145,7 +145,11 @@ namespace ASE
                     }
                 }
 
-                layout.Maximized = window.WindowState == WindowState.Maximized;
+                // A window closed in full screen says nothing about whether it was maximized
+                // before, so its recorded flag is left as it was — full screen is remembered in
+                // the configuration (Config.FullScreen), not here.
+                if (window.WindowState != WindowState.FullScreen)
+                    layout.Maximized = window.WindowState == WindowState.Maximized;
             }
             catch (Exception ex)
             {

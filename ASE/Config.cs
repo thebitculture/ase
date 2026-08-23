@@ -102,6 +102,24 @@ namespace ASE
 
             public int SampleRate { get; set; } = 44100;
 
+            // Hard disk emulation. Both can be enabled at the same time: the ACSI image is a
+            // real bus device (bootable, driver lives inside the image), while the GEMDOS drive
+            // mounts a host folder at file-system level and takes the next free drive letter
+            // after the image's partitions. Changes apply on the next power-on (reset).
+            public bool GemdosDriveEnabled { get; set; } = false;
+            public string GemdosDrivePath { get; set; } = "";
+            public bool AcsiImageEnabled { get; set; } = false;
+            public string AcsiImagePath { get; set; } = "";
+
+            /// <summary>
+            /// Whether the machine may boot from the ACSI hard disk image. When off, the boot
+            /// sector's $1234 checksum is invalidated in the data handed to the DMA (the image
+            /// itself is untouched), so TOS skips the DMA boot but the disk stays fully usable
+            /// by a driver loaded from floppy. Only the ACSI image is bootable; the GEMDOS
+            /// drive is not.
+            /// </summary>
+            public bool BootFromHardDisk { get; set; } = true;
+
             // Granularity (in CPU cycles) at which the CPU is interleaved with the MFP timers and
             // the interrupt controller. Lower values deliver timer interrupts (e.g. the 200 Hz
             // Timer C) and update the timer data registers more promptly, at a slight throughput
@@ -117,6 +135,11 @@ namespace ASE
             // GPIP bit 7 at boot, which then selects high resolution (640x400, 1 plane, ~71 Hz).
             // Changing it requires a machine reset (the whole video geometry differs).
             public bool MonochromeMonitor { get; set; } = false;
+
+            // Full screen (Alt+Enter, or Emulation > Toggle full screen). Remembered here rather
+            // than in windows.json: that file holds the geometry of a normal window, and a full
+            // screen one has none — see MainWindow.SetFullScreen.
+            public bool FullScreen { get; set; } = false;
 
             public bool CheckForUpdates { get; set; } = true;   // query GitHub for a newer release at startup
 
@@ -360,6 +383,24 @@ namespace ASE
                         if (parts.Length > 1)
                             ConfigOptions.RunninConfig.FloppyImagePath = parts[1];
                         break;
+                    case "--acsi":
+                        if (parts.Length > 1)
+                        {
+                            ConfigOptions.RunninConfig.AcsiImagePath = parts[1];
+                            ConfigOptions.RunninConfig.AcsiImageEnabled = true;
+                        }
+                        break;
+                    case "--gemdos-dir":
+                        if (parts.Length > 1)
+                        {
+                            ConfigOptions.RunninConfig.GemdosDrivePath = parts[1];
+                            ConfigOptions.RunninConfig.GemdosDriveEnabled = true;
+                        }
+                        break;
+                    case "--boot-hd":
+                        ConfigOptions.RunninConfig.BootFromHardDisk =
+                            parts.Length < 2 || !bool.TryParse(parts[1], out bool _bhd) || _bhd;
+                        break;
                     case "--mouse-sensitivity":
                         if (parts.Length > 1 && Regex.IsMatch(parts[1], @"^\d+"))
                         {
@@ -411,6 +452,10 @@ namespace ASE
                     case "--no-effects":
                         ConfigOptions.RunninConfig.DisableCrtEffects =
                             parts.Length < 2 || !bool.TryParse(parts[1], out bool _nfx) || _nfx;
+                        break;
+                    case "--fullscreen":
+                        ConfigOptions.RunninConfig.FullScreen =
+                            parts.Length < 2 || !bool.TryParse(parts[1], out bool _fs) || _fs;
                         break;
                     case "--mono":
                     case "--monochrome":
@@ -513,12 +558,16 @@ namespace ASE
 
             HelpSection("Media and directories");
             HelpOption("--floppy", "=<path>", "Start with a disk image (.st/.msa/.stx/.zip) in drive A");
+            HelpOption("--acsi", "=<path>", "Attach an ACSI hard disk image (raw, 512-byte sectors)");
+            HelpOption("--gemdos-dir", "=<path>", "Mount a host folder as a GEMDOS hard drive");
+            HelpOption("--boot-hd", "[=true|false]", "Allow booting from the ACSI hard disk image");
             HelpOption("--snapshot", "=<path>", "Restore a machine snapshot (.snap) on startup");
             HelpOption("--library-dir", "=<path>", "Folder of the game library (images + Library.json)");
             HelpOption("--snapshots-dir", "=<path>", "Where F11 saves machine snapshots");
             HelpOption("--screenshots-dir", "=<path>", "Where Shift+F11 saves PNG screenshots");
 
             HelpSection("Display and input");
+            HelpOption("--fullscreen", "[=true|false]", "Start in full screen (Alt+Enter toggles it)");
             HelpOption("--monochrome", "[=true|false]", "Monochrome (SM124) monitor: 640x400 high resolution");
             HelpOption("--no-effects", "[=true|false]", "Bypass the CRT shader: faster on weak GPUs");
             HelpOption("--mouse-sensitivity", "=N", $"Mouse movement divisor: higher is slower (default: {def.MouseSensitivity})");

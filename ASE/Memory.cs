@@ -40,9 +40,11 @@ namespace ASE
             public const uint ST_PALLETE = 0xFF8240;       // Palette
             public const uint ST_RES = 0xFF8260;           // Screen resolution
             public const uint ST_HSCROLL = 0xFF8265;       // Horizontal fine scroll (STE only)
+            public const uint ST_HSCROLL_NP = 0xFF8264;    // Same latch, no prefetch cycle (STE only)
 
             public const uint ST_PSGREADSELECT = 0xFF8800; // PSG/YM Read data/Register select
             public const uint ST_PSGWRITEDATA = 0xFF8802;  // PSG/YM Write data
+            public const uint ST_PSGEND = 0xFF88FF;        // last shadow of the PSG block
 
             public const uint ST_ACIACMD = 0xFFFC00;       // Keyboard ACIA control
             public const uint ST_ACIADATA = 0xFFFC02;      // Keyboard ACIA data
@@ -55,6 +57,13 @@ namespace ASE
         public uint TosBase = 0xFC0000;
         public const uint PortsBase = 0xFF8000;
 
+        // Cartridge port ($FA0000-$FBFFFF). Reads are served from GemdosHD.CartRom (the
+        // synthetic cartridge that hooks GEMDOS for the host-folder hard drive); with no
+        // cartridge the region floats at 0xFF like an empty port — no bus error, matching
+        // the real machine. Writes are ignored (it is ROM).
+        public const uint CartBase = 0xFA0000;
+        public const uint CartEnd = 0xFC0000;   // exclusive
+
         // The GLUE decodes the whole 0x000000-0x3FFFFF region as RAM. Addresses inside this
         // region but beyond the configured MMU banks read as 0 (void), they never bus error.
         const uint RamRegionEnd = 0x400000;
@@ -65,6 +74,124 @@ namespace ASE
         // decryptor; returning data instead of faulting breaks them. Writes are ignored, as
         // for other void I/O.
         const uint UnmappedIoTop = 0xFFFF00;
+
+        /// <summary>
+        /// Everything between the RAM region and the I/O area that is not ROM or the cartridge
+        /// port decodes to nothing on an ST/STE, and the bus times out: $400000-$DFFFFF, the
+        /// half of $E00000-$FEFFFF the TOS image does not occupy, $F00000-$F9FFFF and
+        /// $FF0000-$FF7FFF. Answering a bus error there rather than 0xFF is what lets software
+        /// *probe* for hardware, which is how drivers and protections detect what is fitted:
+        /// they install a bus-error handler, touch the address and take the fault as "absent".
+        /// The ICD Pro hard disk driver hangs forever without this — it polls the Falcon IDE
+        /// status at $FFF00039 waiting for BSY to clear, and 0xFF has BSY permanently set.
+        /// </summary>
+        bool IsUndecoded(uint addr) =>
+            addr >= RamRegionEnd && addr < PortsBase &&
+            !(addr >= TosBase && addr < RomWindowEnd) &&
+            !(addr >= CartBase && addr < CartEnd);
+
+        /// <summary>
+        /// Whether an address in the I/O area ($FF8000-$FFFEFF) is answered by a chip this
+        /// machine actually has. Everything else reads as a bus error, exactly as on a real ST:
+        /// the address decoder only answers for the chips that are fitted, and software uses
+        /// that to ask what machine it is running on.
+        /// <para>
+        /// This is what tells an STE apart from a Mega STE. EmuTOS probes $FF8E09 (the VME/SCU
+        /// bus controller) with a bus-error handler installed and, finding it, sets the _MCH
+        /// cookie to $00010010 — Mega STE — and then talks to an SCU and an SCC that are not
+        /// there. It probes the same way for the Mega ST clock at $FFFC21, the SCC at
+        /// $FF8C84, the HD floppy density register at $FF860F and the Falcon sound registers
+        /// at $FF8943. Serving those from the Ports array (which is what an unknown I/O
+        /// address used to do) answers every one of those questions with "yes".
+        /// </para>
+        /// <para>
+        /// The granularity is the chip block, not the individual register: inside a block that
+        /// exists, an unimplemented register keeps reading from the Ports array as before.
+        /// That is deliberately looser than the real decoder (which faults on the gaps too),
+        /// and it is where a machine-detection problem would be fixed by narrowing a range.
+        /// </para>
+        /// </summary>
+        static bool IsDecodedIo(uint addr)
+        {
+            // Memory controller / MMU configuration
+            if (addr <= 0xFF8001) return true;
+
+            // Shifter: video base and counter, sync mode
+            if (addr >= 0xFF8200 && addr <= 0xFF820B) return true;
+
+            // STE only: video base low byte ($FF820D) and line width ($FF820F). A plain ST has
+            // neither, and EmuTOS reads $FF820D to decide whether this is an STE at all.
+            if (addr >= 0xFF820C && addr <= 0xFF820F) return IsSTE;
+
+            if (addr >= 0xFF8240 && addr <= 0xFF825F) return true;   // palette
+            if (addr >= 0xFF8260 && addr <= 0xFF8261) return true;   // resolution
+
+            // STE only: horizontal fine scroll
+            if (addr >= 0xFF8264 && addr <= 0xFF8265) return IsSTE;
+
+            // FDC / DMA. Note it stops at $FF860D: $FF860E-$FF860F is the high-density floppy
+            // register of the Mega STE and TT, and answering it claims to be one of those.
+            if (addr >= 0xFF8604 && addr <= 0xFF860D) return true;
+
+            // PSG. The ST decodes it across the whole page (A8-A15 are not decoded), which is
+            // why software reaches it at $FF8800 and at mirrors like $FF8880.
+            if (addr >= 0xFF8800 && addr <= 0xFF88FF) return true;
+
+            // STE DMA sound and joypads, and the blitter: the model check for these belongs to
+            // their own handlers, which report it, so the block is "known" here in every model.
+            if (addr >= 0xFF8900 && addr <= 0xFF8925) return true;
+            if (addr >= 0xFF8A00 && addr <= 0xFF8A3D) return true;
+            if (addr >= 0xFF9200 && addr <= 0xFF9223) return true;
+
+            if (addr >= 0xFFFA00 && addr <= 0xFFFA2F) return true;   // MFP 68901
+            if (addr >= 0xFFFC00 && addr <= 0xFFFC07) return true;   // ACIAs: keyboard, MIDI
+
+            // Everything else is a chip this machine does not carry: the SCU/VME controller
+            // ($FF8E00-$FF8E0F) and the cache/speed register ($FF8E21) of a Mega STE, its SCC
+            // ($FF8C80-$FF8C87), the Mega ST/STE real-time clock ($FFFC20-$FFFC3F, which ASE
+            // does not emulate in any model), TT and Falcon registers, and the gaps between
+            // blocks.
+            return false;
+        }
+
+        /// <summary>
+        /// End of the address window the machine decodes for system ROM (exclusive). A 256KB
+        /// TOS sits in a 1MB window at $E00000, so the part beyond the image is decoded but
+        /// empty — it reads as open bus (0xFF) instead of faulting, like the real ROM socket
+        /// with its top address lines unconnected. A 192KB TOS fills its window exactly.
+        /// </summary>
+        uint RomWindowEnd => TosBase == 0xE00000 ? 0xF00000 : TosBase + (uint)TosSize;
+
+        /// <summary>
+        /// Set while a tool walks memory instead of the CPU running: the debugger's listing and
+        /// the listing exporter disassemble through Moira, whose <c>read16Dasm</c> goes through
+        /// the normal bus callbacks. Those reads are not bus cycles of the emulated machine, so
+        /// they must not schedule a bus error — it would be taken by the CPU the moment the
+        /// machine resumes, crashing a program that never did anything wrong. Use
+        /// <see cref="ReadWithoutBusErrors"/> rather than setting it by hand.
+        /// </summary>
+        bool _suppressBusErrors;
+
+        /// <summary>
+        /// Runs <paramref name="body"/> with bus errors suppressed (see
+        /// <see cref="_suppressBusErrors"/>). For debugger/tool code only: the emulated machine
+        /// must always see real faults.
+        /// </summary>
+        public T ReadWithoutBusErrors<T>(Func<T> body)
+        {
+            bool previous = _suppressBusErrors;
+            _suppressBusErrors = true;
+            try { return body(); }
+            finally { _suppressBusErrors = previous; }
+        }
+
+        /// <summary>Signals a bus error to the CPU, unless a tool is reading (see
+        /// <see cref="_suppressBusErrors"/>).</summary>
+        void BusError(uint addr, bool isWrite)
+        {
+            if (!_suppressBusErrors)
+                CPU._moira.TriggerBusError(addr, isWrite);
+        }
 
         const uint BANK_128K = 128 * 1024;
         const uint BANK_512K = 512 * 1024;
@@ -380,6 +507,9 @@ namespace ASE
             if (addr >= TosBase && addr < TosBase + TosSize)
                 return ROM[(int)(addr - TosBase)];
 
+            if (addr >= CartBase && addr < CartEnd)
+                return CartRead8(addr);
+
             if (addr >= PortsBase)
                 return Ports[(int)(addr - PortsBase)];
 
@@ -448,13 +578,39 @@ namespace ASE
             if (addr >= TosBase && addr < TosBase + TosSize)
                 return ROM[(int)(addr - TosBase)];
 
+            // Cartridge port
+            if (addr >= CartBase && addr < CartEnd)
+                return CartRead8(addr);
+
+            // Nothing decodes here (see IsUndecoded): the bus times out
+            if (IsUndecoded(addr))
+            {
+                BusError(addr, false);
+                return 0xFF;
+            }
+
             // I/O
             if (addr >= PortsBase)
             {
                 // Unmapped top page: no device decoded here -> bus error.
                 if (addr >= UnmappedIoTop)
                 {
-                    CPU._moira.TriggerBusError(addr, false);
+                    BusError(addr, false);
+                    return 0xFF;
+                }
+
+                // No chip answers here on this machine (see IsDecodedIo): the bus times out,
+                // which is how software finds out which Atari it is running on.
+                if (!IsDecodedIo(addr))
+                {
+                    // At Information and above, because this is the first thing to look at when
+                    // a program that used to run starts failing: it names the register it asked
+                    // for and who asked. A probe is a handful of these at boot; a flood means a
+                    // block is missing from IsDecodedIo.
+                    if (ConfigOptions.RunninConfig.DebugMode >= ConfigOptions.DebugModes.Information)
+                        ColoredConsole.WriteLine($"I/O read of undecoded [[yellow]]${addr:X6}[[/yellow]] from PC=[[cyan]]${CPU._moira.PC0:X6}[[/cyan]] -> bus error");
+
+                    BusError(addr, false);
                     return 0xFF;
                 }
 
@@ -468,7 +624,7 @@ namespace ASE
                     if (ConfigOptions.RunninConfig.DebugMode >= ConfigOptions.DebugModes.Quiet)
                         ColoredConsole.WriteLine("Trying to read STe DMA sound registers on a non STE machine.. bus error!");
 
-                    CPU._moira.TriggerBusError(addr, false);
+                    BusError(addr, false);
                     return 0xFF;
                 }
 
@@ -478,15 +634,16 @@ namespace ASE
                     if (IsSTE)
                         return 0xFF;    // nothing connected/pressed (inverted logic)
 
-                    CPU._moira.TriggerBusError(addr, false);
+                    BusError(addr, false);
                     return 0xFF;
                 }
 
-                // YM2149
-                if (addr == STPortAdress.ST_PSGREADSELECT)
-                    return ASEMain._ym.PSGRegisterData();
-                if (addr == STPortAdress.ST_PSGWRITEDATA)
-                    return 0xFF;
+                // YM2149. See the write path below for why the whole block is decoded and not
+                // just $FF8800/$FF8802: only A1 picks between the two halves of the chip, so
+                // every fourth address up to $FF88FF is another shadow of the same pair. Only
+                // the select half answers a read; the data half and both odd shadows float high.
+                if (addr >= STPortAdress.ST_PSGREADSELECT && addr <= STPortAdress.ST_PSGEND)
+                    return (addr & 3) == 0 ? ASEMain._ym.PSGRegisterData() : (byte)0xFF;
 
                 // FDC
                 // Disk commands are forwarded to WD1772.cs, which handles them
@@ -503,7 +660,7 @@ namespace ASE
                          return Blitter.ReadByte(addr);
                      }
 
-                     CPU._moira.TriggerBusError(addr, false);
+                     BusError(addr, false);
                      return 0xFF;
                  }
 
@@ -598,13 +755,31 @@ namespace ASE
             if (addr >= TosBase && addr + 1 < TosBase + TosSize)
                 return BigEndian.Read16(addr);
 
+            // Cartridge port
+            if (addr >= CartBase && addr + 1 < CartEnd)
+                return (ushort)((CartRead8(addr) << 8) | CartRead8(addr + 1));
+
+            // Nothing decodes here (see IsUndecoded): the bus times out
+            if (IsUndecoded(addr))
+            {
+                BusError(addr, false);
+                return 0xFFFF;
+            }
+
             // I/O
             if (addr >= PortsBase)
             {
                 // Unmapped top page: no device decoded here -> bus error.
                 if (addr >= UnmappedIoTop)
                 {
-                    CPU._moira.TriggerBusError(addr, false);
+                    BusError(addr, false);
+                    return 0xFFFF;
+                }
+
+                // Nothing decoded here on this machine (see IsDecodedIo)
+                if (!IsDecodedIo(addr))
+                {
+                    BusError(addr, false);
                     return 0xFFFF;
                 }
 
@@ -620,7 +795,7 @@ namespace ASE
                         return Blitter.ReadWord(addr);
                     }
 
-                    CPU._moira.TriggerBusError(addr, false);
+                    BusError(addr, false);
                     return 0xFFFF;
                 }
 
@@ -653,13 +828,33 @@ namespace ASE
             if (addr >= TosBase && addr + 3 < TosBase + TosSize)
                 return BigEndian.Read32(addr);
 
+            // Cartridge port
+            if (addr >= CartBase && addr + 3 < CartEnd)
+                return ((uint)CartRead8(addr) << 24) | ((uint)CartRead8(addr + 1) << 16) |
+                       ((uint)CartRead8(addr + 2) << 8) | CartRead8(addr + 3);
+
+            // Nothing decodes here (see IsUndecoded): the bus times out
+            if (IsUndecoded(addr))
+            {
+                BusError(addr, false);
+                return 0xFFFFFFFF;
+            }
+
             // I/O
             if (addr >= PortsBase)
             {
                 // Unmapped top page: no device decoded here -> bus error.
                 if (addr >= UnmappedIoTop)
                 {
-                    CPU._moira.TriggerBusError(addr, false);
+                    BusError(addr, false);
+                    return 0xFFFFFFFF;
+                }
+
+                // Nothing decoded here on this machine (see IsDecodedIo). Both halves are
+                // checked: a long read straddling the end of a block faults on a real bus too.
+                if (!IsDecodedIo(addr) || !IsDecodedIo(addr + 2))
+                {
+                    BusError(addr, false);
                     return 0xFFFFFFFF;
                 }
 
@@ -667,6 +862,118 @@ namespace ASE
             }
 
             return 0xFFFFFFFF;
+        }
+
+        /// <summary>One byte off the cartridge port: the synthetic GEMDOS cartridge when it is
+        /// installed, a floating 0xFF otherwise.</summary>
+        static byte CartRead8(uint addr)
+        {
+            byte[] cart = GemdosHD.CartRom;
+            uint offset = addr - CartBase;
+            return cart != null && offset < (uint)cart.Length ? cart[offset] : (byte)0xFF;
+        }
+
+        /// <summary>
+        /// Reads one big-endian word the way the SHIFTER does: straight off the memory bus, with
+        /// no side effects whatsoever.
+        ///
+        /// This must NOT go through Read8. The shifter is a DMA device: it fetches whatever the
+        /// video counter points at and never raises a CPU exception — an address that decodes to
+        /// nothing simply clocks out floating-bus garbage. Read8, on the other hand, calls
+        /// BusError() for undecoded space, which schedules a bus error on the CPU. The renderer
+        /// runs outside the CPU's execution context, so doing that from here plants hundreds of
+        /// spurious faults per scanline; the emulated machine then takes them all on resume,
+        /// piles exception on exception, and Moira ends up throwing DoubleFault across the
+        /// P/Invoke boundary, which surfaces as "Not controlled exception in Moira: SEHException".
+        /// Reaching it only needs the video counter to point somewhere unpopulated for one frame
+        /// — which is exactly what happens between the three byte writes of $FF8209/07/05.
+        /// </summary>
+        public ushort ReadVideoWord(uint addr)
+        {
+            addr &= 0xFFFFFEu;
+
+            if (addr < RamRegionEnd)
+            {
+                if (mmuIdentity)
+                    return addr + 1 < (uint)RamSize
+                         ? (ushort)((RAM[(int)addr] << 8) | RAM[(int)addr + 1])
+                         : (ushort)0;
+
+                if (addr + 1 < logicalRamEnd)
+                {
+                    long p0 = Translate(addr), p1 = Translate(addr + 1);
+                    int hi = p0 >= 0 ? RAM[(int)p0] : 0;
+                    int lo = p1 >= 0 ? RAM[(int)p1] : 0;
+                    return (ushort)((hi << 8) | lo);
+                }
+
+                return 0;   // void region
+            }
+
+            if (addr >= TosBase && addr + 1 < TosBase + TosSize)
+            {
+                int off = (int)(addr - TosBase);
+                return (ushort)((ROM[off] << 8) | ROM[off + 1]);
+            }
+
+            return 0;       // nothing driving the bus
+        }
+
+        /// <summary>True when the whole range lies inside the MMU-configured RAM. The GEMDOS
+        /// hard drive validates guest buffers with this before bulk transfers.</summary>
+        public bool IsRamArea(uint addr, uint size)
+        {
+            addr &= 0xFFFFFFu;
+            return (ulong)addr + size <= logicalRamEnd;
+        }
+
+        /// <summary>
+        /// Bulk copy into emulated RAM. With the MMU mapping the identity (the usual case) it
+        /// is a single Array.Copy; otherwise it falls back to per-byte writes through the MMU
+        /// translation. Non-RAM targets are ignored byte-wise, like any other RAM write.
+        /// </summary>
+        public void WriteBytes(uint addr, byte[] data, int offset, int count)
+        {
+            addr &= 0xFFFFFFu;
+
+            if (mmuIdentity && (ulong)addr + (uint)count <= (uint)RamSize)
+            {
+                Array.Copy(data, offset, RAM, (int)addr, count);
+                return;
+            }
+
+            for (int i = 0; i < count; i++)
+                Write8(addr + (uint)i, data[offset + i]);
+        }
+
+        /// <summary>Bulk copy out of emulated memory (same fast path as <see cref="WriteBytes"/>).</summary>
+        public void ReadBytes(uint addr, byte[] data, int offset, int count)
+        {
+            addr &= 0xFFFFFFu;
+
+            if (mmuIdentity && addr >= 0x08 && (ulong)addr + (uint)count <= (uint)RamSize)
+            {
+                Array.Copy(RAM, (int)addr, data, offset, count);
+                return;
+            }
+
+            for (int i = 0; i < count; i++)
+                data[offset + i] = Read8(addr + (uint)i);
+        }
+
+        /// <summary>Bulk fill of emulated RAM (BSS/heap clearing when loading programs).</summary>
+        public void FillBytes(uint addr, byte value, int count)
+        {
+            addr &= 0xFFFFFFu;
+
+            if (mmuIdentity && (ulong)addr + (uint)count <= (uint)RamSize)
+            {
+                Array.Fill(RAM, value, (int)addr, count);
+                return;
+            }
+
+            for (int i = 0; i < count; i++)
+                Write8(addr + (uint)i, value);
         }
 
         /// <summary>
@@ -710,8 +1017,41 @@ namespace ASE
                 return;
             }
 
+            // Cartridge port: decoded, but it is ROM — the write is simply dropped
+            if (addr >= CartBase && addr < CartEnd)
+                return;
+
+            // Nothing decodes here (see IsUndecoded): the bus times out. Probing code writes
+            // before it reads (the ICD driver pulses the IDE reset line), so the write has to
+            // fault too or the probe never learns the device is missing.
+            if (IsUndecoded(addr))
+            {
+                BusError(addr, true);
+                return;
+            }
+
             if (addr >= PortsBase)
             {
+                // No chip decodes this address on this machine (see IsDecodedIo): the bus times
+                // out on a write exactly as it does on a read. This has to fault, not drop
+                // silently: TOS' own Mega ST/STE real-time clock probe (e.g. $FC1F84 in TOS
+                // 1.04) *writes* a byte to the chip first and only trusts a follow-up read if
+                // that write didn't fault — it uninstalls its temporary bus-error handler right
+                // after the write, before the read. Dropping the write silently made that probe
+                // believe the clock chip answered, so it moved on to the read with the real
+                // (permanent, not-yet-initialised) bus-error vector in place; the fault that
+                // arrived one instruction later on the read hit that vector instead of the
+                // probe's own, and TOS' boot showed its bus-error bomb screen and hung — on
+                // every model, since every real TOS runs this same detection at cold boot.
+                if (!IsDecodedIo(addr))
+                {
+                    if (ConfigOptions.RunninConfig.DebugMode >= ConfigOptions.DebugModes.Information)
+                        ColoredConsole.WriteLine($"I/O write of undecoded [[yellow]]${addr:X6}[[/yellow]] from PC=[[cyan]]${CPU._moira.PC0:X6}[[/cyan]] -> bus error");
+
+                    BusError(addr, true);
+                    return;
+                }
+
                 // MMU banks configuration
                 if (addr == STPortAdress.ST_MMU)
                 {
@@ -720,15 +1060,35 @@ namespace ASE
                     return;
                 }
 
-                // Chip de sonido YM2149
-                if (addr == STPortAdress.ST_PSGREADSELECT)
+                // Chip de sonido YM2149.
+                //
+                // The PSG decodes exactly two address lines inside its block: A1 chooses the
+                // register-select half ($FF8800) from the data half ($FF8802), and A0 selects a
+                // "shadow" of whichever half A1 picked. Nothing above A1 is decoded, so the pair
+                // repeats every four bytes all the way to $FF88FF, and the shadows are as real
+                // as the base addresses. Recognising only the two exact addresses left the rest
+                // of the block falling through to the generic port latch, where the write did
+                // nothing at all.
+                //
+                // That is not a curiosity: it is how the fast replayers program the chip. A
+                // MOVEM.L of four registers to $FFFF8800 is eight consecutive word writes
+                // ($FF8800, $FF8802, $FF8804 ... $FF880E), which the shadows turn into four
+                // select/data pairs — four PSG registers set by one instruction. Wings of Death
+                // and Toki (Jochen Hippel's replayer) drive their music entirely through
+                // "movem.l d0-d3,$FFFF8800.w": with only the first pair decoded, one register
+                // out of four reached the chip, every volume stayed at zero and the games ran in
+                // complete silence. MOVEP over the odd shadows is the other common idiom.
+                //
+                // Semantics from Hatari's psg.c, which documents the same decoding and the same
+                // instruction sequences measured on real hardware.
+                if (addr >= STPortAdress.ST_PSGREADSELECT && addr <= STPortAdress.ST_PSGEND)
                 {
-                    ASEMain._ym.PSGRegisterSelect(v);
-                    return;
-                }
-                if (addr == STPortAdress.ST_PSGWRITEDATA)
-                {
-                    ASEMain._ym.PSGWriteRegister(v);
+                    // A byte access reaches either half, odd shadows included — a MOVEP is a
+                    // series of byte accesses, which is what makes it work over $FF8801/$FF8803.
+                    if ((addr & 2) == 0)
+                        ASEMain._ym.PSGRegisterSelect(v);
+                    else
+                        ASEMain._ym.PSGWriteRegister(v);
                     return;
                 }
 
@@ -763,6 +1123,43 @@ namespace ASE
                 if (addr == STPortAdress.ST_RES)
                 {
                     VideoTiming.OnResWrite(v, (int)(CPU._moira.Clock - VideoTiming.LineStartClock));
+                    Ports[addr - PortsBase] = v;
+                    return;
+                }
+
+                // STE horizontal fine scroll. $FF8264 and $FF8265 are the same 4-bit latch; only
+                // $FF8265 adds the shifter's prefetch cycle. Both slots are kept in sync so a read
+                // back (and a snapshot restore, through VideoTiming.RestoreFromPorts) sees it.
+                if (addr == STPortAdress.ST_HSCROLL || addr == STPortAdress.ST_HSCROLL_NP)
+                {
+                    if (IsSTE)
+                        VideoTiming.OnHScrollWrite(v, addr == STPortAdress.ST_HSCROLL);
+                    v &= 0x0F;                       // 4-bit latch: that is all it reads back as
+                    Ports[STPortAdress.ST_HSCROLL - PortsBase] = v;
+                    Ports[STPortAdress.ST_HSCROLL_NP - PortsBase] = v;
+                    return;
+                }
+
+                // STE line width: latched by VideoTiming, because a write landing in the right
+                // border only takes effect on the next line (the shifter consumes it when the
+                // display turns off).
+                if (addr == STPortAdress.ST_LINEWIDTH)
+                {
+                    if (IsSTE)
+                        VideoTiming.OnLineWidthWrite(v);
+                    Ports[addr - PortsBase] = v;
+                    return;
+                }
+
+                // Video address counter ($FF8205/07/09). Writable, unlike the video BASE registers
+                // the GLUE only reloads at the top of the frame: this moves the shifter's counter
+                // right now, which is how a smooth vertical scroll keeps feeding it mid-screen.
+                if (addr == STPortAdress.ST_HIVADRPOINT || addr == STPortAdress.ST_MIVADRPOINT ||
+                    addr == STPortAdress.ST_LOVADRPOINT)
+                {
+                    int shift = addr == STPortAdress.ST_HIVADRPOINT ? 16
+                              : addr == STPortAdress.ST_MIVADRPOINT ? 8 : 0;
+                    VideoTiming.OnVideoCounterWrite(shift, v);
                     Ports[addr - PortsBase] = v;
                     return;
                 }
@@ -827,7 +1224,7 @@ namespace ASE
                         return;
                     }
 
-                    CPU._moira.TriggerBusError(addr, true);
+                    BusError(addr, true);
                     return;
                 }
 
@@ -992,8 +1389,24 @@ namespace ASE
                 return;
             }
 
+            // Cartridge port: decoded ROM, write dropped
+            if (addr >= CartBase && addr + 1 < CartEnd)
+                return;
+
+            // Nothing decodes here (see IsUndecoded): the bus times out
+            if (IsUndecoded(addr))
+            {
+                BusError(addr, true);
+                return;
+            }
+
             if (addr >= PortsBase)
             {
+                // No IsDecodedIo check here on purpose: every other write below ends up in
+                // BigEndian.Write16, which is two Write8 calls, and that is where undecoded
+                // addresses are dropped — byte by byte, so a word straddling the end of a
+                // block still writes the half that does exist.
+
                 // FDC
                 if (addr >= 0xFF8604 && addr <= 0xFF860D)
                 {
@@ -1009,6 +1422,22 @@ namespace ASE
                         Blitter.WriteWord(addr, v);
                         return;
                     }
+                }
+
+                // YM2149: a word access is NOT two byte accesses here (see Write8 for the
+                // decoding). The chip hangs off the high half of the data bus, so only the high
+                // byte reaches it, and the odd address the low byte would land on is the shadow
+                // of the very half being written — the real chip cannot take both from one
+                // instruction, so that half of the word is dropped rather than written twice.
+                // Letting this fall through to BigEndian.Write16 would turn every
+                // "move.w #$0700,$FFFF8800" into "select register 7, then select register 0".
+                if (addr >= STPortAdress.ST_PSGREADSELECT && addr <= STPortAdress.ST_PSGEND)
+                {
+                    if ((addr & 2) == 0)
+                        ASEMain._ym.PSGRegisterSelect((byte)(v >> 8));
+                    else
+                        ASEMain._ym.PSGWriteRegister((byte)(v >> 8));
+                    return;
                 }
 
                 BigEndian.Write16(addr, v);
@@ -1039,8 +1468,21 @@ namespace ASE
                 return;
             }
 
+            // Cartridge port: decoded ROM, write dropped
+            if (addr >= CartBase && addr + 3 < CartEnd)
+                return;
+
+            // Nothing decodes here (see IsUndecoded): the bus times out
+            if (IsUndecoded(addr))
+            {
+                BusError(addr, true);
+                return;
+            }
+
             if (addr >= PortsBase)
             {
+                // Undecoded addresses are dropped one byte at a time inside Write8, which
+                // BigEndian.Write32 goes through (see Write16).
                 BigEndian.Write32(addr, v);
                 return;
             }

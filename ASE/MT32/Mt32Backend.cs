@@ -116,35 +116,36 @@ namespace ASE
         // ==================== Audio (SDL callback thread) ====================
 
         /// <summary>
-        /// Renders <paramref name="samples"/> frames and folds them, stereo to mono, over
-        /// the PSG mix already in <paramref name="buffer"/>, at the level the volume knob
-        /// asks for. Rendering is what advances Munt's clock, so pausing the SDL device
-        /// (UI dialogs, snapshots) freezes the module together with the rest of the
-        /// machine — and the render happens whatever the volume, so muting the module
-        /// does not desynchronise it from the machine.
+        /// Renders <paramref name="frames"/> frames and mixes them over the PSG mix already in
+        /// <paramref name="buffer"/> — both interleaved stereo, two floats per frame — at the
+        /// level the volume knob asks for. The module's own stereo image is preserved: it used
+        /// to be folded down to mono here because the sound card was opened with one channel.
+        /// Rendering is what advances Munt's clock, so pausing the SDL device (UI dialogs,
+        /// snapshots) freezes the module together with the rest of the machine — and the render
+        /// happens whatever the volume, so muting the module does not desynchronise it.
         /// </summary>
-        public void MixInto(float[] buffer, int samples)
+        public void MixInto(float[] buffer, int frames)
         {
-            if (_renderBuf == null || _renderBuf.Length < samples * 2)
-                _renderBuf = new short[samples * 2];
+            if (_renderBuf == null || _renderBuf.Length < frames * 2)
+                _renderBuf = new short[frames * 2];
 
-            _synth.Render(_renderBuf, samples);
+            _synth.Render(_renderBuf, frames);
 
-            // Volume knob (percent) -> per-sample gain: 0.5 folds the stereo pair down to
-            // mono and 1/32768 brings the 16-bit render into the mixer's float range.
-            // Read live, so the slider works without a reset.
+            // Volume knob (percent) -> per-sample gain: 1/32768 brings the 16-bit render into
+            // the mixer's float range. Read live, so the slider works without a reset.
             float target = Math.Clamp(ConfigOptions.RunninConfig.Mt32Volume, 0, MaxVolume)
-                           * (0.01f * 0.5f / 32768f);
+                           * (0.01f / 32768f);
 
             if (_gain < 0f)
                 _gain = target;
 
-            float step = samples > 0 ? (target - _gain) / samples : 0f;
+            float step = frames > 0 ? (target - _gain) / frames : 0f;
 
-            for (int i = 0; i < samples; i++)
+            for (int i = 0; i < frames; i++)
             {
                 _gain += step;
-                buffer[i] += (_renderBuf[2 * i] + _renderBuf[2 * i + 1]) * _gain;
+                buffer[2 * i] += _renderBuf[2 * i] * _gain;
+                buffer[2 * i + 1] += _renderBuf[2 * i + 1] * _gain;
             }
 
             // Land exactly on the target: the accumulated step would drift otherwise.

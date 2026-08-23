@@ -24,10 +24,39 @@ namespace ASE
 
         public IntPtr _sdlWindowPtr;
 
+        // The platform window handed to SDL_CreateWindowFrom. Kept to notice a backend that
+        // recreates it behind our back when the window state changes (see VerifyNativeHandle).
+        IntPtr _nativeWindowHandle;
+
+        // Menu-bar state, split from how it is shown: ShowMenu records whether it should be
+        // usable (i.e. the input is not captured) and ApplyMenuVisibility decides what that
+        // means in the current window state.
+        bool _menuEnabled = true;
+
+        // Window state to give back when leaving full screen, and whether the full-screen side
+        // effects (menu, screen saver, priority) are currently applied — the state change is
+        // acted on in one place, OnWindowStateChanged, wherever it came from.
+        WindowState _stateBeforeFullScreen = WindowState.Normal;
+        bool _fullScreenApplied;
+
+        // Raising the priority may be refused (Linux/macOS): say so once, not on every toggle.
+        static bool _priorityWarned;
+
+        // Full-screen setting as this session started (config file + command line), to tell on
+        // closing whether the user changed it — see OnClosing.
+        readonly bool _fullScreenAtStartup = Config.ConfigOptions.RunninConfig.FullScreen;
+
         Bitmap BitmapLedDriveOn;
         Bitmap BitmapLedDriveOff;
         DateTime TimeLastDriveOn = DateTime.Now;
         DateTime TimeLastTimeTextBlock = DateTime.Now;
+
+        // Hard disk light. The emulation only stamps ASEMain.SignalHardDiskActivity(); this
+        // side polls it once per frame in RefreshDriveLed and touches the UI only when the
+        // state actually flips, so a program hammering the disk costs nothing here.
+        Bitmap BitmapLedHDOn;
+        Bitmap BitmapLedHDOff;
+        bool HDLedIsOn;
 
         string ZipFile = "";
 
@@ -48,13 +77,19 @@ namespace ASE
 
             BitmapLedDriveOn = new Bitmap(AssetLoader.Open(new Uri("avares://ASE/Assets/drive_led_on.png")));
             BitmapLedDriveOff = new Bitmap(AssetLoader.Open(new Uri("avares://ASE/Assets/drive_led_off.png")));
+            BitmapLedHDOn = new Bitmap(AssetLoader.Open(new Uri("avares://ASE/Assets/hd_led_on.png")));
+            BitmapLedHDOff = new Bitmap(AssetLoader.Open(new Uri("avares://ASE/Assets/hd_led_off.png")));
 
-            AddHandler(DragDrop.DropEvent, OnDrop);
+            if (!Design.IsDesignMode)
+                AddHandler(DragDrop.DropEvent, OnDrop);
         }
 
         protected override void OnOpened(EventArgs e)
         {
             base.OnOpened(e);
+
+            if (Design.IsDesignMode)
+                return;
 
             // Maintains the aspect ratio of the emulator when resizing the window.
             // Corrections are debounced so we never fight the user's interactive drag.
@@ -67,6 +102,12 @@ namespace ASE
             // adapter for exactly this.
             this.GetObservable(Window.ClientSizeProperty)
                 .Subscribe(new AnonymousObserver<Size>(OnClientSizeChanged));
+
+            // Full screen is watched the same way rather than only acted on in SetFullScreen: the
+            // window manager can put us in or out of it without asking (a title-bar button, its
+            // own shortcut), and the menu bar, the screen saver and the priority have to follow.
+            this.GetObservable(Window.WindowStateProperty)
+                .Subscribe(new AnonymousObserver<WindowState>(OnWindowStateChanged));
 
             // Snap the startup size to the correct ratio once the first layout is done
             Dispatcher.UIThread.Post(EnforceAspectRatio, DispatcherPriority.Loaded);
@@ -87,6 +128,7 @@ namespace ASE
                     return;
                 }
 
+                _nativeWindowHandle = platformHandle.Handle;
                 _sdlWindowPtr = SDL.SDL_CreateWindowFrom(platformHandle.Handle);
 
                 if (_sdlWindowPtr == IntPtr.Zero)
@@ -111,6 +153,13 @@ namespace ASE
                 // The OpenGL control have a transparent overlay to capture input events
                 GlInputOverlay.PointerPressed += GL_OnPointerPressed;
                 GlInputOverlay.PointerReleased += GL_OnPointerReleased;
+
+                // Come up full screen when that is how it was left (or --fullscreen was passed).
+                // After Init, so the machine is already running behind the picture, and posted so
+                // the first layout has settled: the state change is applied to a window the
+                // platform has finished placing.
+                if (Config.ConfigOptions.RunninConfig.FullScreen)
+                    Dispatcher.UIThread.Post(() => SetFullScreen(true), DispatcherPriority.Loaded);
 
                 ShowUpdateWindowIfNeeded();
             }
@@ -170,6 +219,13 @@ namespace ASE
             // Read here and not in OnClosed: by then the window is gone and its position
             // and size no longer mean anything.
             WindowLayouts.Remember(this, LayoutKey, rememberSize: true);
+
+            // Full screen is a setting, so it goes to config.json — but the file is only ever
+            // written when something deliberately changes it (no window here saves it on the way
+            // out), and it would carry along whatever this session's command line overrode. So it
+            // is written only when the user actually toggled full screen at some point.
+            if (Config.ConfigOptions.RunninConfig.FullScreen != _fullScreenAtStartup)
+                Program.Config.DumpJsonConfig();
         }
 
         protected override void OnClosed(EventArgs e)
@@ -195,11 +251,12 @@ namespace ASE
                 return;
             }
 
-            // Transmit the button press to the ACIA mouse handling
-            if (p.Properties.IsLeftButtonPressed && ASEMain.IsMouseCaptured)
+            // Transmit the button press to the ACIA mouse handling. The same click usually
+            // arrives through the SDL queue as well; ACIA.MouseButtonChanged edge-guards it.
+            if (ASEMain.IsMouseCaptured &&
+                (p.Properties.IsLeftButtonPressed || p.Properties.IsRightButtonPressed))
             {
-                ACIA._mouseButtons |= 0x02;
-                ACIA.SendMousePacket(0, 0);
+                ACIA.MouseButtonChanged(left: p.Properties.IsLeftButtonPressed, pressed: true);
                 e.Handled = true;
             }
         }
@@ -218,35 +275,162 @@ namespace ASE
                 return;
             }
 
-            if (e.InitialPressMouseButton == MouseButton.Left && ASEMain.IsMouseCaptured)
+            if (ASEMain.IsMouseCaptured &&
+                (e.InitialPressMouseButton == MouseButton.Left ||
+                 e.InitialPressMouseButton == MouseButton.Right))
             {
-                ACIA._mouseButtons &= ~0x02;
-                ACIA.SendMousePacket(0, 0);
+                ACIA.MouseButtonChanged(left: e.InitialPressMouseButton == MouseButton.Left,
+                                        pressed: false);
                 e.Handled = true;
             }
         }
 
         public void ShowMenu(bool show)
         {
-            MainMenu.IsEnabled = show;
+            _menuEnabled = show;
+            ApplyMenuVisibility();
         }
 
-        // Pixel aspect ratio of the ST on an original 4:3 PAL monitor: the tube shows
-        // ~52 µs of active line over ~288 visible lines, so the 416 low-res pixels (8 MHz)
-        // that fit in 52 µs span 288 * 4/3 = 384 line-height units -> each pixel is
-        // 384/416 = 12/13 as wide as it is tall (slightly narrower than square).
-        private const double PIXEL_ASPECT = 12.0 / 13.0;
+        /// <summary>
+        /// Applies the menu-bar policy: it is disabled while the input is captured (so its
+        /// accelerators don't eat keystrokes meant for the ST) and, in full screen, it also folds
+        /// away — the picture then owns the whole screen and the bar comes back the moment the
+        /// mouse is released with F12 or the middle button. In a normal window it always stays
+        /// visible, only greyed out, which is what it has always done.
+        /// </summary>
+        private void ApplyMenuVisibility()
+        {
+            MainMenu.IsEnabled = _menuEnabled;
+            MainMenu.IsVisible = _menuEnabled || !IsFullScreen;
+        }
 
-        /// <summary>Aspect ratio of the picture GLControl shows. On a colour monitor it is the
-        /// full framebuffer (display + borders) or the 640x400 crop when borders are hidden,
-        /// corrected by the pixel aspect of the original 4:3 monitor. On a monochrome monitor it
-        /// is the native 640x400 with square pixels.</summary>
-        private static double DisplayAspectRatio =>
-            VideoTiming.Mono
-                ? (double)VideoTiming.BUFFER_WIDTH / VideoTiming.BUFFER_HEIGHT
-                : PIXEL_ASPECT * (Config.ConfigOptions.RunninConfig.ShowBorders
-                    ? (double)VideoTiming.BUFFER_WIDTH / (VideoTiming.BUFFER_HEIGHT * 2)
-                    : (double)VideoTiming.DISPLAY_TEX_WIDTH / (VideoTiming.DISPLAY_TEX_HEIGHT * 2));
+        /// <summary>Whether the window is currently in full screen.</summary>
+        public bool IsFullScreen => WindowState == WindowState.FullScreen;
+
+        public void OnToggleFullScreenClick(object sender, RoutedEventArgs e) => ToggleFullScreen();
+
+        /// <summary>
+        /// Enters or leaves full screen. This is Avalonia's own <see cref="WindowState.FullScreen"/>
+        /// — the same window, still with its menu, status bar and dialogs — and not a maximized
+        /// undecorated window: it is the one the platform implements itself (Win32 style change,
+        /// <c>_NET_WM_STATE_FULLSCREEN</c> on X11, <c>toggleFullScreen:</c> on macOS), it covers
+        /// the taskbar without us computing screen bounds, and above all it leaves the native
+        /// window handle alone — the handle SDL adopted with SDL_CreateWindowFrom, and which the
+        /// keyboard, the mouse capture and the gamepad all hang from (see VerifyNativeHandle).
+        /// </summary>
+        public void ToggleFullScreen() => SetFullScreen(!IsFullScreen);
+
+        public void SetFullScreen(bool fullScreen)
+        {
+            if (fullScreen == IsFullScreen)
+                return;
+
+            // Remembered so leaving gives back the window the user had, maximized or not.
+            if (fullScreen)
+                _stateBeforeFullScreen = WindowState == WindowState.Minimized ? WindowState.Normal : WindowState;
+
+            // Everything that follows from the change is applied by OnWindowStateChanged, which
+            // also catches the window manager doing this on its own.
+            WindowState = fullScreen ? WindowState.FullScreen : _stateBeforeFullScreen;
+        }
+
+        /// <summary>
+        /// Reacts to the window entering or leaving full screen, whoever caused it — us, or the
+        /// window manager (some let the user do it from the title bar or a keyboard shortcut of
+        /// their own). Minimizing is ignored: an iconified full-screen window is still full
+        /// screen as far as everything here is concerned, and it comes back as one.
+        /// </summary>
+        private void OnWindowStateChanged(WindowState state)
+        {
+            if (state == WindowState.Minimized)
+                return;
+
+            bool fullScreen = state == WindowState.FullScreen;
+
+            if (fullScreen == _fullScreenApplied)
+                return;
+
+            _fullScreenApplied = fullScreen;
+
+            ApplyMenuVisibility();
+            ApplyFullScreenSystemState(fullScreen);
+            Config.ConfigOptions.RunninConfig.FullScreen = fullScreen;
+
+            // The aspect ratio is the GL control's business while we are full screen (it bars the
+            // picture itself); on the way back the window has to be snapped to the right shape
+            // again, once the platform has restored its normal geometry.
+            if (!fullScreen)
+            {
+                Dispatcher.UIThread.Post(() =>
+                {
+                    // From the restored size, not from the screen-sized one we were just at:
+                    // EnforceAspectRatio reads the difference to tell which dimension the user
+                    // dragged, and a full-screen "drag" of several hundred pixels is not one.
+                    _lastStableClientSize = ClientSize;
+                    EnforceAspectRatio();
+                }, DispatcherPriority.Loaded);
+            }
+
+            Dispatcher.UIThread.Post(VerifyNativeHandle, DispatcherPriority.Loaded);
+        }
+
+        /// <summary>
+        /// Screen saver and process priority, both tied to being full screen: that is the "I am
+        /// playing" state. The screen saver goes through SDL, which covers the three platforms at
+        /// once. Priority is best-effort by nature — on Windows it just works, while on Linux and
+        /// macOS a negative nice value needs privileges the emulator does not have, so the failure
+        /// is reported once and dropped (there the answer is to launch it with <c>nice</c>).
+        /// </summary>
+        private static void ApplyFullScreenSystemState(bool fullScreen)
+        {
+            if (fullScreen)
+                SDL.SDL_DisableScreenSaver();
+            else
+                SDL.SDL_EnableScreenSaver();
+
+            try
+            {
+                using var process = System.Diagnostics.Process.GetCurrentProcess();
+
+                // AboveNormal, not High: High competes with the system's own input handling and
+                // makes the machine feel worse, not better.
+                process.PriorityClass = fullScreen
+                    ? System.Diagnostics.ProcessPriorityClass.AboveNormal
+                    : System.Diagnostics.ProcessPriorityClass.Normal;
+            }
+            catch (Exception ex)
+            {
+                if (!_priorityWarned)
+                {
+                    _priorityWarned = true;
+                    ColoredConsole.WriteLine($"Could not change the process priority ([[red]]{ex.Message}[[/red]]). On Linux/macOS raising it needs privileges: launch ASE with [[cyan]]nice -n -5[[/cyan]] if you want it.");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Checks that the platform window SDL was handed at startup is still the one this window
+        /// owns. Changing the window state is not supposed to recreate it on any backend — that is
+        /// the whole reason full screen is done with WindowState rather than by dropping the
+        /// decorations — but if a platform ever did, the symptom (no keyboard, no mouse capture, no
+        /// gamepad, and on X11 no event mask either) would be baffling without this line.
+        /// </summary>
+        private void VerifyNativeHandle()
+        {
+            if (_nativeWindowHandle == IntPtr.Zero)
+                return;
+
+            IntPtr current = this.TryGetPlatformHandle()?.Handle ?? IntPtr.Zero;
+
+            if (current != _nativeWindowHandle)
+                ColoredConsole.WriteLine($"Warning: the platform window changed (0x{_nativeWindowHandle.ToInt64():X} -> 0x{current.ToInt64():X}); the SDL input is still attached to the old one.");
+        }
+
+        /// <summary>Aspect ratio of the picture the GL control shows, which is what the window is
+        /// kept at. It lives in <see cref="GLControl"/> because that is where the picture is
+        /// fitted to the surface (letterbox); both sides must read the same value or the window
+        /// would settle at a shape the renderer then bars.</summary>
+        private static double DisplayAspectRatio => GLControl.DisplayAspectRatio;
 
         /// <summary>Re-applies the window aspect ratio to the current video mode. Called after a
         /// reset that may have switched the monitor type (colour ↔ monochrome).</summary>
@@ -352,6 +536,19 @@ namespace ASE
             {
                 Dispatcher.UIThread.InvokeAsync(() => {
                     ASEMain.MainWindow.DriveLed(false);
+                }, DispatcherPriority.Background);
+            }
+
+            // Hard disk light: polled here (once per frame) rather than posted per access,
+            // and only pushed to the UI on a change — the disk can be hit thousands of
+            // times a second and every access would otherwise queue dispatcher work.
+            bool hdOn = ASEMain.HardDiskActive;
+
+            if (hdOn != HDLedIsOn)
+            {
+                HDLedIsOn = hdOn;
+                Dispatcher.UIThread.InvokeAsync(() => {
+                    HDLedImage.Source = hdOn ? BitmapLedHDOn : BitmapLedHDOff;
                 }, DispatcherPriority.Background);
             }
 

@@ -24,6 +24,19 @@ namespace ASE
         static uint dmaAddress;
         static ushort prevMode;
 
+        // Last value read from or written to $FF8604 while it addressed the FDC/HDC registers
+        // (that is, not the sector count). The DMA chip has no storage for the unused bits of
+        // $FF8604/$FF8606, so they read back as whatever went through that path last -- and the
+        // sector count register cannot be read at all, it answers with this instead. Verified on
+        // a real STF by Hatari (fdc.c, ff8604_recent_val).
+        static ushort ff8604RecentVal;
+
+        // Bytes still owed to the sector the DMA counter is currently on. The counter steps once
+        // per 512 bytes actually moved, never once per command, which is what keeps a 4-byte
+        // INQUIRY from consuming a whole sector of the count the host programmed. The FDC path
+        // tracks the same position through its FIFO (stxDmaByteCount); ResetDma restarts both.
+        static int dmaBytesInSector;
+
         // Estado
         static int currentDrive = -1;
         static int currentSide;
@@ -31,6 +44,12 @@ namespace ASE
         static int stepDirection = 1;
         static bool dmaError;
         static int nextIdSector = 0;    // rotating sector index for READ ADDRESS
+
+        // The FDC's INTRQ and the ACSI controller's IRQ are combined onto the same MFP line
+        // (GPIP5, active low): the line is asserted while EITHER source is. Reading the FDC
+        // status only retires the FDC's side; the HDC's is managed from Acsi.cs.
+        static bool fdcIrq;
+        static bool hdcIrq;
 
         // Active disk according to the drive selection made through the YM2149's port A
         static FloppyImage ActiveDrive => currentDrive == 1 ? ASEMain.driveB : ASEMain.driveA;
@@ -84,16 +103,23 @@ namespace ASE
             headTrack = 0;
             stepDirection = 1;
             dmaSectorCount = 0;
+            dmaBytesInSector = DMA_SECTOR_SIZE;
+            ff8604RecentVal = 0;
             statusRegister = 0;
             motorStopClock = 0;
             lastCommandTypeI = true;
             stxOp = null;
             stxDmaByteCount = 0;
+            dmaFifoCount = 0;
 
             // A pending disk change has nothing left to notify after a reset: TOS re-reads the
             // disk from scratch on the way up.
             ASEMain.driveA.ClearDiskTransition();
             ASEMain.driveB.ClearDiskTransition();
+
+            fdcIrq = false;
+            hdcIrq = false;
+            Acsi.ResetCommandStatus();
 
             if (ASEMain._mfp != null)
                 ASEMain._mfp.SetGPIOBit(5, true);
@@ -119,11 +145,11 @@ namespace ASE
                 case 0xFF8609: 
                     dmaAddress = (dmaAddress & 0x00FFFF) | (((uint)value & 0x3F) << 16); 
                     break;
-                case 0xFF860B: 
-                    dmaAddress = (dmaAddress & 0xFF00FF) | ((uint)value << 8); 
+                case 0xFF860B:
+                    dmaAddress = RippleCarry(dmaAddress, (dmaAddress & 0xFF00FF) | ((uint)value << 8));
                     break;
-                case 0xFF860D: 
-                    dmaAddress = (dmaAddress & 0xFFFF00) | ((uint)value & 0xFE); 
+                case 0xFF860D:
+                    dmaAddress = RippleCarry(dmaAddress, (dmaAddress & 0xFFFF00) | ((uint)value & 0xFE));
                     break;
             }
         }
@@ -193,8 +219,12 @@ namespace ASE
 
             switch (address)
             {
-                case 0xFF8604: 
-                    return (ushort)(0xFF00 | ReadFromFDCOrSectorCount());
+                case 0xFF8604:
+                    // The high byte is not driven by the FDC/HDC: it reads back as zero, not as
+                    // open bus. A driver that tests the whole word ("move.w $FFFF8604,d0" then
+                    // tst/cmp, with no masking -- a common shape) would see a failed command for
+                    // every successful one if this returned $FF00.
+                    return ReadFromFDCOrSectorCount();
                 case 0xFF8606: 
                     return GetDMAStatus();
                 case 0xFF8608: 
@@ -210,13 +240,131 @@ namespace ASE
 
         private static void HandleDMAModeChange()
         {
-            bool prevDir = (prevMode & 0x0100) != 0;
-            bool newDir = (dmaModeRegister & 0x0100) != 0;
+            // Toggling bit 8 (the transfer direction) resets the DMA chip. This is not a corner
+            // case: it is how every ACSI driver arms a transfer. The boot sector of an
+            // ICD-formatted disk writes $0190 then $0090 to $FF8606 for exactly this reset,
+            // right before programming the sector count, and AHDI and the drivers derived from
+            // it do the same. Reproducing only half of it (clearing the error bit, as this did
+            // before) left the sector counter and the 16-byte FIFO carrying over whatever the
+            // previous command had put there.
+            if (((prevMode ^ dmaModeRegister) & 0x0100) != 0)
+                ResetDma();
 
-            if (prevDir != newDir)
-                dmaError = false;
+            // DMA just enabled (bits 6-7 dropping to 0) with ACSI data still waiting: this is
+            // the moment the transfer of an already-executed HDC command actually runs.
+            if ((prevMode & 0x00C0) != 0 && (dmaModeRegister & 0x00C0) == 0)
+                Acsi.DmaTransferIfPending();
 
             prevMode = dmaModeRegister;
+        }
+
+        /// <summary>
+        /// DMA reset, as produced by toggling bit 8 of the mode register (Hatari's
+        /// <c>FDC_ResetDMA</c>, verified on a real STF): the 16-byte FIFO is emptied, the byte
+        /// count inside the current sector restarts, the sector counter goes to zero and the
+        /// HDC's command status is cleared.
+        /// </summary>
+        static void ResetDma()
+        {
+            dmaFifoCount = 0;
+            stxDmaByteCount = 0;
+            dmaBytesInSector = DMA_SECTOR_SIZE;
+            dmaSectorCount = 0;
+            dmaError = false;
+            Acsi.ResetCommandStatus();
+        }
+
+        /// <summary>
+        /// The STF builds its DMA address register out of a ripple carry adder, so writing the
+        /// low or middle byte can carry into the byte above it: when bit 7 (or bit 15) goes from
+        /// 1 to 0, the next byte up is incremented. Verified on real hardware (Hatari's
+        /// <c>FDC_DmaAddress_WriteByte</c>); the STE's MCU does not do this.
+        /// </summary>
+        static uint RippleCarry(uint oldAddr, uint newAddr)
+        {
+            if (ConfigOptions.RunninConfig.STModel != ConfigOptions.STModels.ST)
+                return newAddr;
+
+            if ((oldAddr & 0x80) != 0 && (newAddr & 0x80) == 0)
+                newAddr += 0x100;
+            else if ((oldAddr & 0x8000) != 0 && (newAddr & 0x8000) == 0)
+                newAddr += 0x10000;
+
+            return newAddr & DMA_ADDRESS_MASK;
+        }
+
+        // ==================== ACSI (HDC) plumbing ====================
+        // The hard disk controller shares this chip's DMA and interrupt wiring; Acsi.cs uses
+        // these accessors instead of owning copies of the registers.
+
+        /// <summary>Current DMA mode register ($FF8606), read by Acsi to check enable/direction.</summary>
+        internal static ushort DmaMode => dmaModeRegister;
+
+        /// <summary>DMA address counter ($FF8609/0B/0D); Acsi advances it past each transfer.</summary>
+        internal static uint DmaAddress
+        {
+            get => dmaAddress;
+            set => dmaAddress = value & DMA_ADDRESS_MASK;
+        }
+
+        // The DMA address is word-aligned (bit 0 of $FF860D always reads back 0) and, on a
+        // machine limited to 4MB, its high byte is masked with $3F -- the same masks the
+        // per-byte writes above already apply, so a transfer advancing the counter must not
+        // escape them either.
+        const uint DMA_ADDRESS_MASK = 0x3FFFFE;
+
+        /// <summary>Bytes per sector as far as the DMA sector counter is concerned.</summary>
+        const int DMA_SECTOR_SIZE = 512;
+
+        /// <summary>
+        /// Accounts a completed ACSI transfer against the DMA sector counter ($FF8604 with the
+        /// mode register's sector-count bit set), exactly as the FDC paths already do.
+        /// <para>
+        /// The counter is the chip's own record of how much of the programmed transfer is still
+        /// outstanding, and the host reads it back — directly, and through bit 1 of the DMA status
+        /// register, which is simply "sector count is not zero". A driver uses it to confirm the
+        /// transfer completed. Leaving it untouched after an ACSI transfer told every driver that
+        /// the DMA had not finished, whatever had actually been moved into RAM: the ICD driver
+        /// then abandons the rest of a multi-command read, so a large file arrives truncated with
+        /// the tail of the destination buffer left at zero. That is silent unless the data is
+        /// checked — a game whose module got cut in half still plays, just with half its
+        /// instruments turned into square waves and silence.
+        /// </para>
+        /// </summary>
+        internal static void ConsumeDmaSectors(int bytes)
+        {
+            if (bytes <= 0)
+                return;
+
+            // The counter steps once per 512 bytes actually moved and keeps the remainder for
+            // the next transfer, exactly as the chip does through its FIFO. Rounding up instead
+            // (the first version of this) made every short command -- INQUIRY, REQUEST SENSE,
+            // MODE SENSE, each a handful of bytes -- swallow a whole sector of the count the
+            // host had programmed, so a driver that probes the device before reading found its
+            // transfer already "finished" before a single sector had moved.
+            dmaBytesInSector -= bytes;
+            while (dmaBytesInSector <= 0)
+            {
+                dmaBytesInSector += DMA_SECTOR_SIZE;
+                if (dmaSectorCount > 0)
+                    dmaSectorCount--;
+            }
+        }
+
+        /// <summary>DMA status bit 0 (set = no error), shared between FDC and HDC transfers.</summary>
+        internal static void SetDmaError(bool error) => dmaError = error;
+
+        /// <summary>Asserts or retires the ACSI side of the shared GPIP5 interrupt line.</summary>
+        internal static void SetHdcIrq(bool state)
+        {
+            hdcIrq = state;
+            UpdateSharedIrq();
+        }
+
+        static void UpdateSharedIrq()
+        {
+            // Active low at the MFP: pulled low while either chip requests service
+            ASEMain._mfp?.SetGPIOBit(5, !(fdcIrq || hdcIrq));
         }
 
         public static void SetDriveAndSide(int drive, int side)
@@ -236,10 +384,12 @@ namespace ASE
                 status |= 0x0001;
             if (dmaSectorCount != 0) 
                 status |= 0x0002;
-            if ((statusRegister & STATUS_DRQ) != 0) 
+            if ((statusRegister & STATUS_DRQ) != 0)
                 status |= 0x0004;
 
-            return status;
+            // Bits 3-15 are not driven by anything: they read back as the last value that went
+            // through $FF8604 in FDC/HDC mode (verified on a real STF).
+            return (ushort)(status | (ff8604RecentVal & 0xFFF8));
         }
 
         private static void WriteToFDCOrSectorCount(byte value)
@@ -249,29 +399,37 @@ namespace ASE
             if (selectSectorCount)
             {
                 dmaSectorCount = value;
+                return;
             }
-            else
+
+            // Anything else written here is an FDC/HDC register access, and the byte stays
+            // visible in the undriven bits of $FF8604/$FF8606 afterwards.
+            ff8604RecentVal = (ushort)((ff8604RecentVal & 0xFF00) | value);
+
+            // HDC selected: the byte goes to the ACSI controller, whose A1 line (bit 1 of
+            // the mode register) tells a packet's first byte from the rest.
+            if (((dmaModeRegister >> DMA_HDC_SELECT) & 1) == 1)
             {
-                if (((dmaModeRegister >> DMA_HDC_SELECT) & 1) == 1) return;
+                Acsi.WriteCommandByte(dmaModeRegister & 0x07, value);
+                return;
+            }
 
-                int sel = (dmaModeRegister >> 1) & 3;
-                int fdcRegister = (dmaModeRegister >> DMA_A0) & 0x03;
+            int fdcRegister = (dmaModeRegister >> DMA_A0) & 0x03;
 
-                switch (fdcRegister)
-                {
-                    case 0: // Command
-                        ExecuteCommand(value);
-                        break;
-                    case 1: // Track
-                        trackRegister = value;
-                        break;
-                    case 2: // Sector
-                        sectorRegister = value;
-                        break;
-                    case 3: // Data
-                        dataRegister = value;
-                        break;
-                }
+            switch (fdcRegister)
+            {
+                case 0: // Command
+                    ExecuteCommand(value);
+                    break;
+                case 1: // Track
+                    trackRegister = value;
+                    break;
+                case 2: // Sector
+                    sectorRegister = value;
+                    break;
+                case 3: // Data
+                    dataRegister = value;
+                    break;
             }
         }
 
@@ -279,27 +437,42 @@ namespace ASE
         {
             bool selectSectorCount = ((dmaModeRegister >> DMA_SECTOR_COUNT_REG) & 1) == 1;
 
-            if (selectSectorCount) 
-                return dmaSectorCount;
+            // The sector count register is write-only: reading it back gives the last value that
+            // went through $FF8604 in FDC/HDC mode (verified on a real STF), not the counter.
+            if (selectSectorCount)
+                return (byte)ff8604RecentVal;
 
-            if (((dmaModeRegister >> DMA_HDC_SELECT) & 1) == 1) 
-                return 0xFF;
+            byte value;
 
-            int fdcRegister = (dmaModeRegister >> DMA_A0) & 0x03;
-            switch (fdcRegister)
+            // HDC selected: the ACSI controller's status byte (0xFF with no emulation on,
+            // like an empty bus)
+            if (((dmaModeRegister >> DMA_HDC_SELECT) & 1) == 1)
             {
-                case 0: // STATUS REGISTER
-                    ClearInterrupt();
-                    return ComposeStatus();
-                case 1: 
-                    return trackRegister;
-                case 2: 
-                    return sectorRegister;
-                case 3: 
-                    return dataRegister;
-                default: 
-                    return 0xFF;
+                value = Acsi.ReadStatus();
             }
+            else
+            {
+                int fdcRegister = (dmaModeRegister >> DMA_A0) & 0x03;
+                switch (fdcRegister)
+                {
+                    case 0: // STATUS REGISTER
+                        ClearInterrupt();
+                        value = ComposeStatus();
+                        break;
+                    case 1:
+                        value = trackRegister;
+                        break;
+                    case 2:
+                        value = sectorRegister;
+                        break;
+                    default:
+                        value = dataRegister;
+                        break;
+                }
+            }
+
+            ff8604RecentVal = (ushort)((ff8604RecentVal & 0xFF00) | value);
+            return value;
         }
 
         // 300 RPM → 1 revolution per 200 ms → 1,600,000 CPU cycles at 8 MHz.
@@ -322,6 +495,9 @@ namespace ASE
         {
             if (stxOp != null)
                 ProcessStxOp(CPU._moira.Clock);
+
+            // Pending ACSI post-transfer IRQ (a single compare when idle)
+            Acsi.Tick();
         }
 
         /// <summary>
@@ -361,6 +537,14 @@ namespace ASE
             w.U32(dmaAddress);
             w.I64(motorStopClock);
             w.I32(stxDmaByteCount);
+
+            // Appended for back-compat: the two sources behind the shared GPIP5 line
+            w.Bool(fdcIrq);
+            w.Bool(hdcIrq);
+
+            // Appended: the DMA chip's undriven-bit latch and its position inside the sector
+            w.U16(ff8604RecentVal);
+            w.I32(dmaBytesInSector);
         }
 
         public static void LoadState(Snapshot.Reader r)
@@ -383,6 +567,14 @@ namespace ASE
             dmaAddress = r.U32();
             motorStopClock = r.I64();
             stxDmaByteCount = r.I32();
+
+            // Older snapshots stop here: derive nothing, the MFP section already carries the
+            // resulting GPIP5 level, and the sources start clear.
+            fdcIrq = r.Remaining > 0 && r.Bool();
+            hdcIrq = r.Remaining > 0 && r.Bool();
+
+            ff8604RecentVal = r.Remaining > 0 ? r.U16() : (ushort)0;
+            dmaBytesInSector = r.Remaining > 0 ? r.I32() : DMA_SECTOR_SIZE;
 
             // An in-flight STX operation is never serialized (it completes before saving)
             stxOp = null;
@@ -542,7 +734,13 @@ namespace ASE
             if (hi3 == 0x80) // 0x80 read sector
             {
                 ExecuteReadSector();
-                EndCommandOK();
+
+                // Multiple, and every sector the DMA wanted arrived: the chip keeps hunting
+                // for the next one instead of interrupting (see KeepSearchingAfterMultiple)
+                if ((command & 0x10) != 0 && statusRegister == 0)
+                    KeepSearchingAfterMultiple();
+                else
+                    EndCommandOK();
                 return;
             }
 
@@ -599,14 +797,38 @@ namespace ASE
             PulseInterrupt();
         }
 
-        private static void PulseInterrupt()
+        /// <summary>
+        /// A read MULTIPLE that has given the DMA everything it asked for is *not* finished:
+        /// the WD1772 goes on looking for the next sector and only reports Record Not Found
+        /// after five index pulses, so no interrupt arrives in between — programs stop the chip
+        /// with a Force Interrupt once they have their data. Loaders build on that gap: Sega's
+        /// Super Hang-On checks once per VBL whether the DMA address has reached its target,
+        /// but tests the FDC interrupt *first* and reads an early one as a disk error, so it
+        /// retried the same sector forever when the command ended by itself. The command
+        /// therefore stays busy on a timed operation (the same one the STX engine uses) instead
+        /// of ending here. Write Multiple is left alone: no loader depends on it and finishing
+        /// it early has never been a problem.
+        /// </summary>
+        private static void KeepSearchingAfterMultiple()
         {
-            ASEMain._mfp.SetGPIOBit(5, false);
+            statusRegister |= STATUS_BUSY;
+            stxOp = new StxOp
+            {
+                CompleteClock = CPU._moira.Clock + RNF_REVOLUTIONS * CYCLES_PER_REVOLUTION,
+                FinalStatus = STATUS_RECORD_NOT_FOUND
+            };
         }
 
-        private static void ClearInterrupt() 
-        { 
-            ASEMain._mfp.SetGPIOBit(5, true); 
+        private static void PulseInterrupt()
+        {
+            fdcIrq = true;
+            UpdateSharedIrq();
+        }
+
+        private static void ClearInterrupt()
+        {
+            fdcIrq = false;
+            UpdateSharedIrq();
         }
 
         private static void ExecuteRestore()
@@ -1085,9 +1307,55 @@ namespace ASE
         static StxOp stxOp;
         static int stxDmaByteCount;           // bytes transferred toward the next 512-byte DMA count step
 
+        // The DMA chip is not byte-addressed: bytes coming off the FDC are collected in a
+        // 16-byte FIFO, and only when it fills does the block reach RAM and the address
+        // register ($FF8609/0B/0D) step — by 16, never by 1. Copy protections measure exactly
+        // that: Ocean's Batman the Movie loader samples the interval between consecutive steps
+        // of $FF860D with MFP Timer A to read back the variable bit rate of a protected sector
+        // (its 32 samples are the sector's 32 blocks of 16 bytes). Stepping the address per
+        // byte makes every sample identical and the loader hangs. Same model as Hatari's
+        // FDC_DMA_FIFO_Push / DMA_DISK_TRANSFER_SIZE.
+        const int DMA_FIFO_SIZE = 16;
+        static readonly byte[] dmaFifo = new byte[DMA_FIFO_SIZE];
+        static int dmaFifoCount;
+
+        /// <summary>
+        /// Feeds one byte read from the disk into the DMA FIFO. Nothing is written to RAM
+        /// until the 16th byte arrives; a partial FIFO left over at the end of a command is
+        /// dropped, as on the real chip (every sector size and track image is a multiple of
+        /// 16, so nothing is lost in practice).
+        /// </summary>
+        private static void DmaFifoPush(byte value)
+        {
+            // Every byte the FDC hands the DMA also stays visible in the undriven bits of
+            // $FF8604/$FF8606, and so does the last word of each block the FIFO stores (below).
+            ff8604RecentVal = (ushort)((ff8604RecentVal & 0xFF00) | value);
+
+            dmaFifo[dmaFifoCount++] = value;
+            if (dmaFifoCount < DMA_FIFO_SIZE)
+                return;
+
+            for (int i = 0; i < DMA_FIFO_SIZE; i++)
+                ASEMain._mem.Write8(dmaAddress + (uint)i, dmaFifo[i]);
+
+            dmaAddress = (dmaAddress + DMA_FIFO_SIZE) & DMA_ADDRESS_MASK;
+            dmaFifoCount = 0;
+
+            ff8604RecentVal = (ushort)((dmaFifo[DMA_FIFO_SIZE - 2] << 8) | dmaFifo[DMA_FIFO_SIZE - 1]);
+
+            // The sector counter goes down as blocks are stored, not as bytes come in
+            stxDmaByteCount += DMA_FIFO_SIZE;
+            if (stxDmaByteCount == 512)
+            {
+                stxDmaByteCount = 0;
+                dmaSectorCount--;
+            }
+        }
+
         private static void StartStxCommand(byte command, bool motorWasOn)
         {
             stxDmaByteCount = 0;
+            dmaFifoCount = 0;      // whatever the previous command left half-collected is gone
 
             // Spin-up: 6 revolutions when the motor was stopped and the h bit (3) is clear
             long spinUp = (!motorWasOn && (command & 0x08) == 0) ? 6 * CYCLES_PER_REVOLUTION : 0;
@@ -1494,18 +1762,15 @@ namespace ASE
                 {
                     if (!op.CountDmaBytes)
                     {
+                        // Read Address: the six ID bytes are handed over directly, they would
+                        // never fill a FIFO block on their own
                         ASEMain._mem.Write8(dmaAddress++, op.Bytes[op.Next]);
                     }
                     else if (dmaSectorCount != 0)
                     {
-                        // The DMA only stores while its sector counter is not exhausted,
-                        // decrementing it every 512 bytes transferred
-                        ASEMain._mem.Write8(dmaAddress++, op.Bytes[op.Next]);
-                        if (++stxDmaByteCount == 512)
-                        {
-                            stxDmaByteCount = 0;
-                            dmaSectorCount--;
-                        }
+                        // The DMA only stores while its sector counter is not exhausted;
+                        // bytes arriving afterwards are lost (see DmaFifoPush)
+                        DmaFifoPush(op.Bytes[op.Next]);
                     }
                     op.Next++;
                 }
@@ -1558,6 +1823,14 @@ namespace ASE
                     return;               // next sector under way, the command stays busy
 
                 EndCommandOK();           // instant failure path already set the status bits
+                return;
+            }
+
+            // DMA satisfied on a read multiple: the chip has not finished either, it goes
+            // looking for the next sector (see KeepSearchingAfterMultiple)
+            if (op.Multi && !op.IsWrite && op.FinalStatus == 0)
+            {
+                KeepSearchingAfterMultiple();
                 return;
             }
 

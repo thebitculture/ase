@@ -35,6 +35,10 @@ namespace ASE
         // A PAL scanline is 512 cycles. During DE the shifter reads 0.5 bytes/cycle, so the
         // normal 320-cycle display window reads 160 bytes (low and medium resolution alike).
         public const int COLOR_CYCLES_PER_LINE = 512;
+        // A 60 Hz line is four cycles SHORTER: the GLUE's horizontal counter wraps at 508 instead
+        // of 512 (60 Hz = 508 x 263 lines, 50 Hz = 512 x 313). Which of the two a given line gets
+        // is decided by the frequency in effect AT cycle 508 — see ResolveLineCycles.
+        const int COLOR_CYCLES_PER_LINE_60 = 508;
         const int COLOR_SCANLINES  = 313;
         const int COLOR_DE_STOP    = 376;   // where the emulation loop fires the HBL / Timer B
 
@@ -173,6 +177,42 @@ namespace ASE
         static byte _currentRes  = 0x00;        // low resolution
         static byte _syncAtLineStart = 0x02;
         static byte _resAtLineStart  = 0x00;
+        static int  _lineCycles = COLOR_CYCLES_PER_LINE;   // 512 / 508 / 224, resolved per line
+
+        // ===================== STE horizontal fine scroll ($FF8264/$FF8265) =====================
+        // Four bits of pixel shift. Writing $FF8265 also makes the shifter PREFETCH one extra word
+        // per plane at the start of the line (8 bytes in low resolution, 4 in medium): the display
+        // is then taken from pixel _hScroll of that prefetched word, which is what gives smooth
+        // pixel-by-pixel scrolling instead of the ST's 16-pixel steps. $FF8264 is the same latch
+        // WITHOUT the prefetch cycle. Both are latched at the start of the line, because that is
+        // when the shifter performs the prefetch — a write lands on the next line.
+        static int  _hScroll;                 // 0..15 pixels
+        static bool _hScrollPrefetch;         // shifter fetches the extra word this line
+        static int  _hScrollAtLineStart;
+        static bool _hScrollPrefetchAtLineStart;
+
+        // ===================== STE line width ($FF820F) =====================
+        // Extra words the shifter skips at the end of each line. Latched like the scroll: the
+        // value is consumed when display turns off (start of the right border, cycle 376), so a
+        // write that arrives after that point only takes effect on the NEXT line.
+        static int _lineWidth;
+        static int _pendingLineWidth = -1;
+
+        // ===================== Video counter writes ($FF8205/07/09) =====================
+        // Writing the counter mid-line is not one behaviour but three, and the ST(E) picks by
+        // WHERE in the line the write lands (semantics from Hatari's Video_ScreenCounter_WriteByte):
+        //   - before the display starts (or on a line with no display): the counter simply moves,
+        //     and this line is fetched from the new address.
+        //   - in the RIGHT BORDER, display already off: the value cannot take effect on the line
+        //     being finished, and it REPLACES the end-of-line advance instead of adding to it —
+        //     the next line starts exactly at the address written, with no +160, no prefetch and
+        //     no line width. This is the case split-screen code uses, and getting it wrong shifts
+        //     the whole lower half by one line width and leaves garbage down the left edge.
+        //   - while the display is on: only the delta is remembered and applied at the end of the
+        //     line. A real STE shows artefacts here too.
+        static uint _pendingCounter;
+        static bool _hasPendingCounter;
+        static int  _counterDelayedOffset;
 
         static uint _videoCounter;              // absolute shifter address (advances each frame)
         static uint _lineStartCounter;          // _videoCounter at the start of the current line
@@ -197,6 +237,8 @@ namespace ASE
             public int  DeStart;       // DE rise cycle (left edge of the fetched data)
             public int  DeStop;        // DE fall cycle (right edge of the fetched data)
             public byte Res;           // resolution in effect for this line
+            public int  HScroll;       // STE fine scroll: pixels to drop from the left (0..15)
+            public bool HScrollPrefetch; // STE: an extra word per plane was fetched before DE
         }
 
         /// <summary>Resets persistent state (called on cold/hard reset).</summary>
@@ -214,6 +256,11 @@ namespace ASE
             _lineStartCounter = 0;
             _lineStartClock = 0;
             _currentLine = 0;
+            _lineCycles = Mono ? MONO_CYCLES_PER_LINE : COLOR_CYCLES_PER_LINE;
+            _hScroll = 0; _hScrollPrefetch = false;
+            _hScrollAtLineStart = 0; _hScrollPrefetchAtLineStart = false;
+            _lineWidth = 0; _pendingLineWidth = -1;
+            _pendingCounter = 0; _hasPendingCounter = false; _counterDelayedOffset = 0;
             _vDisplayOn = false;
             _currentLineHasDisplay = false;
             _eventCount = 0;
@@ -230,6 +277,16 @@ namespace ASE
             _currentRes = ASEMain._mem.Ports[(int)(Memory.STPortAdress.ST_RES - Memory.PortsBase)];
             _syncAtLineStart = _currentSync;
             _resAtLineStart = _currentRes;
+
+            byte hs = ASEMain._mem.Ports[(int)(Memory.STPortAdress.ST_HSCROLL - Memory.PortsBase)];
+            OnHScrollWrite(hs, true);
+            _hScrollAtLineStart = _hScroll;
+            _hScrollPrefetchAtLineStart = _hScrollPrefetch;
+
+            _lineWidth = ASEMain._mem.Ports[(int)(Memory.STPortAdress.ST_LINEWIDTH - Memory.PortsBase)];
+            _pendingLineWidth = -1;
+            _hasPendingCounter = false;
+            _counterDelayedOffset = 0;
         }
 
         /// <summary>Start of a frame: reload the shifter address from the video base register.</summary>
@@ -255,6 +312,8 @@ namespace ASE
             _lineStartClock = clock;
             _syncAtLineStart = _currentSync;
             _resAtLineStart = _currentRes;
+            _hScrollAtLineStart = _hScroll;
+            _hScrollPrefetchAtLineStart = _hScrollPrefetch;
             _eventCount = 0;
             _lineStartCounter = _videoCounter;
 
@@ -305,6 +364,22 @@ namespace ASE
             }
         }
 
+        /// <summary>
+        /// Display Enable state of the line being executed, evaluated *now* (mid-line) instead of
+        /// at the line start. The MFP's Timer A/B event inputs are wired to DE, so the emulation
+        /// loop has to tick them exactly on the lines the GLUE really displays — which includes
+        /// the ~29 lines an opened top border adds and the ~45 an opened bottom border adds.
+        /// Evaluating it at the DE-stop cycle (rather than reusing the StartLine prediction) also
+        /// covers a border opened by a sync pulse earlier in this same line.
+        /// Read-only: the authoritative state machine still advances in ResolveLine.
+        /// </summary>
+        public static bool DisplayEnabledNow()
+        {
+            bool on = _vDisplayOn, done = _vDisplayDone;
+            AdvanceVerticalDisplay(_currentLine, ref on, ref done);
+            return on;
+        }
+
         public static void OnSyncWrite(byte v, int cycleInLine)
         {
             _currentSync = v;
@@ -324,6 +399,103 @@ namespace ASE
                 // still off, makes it start ~29 lines earlier than the 50 Hz start (63).
                 if (!_vDisplayOn && _currentLine >= V_START_60 - 2 && _currentLine <= V_START_60 + 1)
                     _topBorderOpen = true;
+            }
+        }
+
+        /// <summary>
+        /// STE horizontal fine scroll. <paramref name="prefetch"/> is true for $FF8265 (the normal
+        /// register, which makes the shifter fetch an extra word per plane before the display) and
+        /// false for $FF8264 (same latch, no prefetch cycle).
+        /// Not modelled: the STE left-border trick, where a $FF8264 write of 0 after a $FF8265 one
+        /// keeps the prefetched word but stops the shift, showing 16 extra pixels on the left.
+        /// </summary>
+        public static void OnHScrollWrite(byte v, bool prefetch)
+        {
+            _hScroll = v & 0x0F;
+            _hScrollPrefetch = prefetch && _hScroll != 0;
+        }
+
+        /// <summary>
+        /// Write to the shifter's video address counter ($FF8205/07/09). Unlike the video BASE
+        /// registers ($FF8201/03/0D), which the GLUE only reloads at the top of the frame, this
+        /// moves the counter *now* — mid-screen repositioning, which is how a smooth vertical
+        /// scroll keeps feeding the shifter without waiting for the VBL, and how split screens are
+        /// done. The counter addresses words, so bit 0 is always dropped.
+        /// The move takes effect from the current line: within-a-line precision would need the
+        /// renderer to switch source address mid-row, which it does not do.
+        /// </summary>
+        /// <param name="shift">16 for $FF8205, 8 for $FF8207, 0 for $FF8209.</param>
+        public static void OnVideoCounterWrite(int shift, byte v)
+        {
+            int cycleInLine = (int)(CPU._moira.Clock - _lineStartClock);
+
+            // Base to patch the byte into: what the shifter holds right now, corrected by whatever
+            // this line has already queued (the three bytes of an address are written one after
+            // another, so the second and third must build on the first, not on the live counter).
+            uint addrCur = GetCurrentVideoAddress();
+            uint addrNew = _hasPendingCounter ? _pendingCounter : (uint)(addrCur + _counterDelayedOffset);
+
+            addrNew = (addrNew & ~(0xFFu << shift)) | ((uint)v << shift);
+            addrNew &= 0xFFFFFEu;                       // the counter addresses words
+
+            if (!_currentLineHasDisplay || cycleInLine <= DE_START_50)
+            {
+                // Display has not started here: the move applies to this very line.
+                _videoCounter = addrNew;
+                _lineStartCounter = addrNew;
+                _hasPendingCounter = false;
+                _counterDelayedOffset = 0;
+            }
+            else if (cycleInLine > DE_STOP_50)
+            {
+                // Right border: replaces the end-of-line advance (see the field comment).
+                _pendingCounter = addrNew;
+                _hasPendingCounter = true;
+                _counterDelayedOffset = 0;
+            }
+            else
+            {
+                // Display is on: remember the delta, apply it when the line ends.
+                _counterDelayedOffset = (int)(addrNew - addrCur);
+                _hasPendingCounter = false;
+            }
+        }
+
+        /// <summary>
+        /// STE line width ($FF820F): extra words skipped at the end of the line. Consumed when
+        /// display turns off, so a write landing in the right border only counts from the next
+        /// line on.
+        /// </summary>
+        public static void OnLineWidthWrite(byte v)
+        {
+            int cycleInLine = (int)(CPU._moira.Clock - _lineStartClock);
+
+            if (!_currentLineHasDisplay || cycleInLine <= DE_STOP_50)
+            {
+                _lineWidth = v;
+                _pendingLineWidth = -1;
+            }
+            else
+            {
+                _pendingLineWidth = v;
+            }
+        }
+
+        // End-of-line bookkeeping for the counter and the line width. Called from ResolveLine on
+        // every line, displaying or not, so a queued value is never stranded.
+        static void ApplyEndOfLineVideoRegs()
+        {
+            if (_hasPendingCounter)
+            {
+                _videoCounter = _pendingCounter & 0xFFFFFFu;
+                _hasPendingCounter = false;
+            }
+            _counterDelayedOffset = 0;
+
+            if (_pendingLineWidth >= 0)
+            {
+                _lineWidth = _pendingLineWidth;
+                _pendingLineWidth = -1;
             }
         }
 
@@ -389,6 +561,37 @@ namespace ASE
             return saw60 && backTo50;
         }
 
+        // ===================== Line length (508 / 512 cycles) =====================
+        // The GLUE's horizontal counter wraps at 508 cycles in 60 Hz and at 512 in 50 Hz, so the
+        // frequency the register holds *at the wrap point* is what sets the length of the line —
+        // a distinction demos rely on twice over:
+        //   - The border-removal pulses (left border at ~cycle 50, right border at ~372, bottom
+        //     border late in the line) are back to 50 Hz well before cycle 508, so they open the
+        //     border WITHOUT shortening the line. A model that shortened on any 60 Hz write would
+        //     drift every cycle-counted effect on the screen.
+        //   - A *sustained* 60 Hz across the wrap point really does produce a 508-cycle line, and
+        //     code that counts cycles (Timer B/D in delay mode, or plain instruction counting)
+        //     measures those four cycles per line.
+        // Not modelled yet: the exotic lengths a switch landing exactly on the wrap point can
+        // produce (516/520-cycle lines) and the 224-cycle line a mid-line switch to high
+        // resolution gives on a colour monitor — both belong with mid-line resolution changes.
+
+        /// <summary>
+        /// Length in CPU cycles of the line being executed. Call it at the end of the line: only
+        /// the sync writes stamped at or before the wrap (cycle 508) count, so running the CPU past
+        /// that point first does not change the answer — it just saves splitting the run in two.
+        /// </summary>
+        public static int ResolveLineCycles()
+        {
+            _lineCycles = Mono ? MONO_CYCLES_PER_LINE
+                               : (Is60AtCycle(COLOR_CYCLES_PER_LINE_60) ? COLOR_CYCLES_PER_LINE_60
+                                                                        : COLOR_CYCLES_PER_LINE);
+            return _lineCycles;
+        }
+
+        /// <summary>Length of the line being executed (512 / 508 / 224). Diagnostics.</summary>
+        public static int LineCycles => _lineCycles;
+
         /// <summary>
         /// Resolve the line that just finished executing: compute the horizontal DE window
         /// (left/right borders), advance the shifter address and return the render info.
@@ -425,7 +628,10 @@ namespace ASE
             info.HasDisplay = _vDisplayOn;
 
             if (!_vDisplayOn)
-                return info;   // no fetch on this line; the shifter address is frozen
+            {
+                ApplyEndOfLineVideoRegs();   // a queued counter move still lands here
+                return info;                 // no fetch on this line; the shifter address is frozen
+            }
 
             // ---- DE start (left border) ----
             int deStart;
@@ -451,15 +657,24 @@ namespace ASE
             info.VideoAddr = _lineStartCounter;
             info.DeStart = deStart;
             info.DeStop = deStop;
+            info.HScroll = _hScrollAtLineStart;
+            info.HScrollPrefetch = _hScrollPrefetchAtLineStart;
 
             int bytes = (deStop - deStart) / 2;
 
-            // STE: extra words appended per line (line-width register $FF820F).
+            // STE: extra words appended per line (line-width register $FF820F), plus the word per
+            // plane the shifter prefetches when the fine scroll is on — those bytes come out of the
+            // counter too, so a scrolling line advances 168 bytes in low resolution, not 160.
             uint steExtra = 0;
             if (ConfigOptions.RunninConfig.STModel == ConfigOptions.STModels.STE)
-                steExtra = (uint)ASEMain._mem.Read8(Memory.STPortAdress.ST_LINEWIDTH) * 2u;
+            {
+                steExtra = (uint)_lineWidth * 2u;
+                if (_hScrollPrefetchAtLineStart)
+                    steExtra += (info.Res & 0x03) == 0 ? 8u : 4u;   // 4 planes low, 2 medium
+            }
 
-            _videoCounter = (_videoCounter + (uint)bytes + steExtra) & 0xFFFFFFu;
+            _videoCounter = (uint)(_videoCounter + (uint)bytes + steExtra + (uint)_counterDelayedOffset) & 0xFFFFFFu;
+            ApplyEndOfLineVideoRegs();   // a right-border write replaces the advance just made
             return info;
         }
 
@@ -513,7 +728,13 @@ namespace ASE
             if (words < 0) words = 0;
             else if (words > lineWords) words = lineWords;
 
-            return (_lineStartCounter + (uint)(words * 2)) & 0xFFFFFFu;
+            // STE fine scroll: the word per plane the shifter prefetches was read before DE, so
+            // for the whole displayed part of the line the counter is that much further along.
+            uint prefetch = 0;
+            if (_hScrollPrefetchAtLineStart && cycleInLine >= deStart)
+                prefetch = (_resAtLineStart & 0x03) == 0 ? 8u : 4u;
+
+            return (_lineStartCounter + prefetch + (uint)(words * 2)) & 0xFFFFFFu;
         }
     }
 }

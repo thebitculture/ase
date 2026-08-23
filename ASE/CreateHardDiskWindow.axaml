@@ -1,0 +1,148 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:svg="clr-namespace:Avalonia.Svg;assembly=Svg.Controls.Avalonia"
+        mc:Ignorable="d"
+        x:Class="ASE.CreateHardDiskWindow"
+        Title="Create hard disk image"
+        Classes="aseDialog"
+        Width="640"
+        SizeToContent="Height"
+        CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        UseLayoutRounding="True">
+
+    <Grid RowDefinitions="Auto,Auto,Auto">
+
+        <!-- Header -->
+        <Grid Grid.Row="0"
+              ColumnDefinitions="Auto,*"
+              Margin="24,20,24,16"
+              ColumnSpacing="14">
+
+            <Border Classes="dialogHeaderIcon">
+                <Svg Path="avares://ASE/Assets/Icons/hdd.svg"
+                     Width="22"
+                     Height="22"
+                     HorizontalAlignment="Center"
+                     VerticalAlignment="Center"/>
+            </Border>
+
+            <StackPanel Grid.Column="1"
+                        Spacing="2"
+                        VerticalAlignment="Center">
+                <TextBlock Classes="windowTitle"
+                           Text="Create hard disk image"/>
+                <TextBlock Classes="description"
+                           Text="An empty image for the ACSI bus, ready to be used"/>
+            </StackPanel>
+        </Grid>
+
+        <!-- Settings -->
+        <StackPanel Grid.Row="1"
+                    Margin="24,0,24,0"
+                    Spacing="12">
+
+            <!-- Destination file -->
+            <Border Classes="card">
+                <StackPanel Spacing="12">
+
+                    <StackPanel Spacing="3">
+                        <TextBlock Classes="section"
+                                   Text="Image file"/>
+                        <TextBlock Classes="description"
+                                   Text="Where the new image is written."/>
+                    </StackPanel>
+
+                    <Grid ColumnDefinitions="*,Auto"
+                          ColumnSpacing="10">
+                        <TextBox Grid.Column="0"
+                                 x:Name="TextImagePath"
+                                 PlaceholderText="harddisk.img"/>
+                        <Button Grid.Column="1"
+                                Classes="compact"
+                                Content="Browse&#x2026;"
+                                Click="OnBrowseClick"/>
+                    </Grid>
+
+                </StackPanel>
+            </Border>
+
+            <!-- Capacity -->
+            <Border Classes="card">
+                <StackPanel Spacing="12">
+
+                    <StackPanel Spacing="3">
+                        <TextBlock Classes="section"
+                                   Text="Size"/>
+                        <TextBlock Classes="description"
+                                   Text="Capacity of the whole disk. TOS hard disk drivers usually cap a single partition at 512 MB, so a bigger disk is meant to be split into several. (1GB Max)"/>
+                    </StackPanel>
+
+                    <Grid ColumnDefinitions="Auto,Auto,*"
+                          ColumnSpacing="10">
+
+                        <TextBox Grid.Column="0"
+                                 x:Name="TextSize"
+                                 Width="90"
+                                 Text="32"/>
+
+                        <TextBlock Grid.Column="1"
+                                   Classes="fieldLabel"
+                                   VerticalAlignment="Center"
+                                   Text="MB"/>
+
+                        <StackPanel Grid.Column="2"
+                                    Orientation="Horizontal"
+                                    Spacing="6"
+                                    HorizontalAlignment="Right">
+                            <TextBlock 
+                               Classes="description" VerticalAlignment="Center"
+                               Text="Suggested:"/>
+                            <Button Classes="compact" Content="16"  Tag="16"  Click="OnPresetClick"/>
+                            <Button Classes="compact" Content="32"  Tag="32"  Click="OnPresetClick"/>
+                            <Button Classes="compact" Content="64"  Tag="64"  Click="OnPresetClick"/>
+                            <Button Classes="compact" Content="128" Tag="128" Click="OnPresetClick"/>
+                            <Button Classes="compact" Content="256" Tag="256" Click="OnPresetClick"/>
+                            <Button Classes="compact" Content="512" Tag="512" Click="OnPresetClick"/>
+                        </StackPanel>
+                    </Grid>
+
+                    <TextBlock x:Name="TextGeometry"
+                               Classes="description"
+                               Text=""/>
+
+                    <StackPanel Orientation="Horizontal" Spacing="8" Margin="8">
+                        <Svg Path="avares://ASE/Assets/Icons/info-circle.svg" VerticalAlignment="Center"></Svg>
+                        <TextBlock Classes="description" VerticalAlignment="Center" TextWrapping="Wrap" MaxWidth="510"
+                                   Text="The image is formated and ASE HD driver installed automatically, but You can replace it later with your own."/>                        
+                    </StackPanel>
+
+                </StackPanel>
+            </Border>
+
+        </StackPanel>
+
+        <!-- Footer -->
+        <Border Grid.Row="2"
+                Classes="dialogFooter"
+                Margin="0,18,0,0">
+
+            <StackPanel Orientation="Horizontal"
+                        HorizontalAlignment="Right"
+                        Spacing="10">
+
+                <Button Classes="dialogAction"
+                        Content="Cancel"
+                        Click="OnCancelClick"/>
+
+                <Button Classes="accent dialogAction"
+                        Content="Create"
+                        Click="OnCreateClick"/>
+
+            </StackPanel>
+        </Border>
+
+    </Grid>
+</Window>

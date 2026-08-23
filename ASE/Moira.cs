@@ -99,15 +99,27 @@ namespace ASE
         /// breakpoint is reached (check <see cref="BreakpointWasHit"/> right after the call).
         /// </summary>
         /// <remarks>This method catches all exceptions thrown by the emulator loop since it executes in a different thread.</remarks>
+        const int MaxReportedBusFaults = 5;
+        int _busFaults;
+
         public void RunForCycles(long cycles)
         {
             try
             {
                 Native.moira_execute_cycles(_h, cycles);
             }
-            catch
+            catch (Exception ex)
             {
-                Console.WriteLine("Not controlled exception in Moira");
+                // The exception was thrown inside one of the bus callbacks and crossed the native
+                // boundary. Say WHAT it was: a bare "something failed" here is unusable, and this
+                // is the only place the failure is ever seen. Reported in full the first few times
+                // (an exception per instruction would otherwise scroll the console away), then
+                // counted.
+                _busFaults++;
+                if (_busFaults <= MaxReportedBusFaults)
+                    Console.WriteLine($"Not controlled exception in Moira: {ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}");
+                else if (_busFaults == MaxReportedBusFaults + 1)
+                    Console.WriteLine("Not controlled exception in Moira: further occurrences suppressed");
             }
         }
 

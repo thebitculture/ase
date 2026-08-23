@@ -1,4 +1,4 @@
-using TinyDialogsNet;
+﻿using TinyDialogsNet;
 
 namespace ASE
 {
@@ -33,6 +33,29 @@ namespace ASE
             try
             {
                 return await Task.Run(() => TinyDialogs.OpenFileDialog(title, defaultPath, false, null));
+            }
+            finally
+            {
+                _open = false;
+            }
+        }
+
+        /// <summary>
+        /// Save dialog. Same macOS treatment as <see cref="OpenFile"/>: run off the UI thread
+        /// (tinyfd blocks the caller) and drop the filter, which AppleScript resolves as UTIs.
+        /// </summary>
+        public static async Task<(bool Canceled, string Path)> SaveFile(string title, string defaultPath, FileFilter filter)
+        {
+            if (!OperatingSystem.IsMacOS())
+                return TinyDialogs.SaveFileDialog(title, defaultPath, filter);
+
+            if (_open)
+                return (true, "");
+
+            _open = true;
+            try
+            {
+                return await Task.Run(() => TinyDialogs.SaveFileDialog(title, defaultPath, null));
             }
             finally
             {

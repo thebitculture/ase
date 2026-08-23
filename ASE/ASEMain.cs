@@ -1,7 +1,16 @@
 ﻿/*
  * 
  * ASE Main loop
+ *
+ * This is the main loop, along with window management and interaction with the operating system.
  * 
+ * At the beginning of the project, this file was quite simple and was structured more for educational purposes
+ * than for compatibility. It has now become one of the most essential parts of the emulator, and it is fairly complex.
+ * 
+ * Like the rest of the project, it is heavily commented thanks to AI from small pieces of clues, since I’m building
+ * the entire emulator as I go, without much planning, and I need to keep everything well documented here.
+ * My memory isn’t very good.
+ *
  * Official repository 👉 https://github.com/thebitculture/ase
  * 
  */
@@ -96,6 +105,23 @@ namespace ASE
         /// seen when the machine resumes instead of the window expiring in dead time.</summary>
         public static long VblCount => Volatile.Read(ref _vblCount);
 
+        // Hard disk activity light. Unlike the floppy — whose commands are rare enough that the
+        // FDC can post UI work for each one — a hard disk can serve thousands of accesses per
+        // second (a program reading a file in a loop), so the emulation side only stamps the
+        // current VBL here and MainWindow.RefreshDriveLed reads it once per frame. Measured in
+        // VBLs rather than wall clock so the light freezes with a paused machine.
+        static long _hdActivityVbl = long.MinValue / 2;
+
+        /// <summary>How long the hard disk light stays lit after the last access (~200 ms).</summary>
+        const long HdActivityHoldVbls = 10;
+
+        /// <summary>Called by the hard disk emulations (ACSI commands, served GEMDOS file
+        /// calls) from the emulation thread. Just a stamp: no UI work, no allocation.</summary>
+        public static void SignalHardDiskActivity() => Volatile.Write(ref _hdActivityVbl, VblCount);
+
+        /// <summary>True while the hard disk light should be on.</summary>
+        public static bool HardDiskActive => VblCount - Volatile.Read(ref _hdActivityVbl) < HdActivityHoldVbls;
+
         public static bool IsMouseCaptured = false;
         public static MainWindow MainWindow;
 
@@ -188,8 +214,11 @@ namespace ASE
             {
                 freq = ConfigOptions.RunninConfig.SampleRate,
                 format = SDL.AUDIO_F32SYS,
-                channels = 1,               // Mono
-                samples = 1024,             // Buffer size
+                // Interleaved stereo. The PSG is mono on real hardware, but the STE's DMA
+                // sound has two channels and the LMC1992 an independent volume for each,
+                // and folding them together here threw all of that away.
+                channels = 2,
+                samples = 1024,             // Buffer size, in frames (2 floats each)
                 callback = YM2149.AudioCallback
             };
 
@@ -297,18 +326,21 @@ namespace ASE
                 if (!IsPaused)
                 {
                     /*
-                     * The PAL Atari ST has 313 scanlines per frame. Each lasts 512 CPU cycles at
-                     * 8 MHz (64 us): 448 active + 64 H-Blank. Sync ($FF820A) and resolution
+                     * The PAL Atari ST has 313 scanlines per frame. A 50 Hz line lasts 512 CPU
+                     * cycles at 8 MHz (64 us) and a 60 Hz one 508. Sync ($FF820A) and resolution
                      * ($FF8260) writes are timestamped by their CPU clock as the chunks run, so
                      * VideoTiming can resolve the Display Enable window — and therefore the
                      * top/bottom/left/right borders and the live Video Address Pointer — per line.
                      */
-                    // Absolute clock at the start of the frame. Every line's run target is taken
-                    // from this base (lineBase + N*512), so RunForCycles' per-instruction overshoot
-                    // is absorbed line to line instead of accumulating — the video boundaries stay
-                    // locked to 512 cycles/line, which Spectrum 512's screen-wide cycle-counted
+                    // Absolute clock at the start of the frame, and the running start of the
+                    // current line. Every run target inside a line is taken from lineBase, which
+                    // advances by EXACT line lengths (512 at 50 Hz, 508 at 60 Hz, 224 in mono) and
+                    // never by the real CPU clock, so RunForCycles' per-instruction overshoot is
+                    // absorbed line to line instead of accumulating — that is what keeps the video
+                    // boundaries locked to the cycle grid Spectrum 512's screen-wide cycle-counted
                     // palette routine relies on (otherwise its colours drift down the picture).
                     long frameClockBase = CPU._moira.Clock;
+                    long lineBase = frameClockBase;
                     bool hitBreakpoint = false;
 
                     for (int scanline = 0; scanline < VideoTiming.SCANLINES_PER_FRAME; scanline++)
@@ -321,36 +353,51 @@ namespace ASE
                         DrainSdlEvents();
                         profileMark = FrameProfiler.AddInput(profileMark);
 
-                        long lineBase = frameClockBase + (long)scanline * VideoTiming.CYCLES_PER_LINE;
                         VideoTiming.StartLine(scanline, lineBase);
-
-                        int ElapsedCycles = 0;
 
                         // Run the CPU until the Display Enable (DE) signal drops. This is where
                         // Timer B and the HBL MUST fire (cycle 376 at 50 Hz colour, 184 in mono).
                         int cyclesToDEStop = VideoTiming.DE_STOP_CYCLE;
                         if (RunCpuUntil(lineBase + cyclesToDEStop)) { hitBreakpoint = true; break; }
-                        ElapsedCycles += cyclesToDEStop;
 
                         // Fire Timer B exactly when Display Enable drops (like the real hardware).
-                        // Only on lines that actually display (colour: 63..262; mono: the 400 active
-                        // lines starting at RENDER_TOP_LINE).
-                        bool isVisibleLine = VideoTiming.Mono
-                            ? (scanline >= VideoTiming.RENDER_TOP_LINE && scanline < VideoTiming.RENDER_TOP_LINE + VideoTiming.BUFFER_HEIGHT)
-                            : (scanline >= 63 && scanline < 263);
-                        if (isVisibleLine)
-                        {
-                            _mfp.TickTimerA_EventCount();
+                        // Only on lines that actually display, and that is the DE the GLUE is
+                        // producing right now, NOT the fixed 63..262 window: with the top border
+                        // opened the display really starts at line 34 and with the bottom one
+                        // opened it runs past 263, and Timer B (whose event input is wired to DE)
+                        // counts those extra lines on real hardware. Border-opening code relies
+                        // on it — the classic "open both borders" routine arms Timer B for line 228
+                        // counted from the *opened* top border (229 displayed lines), so a counter
+                        // that only ever sees 200 events never fires and the bottom border stays.
+                        //
+                        // Timer B ONLY. It is the MFP's TBI pin that the GLUE's Display Enable
+                        // drives; TAI is wired to the monochrome-detect line, and on the STE that
+                        // same line also carries the DMA sound's XSINT — which is why
+                        // STEDmaSound.SetXsint drives GPIP7 and Timer A's event input together.
+                        // Ticking Timer A here as well fed it ~200 events per video frame: a
+                        // replayer that arms Timer A in event-count mode to be told "end of sound
+                        // frame" (the standard STE double-buffer scheme) was interrupted on every
+                        // displayed line and reloaded the frame pointer continuously, so digital
+                        // sound came out as noise. Hatari splits it the same way — video.c only
+                        // calls MFP_TimerB_EventCount, dmaSnd.c only MFP_TimerA_EventCount.
+                        if (VideoTiming.DisplayEnabledNow())
                             _mfp.TickTimerB_EventCount();
-                        }
 
                         // Fire the HBL right at the start of the H-Blank
                         _mfp.irqController.RaiseHBL();
 
-                        // Run the rest of the scanline (the remaining 136 cycles of H-Blank / right border)
-                        int cyclesToLineEnd = VideoTiming.CYCLES_PER_LINE - cyclesToDEStop;
+                        // Run the rest of the scanline (H-Blank / right border). Its length is NOT
+                        // a constant: the GLUE's horizontal counter wraps at 508 cycles in 60 Hz
+                        // and 512 in 50 Hz, so the frequency in effect at the wrap point decides.
+                        // The CPU is run to the longest a line can be and the length is resolved
+                        // afterwards — ResolveLineCycles only looks at the sync writes stamped at
+                        // or before the wrap, so the answer is the same as stopping there, without
+                        // the extra sync point per line that splitting the run would cost. On a
+                        // 508-cycle line that leaves the CPU up to 4 cycles into the next line,
+                        // which is what lineBase (below) absorbs, exactly like the per-instruction
+                        // overshoot RunForCycles already produces.
                         if (RunCpuUntil(lineBase + VideoTiming.CYCLES_PER_LINE)) { hitBreakpoint = true; break; }
-                        ElapsedCycles += cyclesToLineEnd;
+                        int lineCycles = VideoTiming.ResolveLineCycles();
 
                         // Everything above (both CPU slices and the chips they drive) is charged
                         // to 'cpu'; what follows, to 'video'.
@@ -359,8 +406,8 @@ namespace ASE
                         // Sync the remaining peripherals (the WD1772 is synced per slice
                         // inside RunCpuUntil: the DMA delivery of STX disks needs a
                         // granularity of a few cycles)
-                        ACIA.Sync(ElapsedCycles);
-                        MidiAcia.Sync(ElapsedCycles);
+                        ACIA.Sync(lineCycles);
+                        MidiAcia.Sync(lineCycles);
 
                         // Resolve the line (open borders, etc.)
                         VideoTiming.LineInfo line = VideoTiming.ResolveLine();
@@ -369,6 +416,12 @@ namespace ASE
                             AtariStRenderer.BlitLineWithBorders(_renderBuffer, line);
 
                         FrameProfiler.AddVideo(profileMark);
+
+                        // Next line starts exactly one (508- or 512-cycle) line later. This walks
+                        // in EXACT line lengths, never off the real CPU clock, so both the 60 Hz
+                        // shortening above and RunForCycles' per-instruction overshoot are absorbed
+                        // line to line instead of accumulating down the frame.
+                        lineBase += lineCycles;
                     }
 
                     if (hitBreakpoint)
@@ -404,6 +457,11 @@ namespace ASE
                     _mfp.irqController.RaiseVBL();
                     Volatile.Write(ref _vblCount, _vblCount + 1);
 
+                    // Steer the audio queue back towards its target latency. Once per frame is
+                    // the right granularity: it reacts within a frame of a stall without the
+                    // synthesis path having to look at the queue at all.
+                    _ym.UpdateAudioFlowControl();
+
                     // The YM->MT-32 voice mapper samples the PSG once per VBL — the same
                     // 50 Hz grid YM register dumps use — and turns it into MIDI for the
                     // built-in module (a near no-op when nothing is mapped).
@@ -414,7 +472,18 @@ namespace ASE
 
                     MainWindow.RefreshDriveLed();
 
-                    next += frame;
+                    // The wall-clock budget for this frame follows the cycles it ACTUALLY ran,
+                    // not the fixed period: a screen held at 60 Hz gives 508-cycle lines, so the
+                    // same 313 lines come out 1252 cycles shorter than the 512-cycle ones
+                    // FRAME_SECONDS is derived from. Pacing those frames at the 50 Hz period runs
+                    // the emulated CPU ~0.8% slow — and the whole audio pipeline is clocked off
+                    // that CPU clock (YM2149.Sync, and the STE DMA sound engine it steps), so the
+                    // emulator would feed the audio device slightly fewer samples than it eats,
+                    // for a permanent underrun. 'frame' stays the fallback for a frame that never
+                    // ran its scanlines. lineBase - frameClockBase is the sum of the exact line
+                    // lengths, so this is the emulated duration of the frame to the cycle.
+                    long frameCycles = lineBase - frameClockBase;
+                    next += frameCycles > 0 ? frameCycles / 8_000_000.0 : frame;
 
                     if (!ConfigOptions.RunninConfig.MaxSpeed)
                     {
@@ -500,7 +569,15 @@ namespace ASE
                 // After the peripherals have caught up with the executed cycles, so the machine
                 // state the debugger shows is consistent with the CPU clock.
                 if (CPU._moira.BreakpointWasHit)
+                {
+                    // The GEMDOS hard drive rides on Moira breakpoints planted in its cartridge
+                    // code: those are serviced here and the machine keeps running. Anything
+                    // else is a user breakpoint and parks the machine in the debugger.
+                    if (GemdosHD.TryHandleBreakpoint(CPU._moira.PC0))
+                        continue;
+
                     return true;
+                }
             }
 
             return false;
@@ -693,6 +770,11 @@ namespace ASE
             if (!CPU.InitCpu())
                 return false;
 
+            // Hard disks attach at power-on, like the real hardware: the ACSI image first
+            // (its partition count decides the GEMDOS drive's letter), then the host folder.
+            Acsi.Initialize();
+            GemdosHD.Initialize();
+
             // What the MIDI ACIA's DIN sockets are plugged into is decided at power-on,
             // so a reset is also what applies a MIDI configuration change (and what
             // power-cycles the built-in MT-32).
@@ -807,6 +889,7 @@ namespace ASE
             // After the audio device: with the callback gone, disposing the MT-32 (and
             // closing any host MIDI ports) cannot race a render.
             MidiManager.Shutdown();
+            Acsi.Shutdown();    // the emulation thread is joined: no command can be in flight
             if (GamepadController != nint.Zero)
             {
                 SDL.SDL_GameControllerClose(GamepadController);
@@ -1054,6 +1137,17 @@ namespace ASE
                     return;
                 }
 
+                // Alt+Enter toggles full screen — the emulator convention, and one of the few
+                // combinations no ST program wants (Esc and F11 are taken, by games and by the
+                // snapshot). Consumed here so the ST never sees the Return.
+                if ((key.scancode == SDL.SDL_Scancode.SDL_SCANCODE_RETURN ||
+                     key.scancode == SDL.SDL_Scancode.SDL_SCANCODE_KP_ENTER) &&
+                    (key.mod & SDL.SDL_Keymod.KMOD_ALT) != 0)
+                {
+                    Dispatcher.UIThread.Post(() => MainWindow.ToggleFullScreen(), DispatcherPriority.Input);
+                    return;
+                }
+
                 // F11 saves a machine snapshot; Shift+F11 saves a PNG screenshot. Posted to the
                 // UI thread because the save parks the emulation thread at a frame boundary
                 // (RunWhilePaused) and this handler runs on that very thread.
@@ -1127,24 +1221,17 @@ namespace ASE
                     // mouse fires far more often than the 7812.5 baud line can carry.
                     ACIA.MouseMotion(e.motion.xrel, e.motion.yrel);
                 }
-                else if (e.type == SDL.SDL_EventType.SDL_MOUSEBUTTONDOWN)
+                else if (e.type == SDL.SDL_EventType.SDL_MOUSEBUTTONDOWN ||
+                         e.type == SDL.SDL_EventType.SDL_MOUSEBUTTONUP)
                 {
+                    // ACIA.MouseButtonChanged decides what the IKBD reports (relative packet,
+                    // absolute packet, or nothing) and edge-guards the press: the same click
+                    // also reaches the Avalonia overlay handler on Windows.
+                    bool down = e.type == SDL.SDL_EventType.SDL_MOUSEBUTTONDOWN;
                     if (e.button.button == SDL.SDL_BUTTON_LEFT)
-                        ACIA._mouseButtons |= 0x02; // Bit 1
-                    if (e.button.button == SDL.SDL_BUTTON_RIGHT)
-                        ACIA._mouseButtons |= 0x01; // Bit 0
-
-                    // Force a mouse update on the ST
-                    ACIA.SendMousePacket(0, 0);
-                }
-                else if (e.type == SDL.SDL_EventType.SDL_MOUSEBUTTONUP)
-                {
-                    if (e.button.button == SDL.SDL_BUTTON_LEFT)
-                        ACIA._mouseButtons &= ~0x02; // Clear Bit 1
-                    if (e.button.button == SDL.SDL_BUTTON_RIGHT)
-                        ACIA._mouseButtons &= ~0x01; // Clear Bit 0
-
-                    ACIA.SendMousePacket(0, 0);
+                        ACIA.MouseButtonChanged(left: true, pressed: down);
+                    else if (e.button.button == SDL.SDL_BUTTON_RIGHT)
+                        ACIA.MouseButtonChanged(left: false, pressed: down);
                 }
             }
         }

@@ -119,50 +119,63 @@ namespace ASE
                 int tx = (li.DeStart - VideoTiming.VISIBLE_LEFT_CYCLE) * 2;
                 uint srcLine = li.VideoAddr;
 
-                int dePixel = 0;   // shifter pixel index since DE start (low: 1/cycle, medium: 2/cycle)
-                for (int group = 0; group < groups; group++)
+                // STE fine scroll: the shifter prefetched one extra word per plane before the
+                // display window, and the picture starts li.HScroll pixels into it. So the source
+                // pixel index runs ahead of the output one by exactly that many pixels, and the
+                // 16-pixel group is re-read whenever it rolls over — with no scroll (every ST, and
+                // an STE that is not scrolling) this is the plain group-by-group walk it replaces.
+                int scroll = li.HScroll & 0x0F;
+                int outPixels = groups * 16;
+
+                int srcGroup = -1;
+                ushort w0 = 0, w1 = 0, w2 = 0, w3 = 0;
+
+                for (int p = 0; p < outPixels; p++)
                 {
-                    ushort w0 = ReadBEWord(srcLine, group, planes, 0);
-                    ushort w1 = planes > 1 ? ReadBEWord(srcLine, group, planes, 1) : (ushort)0;
-                    ushort w2 = planes > 2 ? ReadBEWord(srcLine, group, planes, 2) : (ushort)0;
-                    ushort w3 = planes > 3 ? ReadBEWord(srcLine, group, planes, 3) : (ushort)0;
-
-                    for (int bit = 15; bit >= 0; bit--)
+                    int srcPixel = p + scroll;
+                    int group = srcPixel >> 4;
+                    if (group != srcGroup)
                     {
-                        // Apply any palette writes that land at or before this pixel's DE cycle.
-                        // Cheap no-op for ordinary frames, where the line has no mid-line writes.
-                        if (evIdx < palCount)
-                        {
-                            int cyc = li.DeStart + (low ? dePixel : (dePixel >> 1));
-                            while (evIdx < palCount && palEv[evIdx].Cycle <= cyc)
-                            {
-                                int off = palEv[evIdx].ByteOffset;
-                                _work[off] = palEv[evIdx].Val;
-                                int ci = off >> 1;
-                                _pal[ci] = StColorToArgb8888((ushort)((_work[ci * 2] << 8) | _work[ci * 2 + 1]));
-                                evIdx++;
-                            }
-                        }
+                        srcGroup = group;
+                        w0 = ReadBEWord(srcLine, group, planes, 0);
+                        w1 = planes > 1 ? ReadBEWord(srcLine, group, planes, 1) : (ushort)0;
+                        w2 = planes > 2 ? ReadBEWord(srcLine, group, planes, 2) : (ushort)0;
+                        w3 = planes > 3 ? ReadBEWord(srcLine, group, planes, 3) : (ushort)0;
+                    }
+                    int bit = 15 - (srcPixel & 0x0F);
 
-                        int idx = ((w0 >> bit) & 1)
-                                | (((w1 >> bit) & 1) << 1)
-                                | (((w2 >> bit) & 1) << 2)
-                                | (((w3 >> bit) & 1) << 3);
-                        uint color = _pal[idx];
+                    // Apply any palette writes that land at or before this pixel's DE cycle.
+                    // Cheap no-op for ordinary frames, where the line has no mid-line writes.
+                    if (evIdx < palCount)
+                    {
+                        int cyc = li.DeStart + (low ? p : (p >> 1));
+                        while (evIdx < palCount && palEv[evIdx].Cycle <= cyc)
+                        {
+                            int off = palEv[evIdx].ByteOffset;
+                            _work[off] = palEv[evIdx].Val;
+                            int ci = off >> 1;
+                            _pal[ci] = StColorToArgb8888((ushort)((_work[ci * 2] << 8) | _work[ci * 2 + 1]));
+                            evIdx++;
+                        }
+                    }
 
-                        if (low)
-                        {
-                            if ((uint)tx < (uint)width) buffer[rowBase + tx] = color;
-                            int tx1 = tx + 1;
-                            if ((uint)tx1 < (uint)width) buffer[rowBase + tx1] = color;
-                            tx += 2;
-                        }
-                        else
-                        {
-                            if ((uint)tx < (uint)width) buffer[rowBase + tx] = color;
-                            tx += 1;
-                        }
-                        dePixel++;
+                    int idx = ((w0 >> bit) & 1)
+                            | (((w1 >> bit) & 1) << 1)
+                            | (((w2 >> bit) & 1) << 2)
+                            | (((w3 >> bit) & 1) << 3);
+                    uint color = _pal[idx];
+
+                    if (low)
+                    {
+                        if ((uint)tx < (uint)width) buffer[rowBase + tx] = color;
+                        int tx1 = tx + 1;
+                        if ((uint)tx1 < (uint)width) buffer[rowBase + tx1] = color;
+                        tx += 2;
+                    }
+                    else
+                    {
+                        if ((uint)tx < (uint)width) buffer[rowBase + tx] = color;
+                        tx += 1;
                     }
                 }
             }
@@ -170,7 +183,10 @@ namespace ASE
             private static unsafe ushort ReadBEWord(uint srcLine, int group, int planes, int plane)
             {
                 uint offsetBytes = (uint)((group * planes + plane) * 2);
-                return BigEndian.Read16(srcLine + offsetBytes);
+                // Shifter-style fetch: no bus errors, no side effects. See Memory.ReadVideoWord —
+                // reading this through the CPU bus plants spurious faults whenever the video
+                // counter points outside RAM, which takes the emulated machine down.
+                return ASEMain._mem.ReadVideoWord(srcLine + offsetBytes);
             }
 
             /// <summary>

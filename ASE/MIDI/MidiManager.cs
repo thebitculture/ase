@@ -187,11 +187,13 @@ namespace ASE
         }
 
         /// <summary>
-        /// Folds the built-in MT-32's output over the PSG mix (SDL audio-callback
-        /// thread). A no-op unless the module is active. Never throws — an exception
-        /// leaving the SDL callback would kill the process.
+        /// Mixes the built-in MT-32's output over the PSG mix (SDL audio-callback thread).
+        /// A no-op unless the module is active. Never throws — an exception leaving the SDL
+        /// callback would kill the process.
         /// </summary>
-        public static void MixAudio(float[] buffer, int samples)
+        /// <param name="buffer">Interleaved stereo output buffer, two floats per frame.</param>
+        /// <param name="frames">Number of frames to render, i.e. half the buffer's floats.</param>
+        public static void MixAudio(float[] buffer, int frames)
         {
             var mt32 = _mt32;
             if (mt32 == null)
@@ -199,7 +201,7 @@ namespace ASE
 
             try
             {
-                mt32.MixInto(buffer, samples);
+                mt32.MixInto(buffer, frames);
             }
             catch
             {

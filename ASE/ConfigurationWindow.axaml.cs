@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Animation;
 using Avalonia.Animation.Easings;
 using Avalonia.Controls;
@@ -102,6 +102,14 @@ namespace ASE
             // effects come up already off.
             ToggleEffects.IsChecked = !Config.ConfigOptions.RunninConfig.DisableCrtEffects;
             UpdateEffectsSlidersEnabled();
+
+            // Hard disk tab: edited locally, committed on OK (with a reset — the disks
+            // attach at power-on), so Cancel has nothing to restore.
+            EnableGemDos.IsChecked = Config.ConfigOptions.RunninConfig.GemdosDriveEnabled;
+            TextGEMDOSDir.Text = Config.ConfigOptions.RunninConfig.GemdosDrivePath;
+            EnableACSI.IsChecked = Config.ConfigOptions.RunninConfig.AcsiImageEnabled;
+            TextACSIDir.Text = Config.ConfigOptions.RunninConfig.AcsiImagePath;
+            ChkBootFromHardDisk.IsChecked = Config.ConfigOptions.RunninConfig.BootFromHardDisk;
 
             // Directories tab: edited locally and committed to the config on OK only,
             // so Cancel discards the changes without needing backup fields
@@ -285,6 +293,36 @@ namespace ASE
             if (mt32Selected && mt32Roms != Config.ConfigOptions.RunninConfig.MT32Rompath)
                 ForceReset = true;
 
+            // Hard disks: validate what is switched on before committing anything. An enabled
+            // option with a bad path would only report the failure to the console at power-on,
+            // and the user would be left wondering where the drive went.
+            string gemdosDir = (TextGEMDOSDir.Text ?? "").Trim();
+            string acsiImage = (TextACSIDir.Text ?? "").Trim();
+            bool gemdosOn = EnableGemDos.IsChecked == true;
+            bool acsiOn = EnableACSI.IsChecked == true;
+
+            if (gemdosOn && !Directory.Exists(gemdosDir))
+            {
+                TinyDialogs.MessageBox("Error", "The GEMDOS drive needs an existing folder of this computer to mount.", MessageBoxDialogType.Ok, MessageBoxIconType.Error, MessageBoxButton.Ok);
+                return;
+            }
+
+            if (acsiOn && !CheckAcsiImage(acsiImage))
+                return;
+
+            // The disks are attached at power-on (the ACSI partition count even decides the
+            // GEMDOS drive letter), so any change here needs a reset.
+            bool bootFromHd = ChkBootFromHardDisk.IsChecked == true;
+
+            if (gemdosOn != Config.ConfigOptions.RunninConfig.GemdosDriveEnabled ||
+                acsiOn != Config.ConfigOptions.RunninConfig.AcsiImageEnabled ||
+                bootFromHd != Config.ConfigOptions.RunninConfig.BootFromHardDisk ||
+                (gemdosOn && gemdosDir != Config.ConfigOptions.RunninConfig.GemdosDrivePath) ||
+                (acsiOn && acsiImage != Config.ConfigOptions.RunninConfig.AcsiImagePath))
+            {
+                ForceReset = true;
+            }
+
             if (ForceReset)
             {
                 MessageBoxButton result = TinyDialogs.MessageBox("Reset", $"ST must be reset to apply changes.", MessageBoxDialogType.YesNo, MessageBoxIconType.Warning, MessageBoxButton.Yes);
@@ -301,6 +339,13 @@ namespace ASE
             Config.ConfigOptions.RunninConfig.GamepadButtonRS = (Config.ConfigOptions.GamepadButtonsMapping)ComboRS.SelectedIndex;
             Config.ConfigOptions.RunninConfig.GamepadButtonLB = (Config.ConfigOptions.GamepadButtonsMapping)ComboLB.SelectedIndex;
             Config.ConfigOptions.RunninConfig.GamepadButtonRB = (Config.ConfigOptions.GamepadButtonsMapping)ComboRB.SelectedIndex;
+
+            // Save the hard disks (validated above)
+            Config.ConfigOptions.RunninConfig.GemdosDriveEnabled = gemdosOn;
+            Config.ConfigOptions.RunninConfig.GemdosDrivePath = gemdosDir;
+            Config.ConfigOptions.RunninConfig.AcsiImageEnabled = acsiOn;
+            Config.ConfigOptions.RunninConfig.AcsiImagePath = acsiImage;
+            Config.ConfigOptions.RunninConfig.BootFromHardDisk = bootFromHd;
 
             // Save directories (empty screenshots/snapshots fall back to the defaults
             // next to config.json at save time)
@@ -557,6 +602,175 @@ namespace ASE
         /// </summary>
         private void SliderMt32Volume_OnValueChanged(object sender, RangeBaseValueChangedEventArgs e)
             => Config.ConfigOptions.RunninConfig.Mt32Volume = (int)SliderMt32Volume.Value;
+
+        // ==================== Hard disk tab ====================
+
+        public void OnBrowseGemdosDirClick(object sender, RoutedEventArgs e)
+            => FileUtils.BrowseDirectory(TextGEMDOSDir, "Select the folder to mount as a GEMDOS hard drive");
+
+        public async void OnBrowseAcsiImageClick(object sender, RoutedEventArgs e)
+        {
+            var (canceled, selpath) = await Dialogs.OpenFile("Select ACSI hard disk image",
+                Config.DialogStartFolder(Path.GetDirectoryName(TextACSIDir.Text ?? "") ?? ""),
+                new FileFilter("Hard disk image", ["*.img", "*.hd", "*.acsi", "*.raw", "*.ahd"]));
+
+            if (canceled || selpath.Count() != 1)
+                return;
+
+            string path = selpath.First();
+
+            if (!CheckAcsiImage(path))
+                return;
+
+            TextACSIDir.Text = path;
+            EnableACSI.IsChecked = true;
+        }
+
+        /// <summary>
+        /// Opens the image creator and, when it produces one, points the ACSI field at it and
+        /// switches the disk on. The image is attached at the next power-on, which OK arranges:
+        /// the path now differs from the running config, so the reset prompt appears.
+        /// </summary>
+        public async void OnCreateAcsiImageClick(object sender, RoutedEventArgs e)
+        {
+            var window = new CreateHardDiskWindow(TextACSIDir.Text ?? "");
+            string created = await window.ShowDialog<string>(this);
+
+            if (string.IsNullOrEmpty(created))
+                return;
+
+            TextACSIDir.Text = created;
+            EnableACSI.IsChecked = true;
+        }
+
+        /// <summary>
+        /// Writes the ASE HD driver to an image that already exists. Everything inside the
+        /// partition is left alone — only the boot sector and the reserved sectors below the
+        /// partition are rewritten — but that is still enough to displace another vendor's
+        /// driver, so the confirmation spells out what is being replaced before anything is
+        /// written. <see cref="AtariHdDriver.Examine"/> refuses outright when the driver would
+        /// not fit before the partition, which is how a disk laid out by another tool is kept
+        /// from having its file system overwritten.
+        /// </summary>
+        public async void OnReinstallDriverClick(object sender, RoutedEventArgs e)
+        {
+            string path = (TextACSIDir.Text ?? "").Trim();
+
+            if (string.IsNullOrEmpty(path) || !File.Exists(path))
+            {
+                await Dialogs.MessageBox("Reinstall driver",
+                    "Choose the ACSI image first: the driver is written to the image in the box above.",
+                    MessageBoxDialogType.Ok, MessageBoxIconType.Error, MessageBoxButton.Ok);
+                return;
+            }
+
+            if (Acsi.EmulationOn && SamePathAsRunning(path))
+            {
+                await Dialogs.MessageBox("Reinstall driver",
+                    "That image is attached to the running machine. Reset with the ACSI disk " +
+                    "switched off, or pick another file.",
+                    MessageBoxDialogType.Ok, MessageBoxIconType.Error, MessageBoxButton.Ok);
+                return;
+            }
+
+            if (AtariHdDriver.Unavailable is string driverProblem)
+            {
+                await Dialogs.MessageBox("Reinstall driver",
+                    $"The ASE HD driver cannot be installed: {driverProblem}.",
+                    MessageBoxDialogType.Ok, MessageBoxIconType.Error, MessageBoxButton.Ok);
+                return;
+            }
+
+            AtariHdDriver.DiskInfo info = AtariHdDriver.Examine(path);
+
+            if (!info.Valid)
+            {
+                await Dialogs.MessageBox("Reinstall driver",
+                    $"The driver cannot be installed on '{Path.GetFileName(path)}':\n\n{info.Problem}",
+                    MessageBoxDialogType.Ok, MessageBoxIconType.Error, MessageBoxButton.Ok);
+                return;
+            }
+
+            long mb = info.PartitionSectors / 2048;
+
+            string message =
+                $"Reinstall the ASE HD driver on '{Path.GetFileName(path)}'?\n\n" +
+                $"The boot sector and the driver area of this image will be replaced by the " +
+                $"ASE HD driver.\n\n" +
+                $"If the disk currently has another driver installed (ICD Pro, PPutnik, " +
+                $"HDDriver or any other), IT WILL BE OVERWRITTEN and the disk will boot with " +
+                $"the ASE HD driver from now on.\n\n" +
+                $"Partition: starts at sector {info.PartitionStart}, {info.PartitionSectors:N0} " +
+                $"sectors ({mb} MB), type {info.PartitionId}.\n";
+
+            if (info.PartitionCount > 1)
+                message += $"\nThis disk has {info.PartitionCount} primary partitions. The ASE HD " +
+                           $"driver mounts every GEM/BGM partition it finds, from C: up.\n";
+
+            if (info.AlreadyOurs)
+                message += "\nThis disk already carries the ASE HD driver; it will be updated to " +
+                           "the version in this build.\n";
+
+            message += "\nThe files stored in the partition are not touched.";
+
+            var answer = await Dialogs.MessageBox("Reinstall driver", message,
+                MessageBoxDialogType.YesNo, MessageBoxIconType.Warning, MessageBoxButton.No);
+
+            if (answer != MessageBoxButton.Yes)
+                return;
+
+            if (!AtariHdDriver.Reinstall(path, out string error))
+            {
+                await Dialogs.MessageBox("Reinstall driver",
+                    $"The driver could not be installed:\n\n{error}",
+                    MessageBoxDialogType.Ok, MessageBoxIconType.Error, MessageBoxButton.Ok);
+                return;
+            }
+
+            await Dialogs.MessageBox("Reinstall driver",
+                $"The ASE HD driver is installed on '{Path.GetFileName(path)}'.\n\n" +
+                "Switch 'Boot from the hard disk' on and reset for the disk to boot itself.",
+                MessageBoxDialogType.Ok, MessageBoxIconType.Question, MessageBoxButton.Ok);
+        }
+
+        static bool SamePathAsRunning(string path)
+        {
+            try
+            {
+                string running = Config.ConfigOptions.RunninConfig.AcsiImagePath;
+                return !string.IsNullOrWhiteSpace(running) &&
+                       string.Equals(Path.GetFullPath(path), Path.GetFullPath(running),
+                                     StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// An ACSI image is a raw dump of the disk's sectors, so the only thing that can be
+        /// checked without mounting it is that its size is a whole number of 512-byte sectors.
+        /// Reports the problem and returns false when it is not usable.
+        /// </summary>
+        static bool CheckAcsiImage(string path)
+        {
+            if (!File.Exists(path))
+            {
+                TinyDialogs.MessageBox("Error", $"The ACSI image '{path}' does not exist.", MessageBoxDialogType.Ok, MessageBoxIconType.Error, MessageBoxButton.Ok);
+                return false;
+            }
+
+            long size = new FileInfo(path).Length;
+
+            if (size == 0 || (size % Acsi.SectorSize) != 0)
+            {
+                TinyDialogs.MessageBox("Error", $"'{Path.GetFileName(path)}' is not a valid hard disk image: its size must be a non-zero multiple of {Acsi.SectorSize} bytes.", MessageBoxDialogType.Ok, MessageBoxIconType.Error, MessageBoxButton.Ok);
+                return false;
+            }
+
+            return true;
+        }
 
         public void OnBrowseScreenshotsDirClick(object sender, RoutedEventArgs e) => FileUtils.BrowseDirectory(TextScreenshotsDir, "Select screenshots directory");
         public void OnBrowseSnapshotsDirClick(object sender, RoutedEventArgs e) => FileUtils.BrowseDirectory(TextSnapshotsDir, "Select snapshots directory");

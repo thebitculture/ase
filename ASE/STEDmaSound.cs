@@ -133,19 +133,33 @@ namespace ASE
         }
 
         /// <summary>
-        /// Mono mix of the current DMA sample (-1..1), already scaled by the LMC1992 volumes.
-        /// Consumed by the YM2149 mixer when generating output samples.
+        /// Current DMA sample on the left output (-1..1), already scaled by the LMC1992 left
+        /// channel and master volumes. Consumed by the YM2149 mixer when generating output
+        /// samples. See <see cref="CurrentSampleRight"/> for the other half.
+        /// <para>
+        /// The two channels are kept apart all the way to the sound card: in stereo mode
+        /// (bit 7 of $FF8921 clear) the frame holds interleaved left/right bytes and the
+        /// LMC1992 has an independent volume for each side, so folding them together here
+        /// threw away both the panning a replayer programmed and the balance the Microwire
+        /// command asked for.
+        /// </para>
+        /// <para>
+        /// A stopped DMA keeps the LAST sample on the output rather than dropping to zero: the
+        /// STE's DAC is a latch the DMA writes into, and when the transfer stops nothing rewrites
+        /// it, so the voltage stays where the last byte left it. Returning zero instead put a
+        /// step in the signal every time the DMA stopped — and a replayer that clears $FF8901,
+        /// reprograms the frame and sets it again does exactly that once per frame, which is an
+        /// audible 50 Hz buzz on top of the sample. The DC the held level introduces is removed
+        /// by the high-pass filter at the end of the YM2149 mixer, as it is on real hardware.
+        /// </para>
         /// </summary>
-        public static float CurrentSample
-        {
-            get
-            {
-                if (!playing)
-                    return 0f;
+        public static float CurrentSampleLeft => sampleLeft * lmcLeftGain * lmcMasterGain;
 
-                return (sampleLeft * lmcLeftGain + sampleRight * lmcRightGain) * 0.5f * lmcMasterGain;
-            }
-        }
+        /// <summary>
+        /// Current DMA sample on the right output (-1..1), scaled by the LMC1992 right channel
+        /// and master volumes. See <see cref="CurrentSampleLeft"/>.
+        /// </summary>
+        public static float CurrentSampleRight => sampleRight * lmcRightGain * lmcMasterGain;
 
         /// <summary>
         /// Gain to apply to the YM2149 output according to the LMC1992 mixing setting:
@@ -237,6 +251,15 @@ namespace ASE
             }
         }
 
+        /// <summary>
+        /// Write to the sound DMA control register ($FF8901). A frame starts on the 0 -> 1 edge
+        /// of the play bit and stops on the 1 -> 0 one; writing the register with play already
+        /// set changes nothing, which is what the hardware does and what a VBL-driven replayer
+        /// relies on — it rewrites start/end and $01 every frame and expects the frame in flight
+        /// to run to its end. (Verified against a traced run: those replayers arm the DMA a few
+        /// hundred microseconds into the frame and it always completes before the next VBL, so
+        /// the engine is idle by the time the write arrives.)
+        /// </summary>
         static void SetControl(byte v)
         {
             byte old = control;
@@ -334,8 +357,13 @@ namespace ASE
             if (ASEMain._mfp == null)
                 return;
 
-            // GPIP7 = monochrome detect wired with XSINT: high (1) only when idle AND a colour
-            // monitor is attached; a monochrome monitor holds the line low regardless of XSINT.
+            // GPIP7 is the monochrome-detect line, and on an STE the DMA sound's XSINT is wired
+            // onto it. The line's resting level is what the monitor detect says (1 with a colour
+            // monitor, which is what TOS reads at boot to choose the resolution) and XSINT pulls
+            // it low while a frame is playing, so the end of a frame is a rising edge. It has to
+            // rest high: driving it the other way round would leave the line low for good after
+            // the first sound a program makes, and anything re-reading it would conclude a
+            // monochrome monitor is attached. A monochrome monitor holds it low regardless.
             ASEMain._mfp.SetGPIOBit(7, !high && !VideoTiming.Mono);
 
             // Timer A event count input is also driven by XSINT (counts end of frames)

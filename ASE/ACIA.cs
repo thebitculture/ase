@@ -1,8 +1,14 @@
 ﻿/*
  * 
  * Atari ST ACIA emulation functions.
+ *
+ * Most of this has been a mishmash of ideas derived from reverse-engineering a few games;
+ * the emulation seems fairly complete.
  * 
- * Some parts inspired in Hatari emulator created by Thomas Huth and others.
+ * Some other parts inspired in Hatari emulator created by Thomas Huth and others.
+ *
+ * Don’t take the comments too literally; most of them are deductions based on that reverse engineering,
+ * and the actual hardware doesn’t necessarily work exactly as described here.
  * 
  * Official repository 👉 https://github.com/thebitculture/ase
  * 
@@ -65,6 +71,43 @@ namespace ASE
 
         // for the mouse -> bit 0 = No button, 1 = right, 2 = left
         public static int _mouseButtons = 0;
+
+        // *** Mouse reporting mode ***
+        // The IKBD reports the mouse in one of three ways, and a program picks with $08/$09/$0A.
+        // RELATIVE is the familiar one (the $F8-$FB packet with dx/dy). In ABSOLUTE the IKBD
+        // keeps the position ITSELF, inside a rectangle the program sets with $09, and sends
+        // NOTHING on its own: the program asks for it with $0D (INTERROGATE MOUSE POSITION) and
+        // gets an $F7 packet back, and/or asks (with $07 SET MOUSE BUTTON ACTION) to be sent one
+        // whenever a button is pressed or released. Games that want a pointer position rather
+        // than a stream of deltas use it and with the mode
+        // unimplemented their mouse is simply dead: no packet is ever sent, so no click is ever
+        // seen. KEYCODE mode turns movement into cursor keys and is left as relative here.
+        public enum MouseReportModes { Relative, Absolute, KeyCode }
+        public static MouseReportModes MouseMode = MouseReportModes.Relative;
+
+        // Absolute mouse state. The position tracks host motion whatever the mode is (the real
+        // IKBD scans the mouse the same way and just chooses what to report), clamped to the
+        // maxima $09 set. _absYAxis is -1 when the program put Y=0 at the bottom ($0F).
+        private static int _absX, _absY;
+        private static int _absMaxX = 640, _absMaxY = 400;
+        private static int _absYAxis = 1;
+
+        // Buttons already reported by the previous $F7 packet. The packet carries CHANGES
+        // (bit 0 right pressed, 1 right released, 2 left pressed, 3 left released), so each
+        // one is masked against what the last packet said. The reset value claims both buttons
+        // were already reported as released, so the first interrogation does not invent two
+        // release events.
+        private const byte ABS_PREV_BUTTONS_RESET = 0x02 | 0x08;
+        private static byte _prevAbsButtons = ABS_PREV_BUTTONS_RESET;
+
+        // $07 SET MOUSE BUTTON ACTION (%00000mss): bit 0 = send an absolute report when a
+        // button is pressed, bit 1 = when released, bit 2 (m) = the buttons act like KEYBOARD
+        // KEYS: left = scancode $74, right = $75, break = +$80, and the ss bits are ignored
+        // (Hatari's IKBD_SendOnMouseAction does the same). Games combine it with absolute
+        // mode to drive a pointer with $0D interrogations while reading the click out of the
+        // keyboard stream -- Cannon Fodder's pre-game screens do exactly that, and with the
+        // bit unimplemented their pointer moved but no click was ever seen.
+        private static byte _mouseAction = 0;
 
         // *** Mouse sampling ***
         // A host mouse reports motion far faster than an IKBD ever could: at 500-1000 Hz it
@@ -189,6 +232,12 @@ namespace ASE
                 IkbdRxCont.Clear();
                 _commandBuffer.Clear();
                 _mouseButtons = 0;
+                MouseMode = MouseReportModes.Relative;
+                _absX = _absY = 0;
+                _absMaxX = 640; _absMaxY = 400;
+                _absYAxis = 1;
+                _prevAbsButtons = ABS_PREV_BUTTONS_RESET;
+                _mouseAction = 0;
                 JoystickState = 0;
                 _mouseAccumX = _mouseAccumY = 0;
                 _mouseSampleCountdown = MOUSE_PACKET_CYCLES;
@@ -238,6 +287,15 @@ namespace ASE
                 w.U16((ushort)_commandBuffer.Count);
                 foreach (byte b in _commandBuffer)
                     w.U8(b);
+
+                // Appended after the original layout: older snapshots simply stop here and
+                // restore with the mouse in relative mode (see LoadState).
+                w.U8((byte)MouseMode);
+                w.I32(_absX); w.I32(_absY);
+                w.I32(_absMaxX); w.I32(_absMaxY);
+                w.I32(_absYAxis);
+                w.U8(_prevAbsButtons);
+                w.U8(_mouseAction);
             }
         }
 
@@ -278,6 +336,31 @@ namespace ASE
                 int cmdCount = r.U16();
                 for (int i = 0; i < cmdCount; i++)
                     _commandBuffer.Add(r.U8());
+
+                // Mouse reporting mode, appended to the section later. A snapshot taken before
+                // it existed stops here and restores with the mouse in relative mode, which is
+                // what those builds emulated anyway.
+                MouseMode = MouseReportModes.Relative;
+                _absX = _absY = 0;
+                _absMaxX = 640; _absMaxY = 400;
+                _absYAxis = 1;
+                _prevAbsButtons = ABS_PREV_BUTTONS_RESET;
+                _mouseAction = 0;
+
+                if (r.Remaining >= 23)
+                {
+                    byte mode = r.U8();
+                    MouseMode = mode <= (byte)MouseReportModes.KeyCode
+                              ? (MouseReportModes)mode : MouseReportModes.Relative;
+                    _absX = r.I32(); _absY = r.I32();
+                    _absMaxX = r.I32(); _absMaxY = r.I32();
+                    _absYAxis = r.I32();
+                    _prevAbsButtons = r.U8();
+                    _mouseAction = r.U8();
+                    if (_absMaxX < 1) _absMaxX = 1;
+                    if (_absMaxY < 1) _absMaxY = 1;
+                    ClampAbsPosition();
+                }
             }
         }
 
@@ -591,24 +674,53 @@ namespace ASE
 
                 case 0x08: // SET RELATIVE MOUSE POSITION REPORTING
                     MouseEnabled = true;
+                    MouseMode = MouseReportModes.Relative;
                     break;
 
                 case 0x09: // SET ABSOLUTE MOUSE POSITIONING
+                    // Parameters: XMSB, XLSB, YMSB, YLSB — the maxima, inclusive.
                     MouseEnabled = true;
-                    // Parameters: XMSB, XLSB, YMSB, YLSB (ignored for now)
+                    MouseMode = MouseReportModes.Absolute;
+                    _absMaxX = (_commandBuffer[1] << 8) | _commandBuffer[2];
+                    _absMaxY = (_commandBuffer[3] << 8) | _commandBuffer[4];
+                    if (_absMaxX < 1) _absMaxX = 1;
+                    if (_absMaxY < 1) _absMaxY = 1;
+                    ClampAbsPosition();
                     break;
 
                 case 0x0A: // SET MOUSE KEYCODE MODE
                     MouseEnabled = true;
+                    MouseMode = MouseReportModes.KeyCode;
                     break;
 
                 case 0x07: // SET MOUSE BUTTON ACTION
+                    _mouseAction = _commandBuffer[1];
+                    if (ConfigOptions.RunninConfig.DebugMode >= ConfigOptions.DebugModes.Full)
+                        ColoredConsole.WriteLine($"[[cyan]]IKBD[[/cyan]] mouse button action = ${_mouseAction:X2}" +
+                            $"{(( _mouseAction & 0x04) != 0 ? " (buttons act as keys $74/$75)" : "")}");
+                    break;
+
+                case 0x0D: // INTERROGATE MOUSE POSITION
+                    SendAbsMousePacket();
+                    break;
+
+                case 0x0E: // LOAD MOUSE POSITION
+                    // Parameters: filler, XMSB, XLSB, YMSB, YLSB
+                    _absX = (_commandBuffer[2] << 8) | _commandBuffer[3];
+                    _absY = (_commandBuffer[4] << 8) | _commandBuffer[5];
+                    ClampAbsPosition();
+                    break;
+
+                case 0x0F: // SET Y=0 AT BOTTOM
+                    _absYAxis = -1;
+                    break;
+
+                case 0x10: // SET Y=0 AT TOP
+                    _absYAxis = 1;
+                    break;
+
                 case 0x0B: // SET MOUSE THRESHOLD
                 case 0x0C: // SET MOUSE SCALE
-                case 0x0E: // LOAD MOUSE POSITION
-                case 0x0D: // INTERROGATE MOUSE POSITION
-                case 0x0F: // SET Y=0 AT BOTTOM
-                case 0x10: // SET Y=0 AT TOP
                     break;
                 case 0x12: // DISABLE MOUSE
                     MouseEnabled = false;
@@ -737,8 +849,9 @@ namespace ASE
         }
 
         /// <summary>
-        /// Sends a mouse packet right away, carrying any motion accumulated so far. For button
-        /// changes, which must not wait for the sample tick.
+        /// Sends a mouse packet right away, carrying any motion accumulated so far. Button
+        /// changes go through <see cref="MouseButtonChanged"/>, which knows what each reporting
+        /// mode owes the program; this is for anything that needs a packet out of turn.
         /// </summary>
         public static void SendMousePacket(int dx, int dy)
         {
@@ -826,8 +939,116 @@ namespace ASE
             _mouseAccumX -= (int)(dx * sens);
             _mouseAccumY -= (int)(dy * sens);
 
+            // The IKBD tracks the position whatever it reports, so absolute mode has something
+            // to answer with when the program interrogates it.
+            _absX += dx;
+            _absY += dy * _absYAxis;
+            ClampAbsPosition();
+
             _mouseSampleCountdown = MOUSE_PACKET_CYCLES;
+
+            // In absolute mode the IKBD sends nothing by itself: the program asks ($0D) or has
+            // asked to be told about button changes ($07). Sending relative packets here would
+            // feed a program that is not parsing them.
+            if (MouseMode == MouseReportModes.Absolute)
+                return;
+
             PushIkbdPacket((byte)(0xF8 | _mouseButtons), (byte)dx, (byte)dy);
+        }
+
+        static void ClampAbsPosition()
+        {
+            if (_absX < 0) _absX = 0; else if (_absX > _absMaxX) _absX = _absMaxX;
+            if (_absY < 0) _absY = 0; else if (_absY > _absMaxY) _absY = _absMaxY;
+        }
+
+        /// <summary>
+        /// The $F7 absolute position packet: header, button changes, X (2 bytes), Y (2 bytes).
+        /// The button byte reports what changed SINCE THE LAST PACKET (bit 0 right pressed,
+        /// 1 right released, 2 left pressed, 3 left released), so it is masked against what the
+        /// previous one already said. Sent on $0D, and on a button edge when $07 asked for it.
+        /// </summary>
+        static void SendAbsMousePacket()
+        {
+            // Already inside _syncLock.
+            byte buttons = 0;
+            buttons |= (_mouseButtons & 0x01) != 0 ? (byte)0x01 : (byte)0x02;   // right
+            buttons |= (_mouseButtons & 0x02) != 0 ? (byte)0x04 : (byte)0x08;   // left
+
+            byte prev = _prevAbsButtons;
+            _prevAbsButtons = buttons;
+            buttons &= (byte)~prev;
+
+            PushIkbdPacket(0xF7, buttons,
+                           (byte)(_absX >> 8), (byte)_absX,
+                           (byte)(_absY >> 8), (byte)_absY);
+        }
+
+        /// <summary>
+        /// A host mouse button changed. This is the single entry point for both input paths —
+        /// the SDL queue and the Avalonia overlay, which on Windows BOTH see the same click —
+        /// so the edge guard here is what keeps one press from being reported twice.
+        /// </summary>
+        public static void MouseButtonChanged(bool left, bool pressed)
+        {
+            lock (_syncLock)
+            {
+                int mask = left ? 0x02 : 0x01;
+                bool wasPressed = (_mouseButtons & mask) != 0;
+                if (wasPressed == pressed) return;      // same edge through the other path
+
+                if (pressed) _mouseButtons |= mask; else _mouseButtons &= ~mask;
+
+                ReportButtonEdge(left, pressed);
+            }
+        }
+
+        /// <summary>
+        /// Reports one button edge the way the current mode owes it. _mouseButtons is already
+        /// updated; the caller holds _syncLock. Shared by the host mouse buttons and the
+        /// joystick-1 trigger, which is the same electrical line as the right button.
+        /// </summary>
+        private static void ReportButtonEdge(bool left, bool pressed)
+        {
+            if (!MouseEnabled) return;
+
+            // $07 bit 2: the buttons are part of the keyboard. A make/break scancode is all
+            // that is sent -- the ss bits are ignored while it is on, and no mouse packet is
+            // forced either (the next motion packet carries the button bits as always).
+            if ((_mouseAction & 0x04) != 0)
+            {
+                byte scan = left ? (byte)0x74 : (byte)0x75;
+                if (!pressed) scan |= 0x80;
+                PushIkbd_Internal(scan);
+                return;
+            }
+
+            if (MouseMode == MouseReportModes.Absolute)
+            {
+                // Only if the program asked to be told (SET MOUSE BUTTON ACTION).
+                bool report = pressed ? (_mouseAction & 0x01) != 0
+                                      : (_mouseAction & 0x02) != 0;
+                if (!report) return;
+
+                // Force the edge that is being reported through the "already sent" mask,
+                // and mark its opposite as sent — otherwise the change would be masked out
+                // by the previous packet.
+                if (left)
+                {
+                    if (pressed) { _prevAbsButtons &= 0xFB; _prevAbsButtons |= 0x02; }
+                    else         { _prevAbsButtons &= 0xF7; _prevAbsButtons |= 0x01; }
+                }
+                else
+                {
+                    if (pressed) { _prevAbsButtons &= 0xFE; _prevAbsButtons |= 0x08; }
+                    else         { _prevAbsButtons &= 0xFD; _prevAbsButtons |= 0x04; }
+                }
+
+                SendAbsMousePacket();
+                return;
+            }
+
+            EmitMousePacket(force: true);
         }
 
         public static void UpdateJoystick(byte mask, bool pressed)
@@ -862,7 +1083,9 @@ namespace ASE
                     else
                         _mouseButtons &= ~0x01;
 
-                    EmitMousePacket(force: true);
+                    // Same line, same rules: honoured as an absolute report or a $75
+                    // scancode when $07 asked for those, not just as a relative packet.
+                    ReportButtonEdge(left: false, pressed: pressed);
                     return;
                 }
 

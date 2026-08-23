@@ -41,7 +41,7 @@
 
 	<PropertyGroup>
 		<Major>1</Major>
-		<Minor>10</Minor>
+		<Minor>11</Minor>
 	</PropertyGroup>
 
 	<PropertyGroup>
@@ -105,7 +105,7 @@
 		- publish -r <rid>  → RuntimeIdentifier
 		- build/run sin -r  → RID del equipo (NETCoreSdkPortableRuntimeIdentifier)
 		El RID se normaliza a so+arquitectura para tolerar variantes
-		(win10-x64, linux-musl-arm64, …).
+		(win10-x64, linux-musl-arm64, ..).
 	-->
 	<PropertyGroup>
 		<_AseRid Condition="'$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</_AseRid>
@@ -125,6 +125,16 @@
 		<None Update="GameMenus.json">
 		  <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 		</None>
+
+		<!-- ASEHD boot driver (tools/asehd, assembled with vasm — see build.cmd there).
+		     Two flat binaries: the boot sector and the resident driver. Embedded so a
+		     created hard disk image comes out bootable with nothing to install on the ST. -->
+		<EmbeddedResource Include="Resources/ASEHD.BOT" Condition="Exists('Resources/ASEHD.BOT')">
+			<LogicalName>ASE.Resources.ASEHD.BOT</LogicalName>
+		</EmbeddedResource>
+		<EmbeddedResource Include="Resources/ASEHD.SYS" Condition="Exists('Resources/ASEHD.SYS')">
+			<LogicalName>ASE.Resources.ASEHD.SYS</LogicalName>
+		</EmbeddedResource>
 
 		<!-- Moira -->
 		<None Update="native/$(AseNativeRid)/moira.dll" Condition="'$(AseNativeOs)' == 'win'">

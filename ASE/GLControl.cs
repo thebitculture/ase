@@ -310,6 +310,26 @@ namespace ASE
         private int _srcH = VideoTiming.BUFFER_HEIGHT;
         private int _geomGen = -1;   // -1 forces the first render to size the texture
 
+        // Pixel aspect ratio of the ST on an original 4:3 PAL monitor: the tube shows
+        // ~52 µs of active line over ~288 visible lines, so the 416 low-res pixels (8 MHz)
+        // that fit in 52 µs span 288 * 4/3 = 384 line-height units -> each pixel is
+        // 384/416 = 12/13 as wide as it is tall (slightly narrower than square).
+        public const double PIXEL_ASPECT = 12.0 / 13.0;
+
+        /// <summary>Aspect ratio of the picture this control shows. On a colour monitor it is the
+        /// full framebuffer (display + borders) or the 640x400 crop when borders are hidden,
+        /// corrected by the pixel aspect of the original 4:3 monitor. On a monochrome monitor it
+        /// is the native 640x400 with square pixels.
+        /// <para>It belongs here rather than to the window because it is what the letterbox in
+        /// <see cref="OnOpenGlRender"/> fits the picture to; the window's own resize logic
+        /// (MainWindow.EnforceAspectRatio) reads the same value so both agree.</para></summary>
+        public static double DisplayAspectRatio =>
+            VideoTiming.Mono
+                ? (double)VideoTiming.BUFFER_WIDTH / VideoTiming.BUFFER_HEIGHT
+                : PIXEL_ASPECT * (Config.ConfigOptions.RunninConfig.ShowBorders
+                    ? (double)VideoTiming.BUFFER_WIDTH / (VideoTiming.BUFFER_HEIGHT * 2)
+                    : (double)VideoTiming.DISPLAY_TEX_WIDTH / (VideoTiming.DISPLAY_TEX_HEIGHT * 2));
+
         // Sequence number of the frame currently in the texture. The GL thread renders free-running
         // and normally beats the 50 Hz emulation, so this is what stops it from re-uploading the
         // same ~940 KB several times per emulated frame.
@@ -613,19 +633,38 @@ namespace ASE
 
             EnsureTextureGeometry();
 
-            // DPI-aware viewport: the same pixel size Avalonia gives the framebuffer
-            // (Bounds * RenderScaling, truncated), so the picture always fills it exactly.
+            // DPI-aware surface size: the same pixel size Avalonia gives the framebuffer
+            // (Bounds * RenderScaling, truncated).
             double scaling = ScreenScaling;
-            uint outW = (uint)Math.Max(1, (int)(Bounds.Width  * scaling));
-            uint outH = (uint)Math.Max(1, (int)(Bounds.Height * scaling));
-            _gl.Viewport(0, 0, outW, outH);
+            uint surfaceW = (uint)Math.Max(1, (int)(Bounds.Width  * scaling));
+            uint surfaceH = (uint)Math.Max(1, (int)(Bounds.Height * scaling));
+
+            // Letterbox: the picture keeps DisplayAspectRatio whatever shape the control is,
+            // centred, with the leftover cleared to black. In a normal window the window itself
+            // is kept at the right ratio (MainWindow.EnforceAspectRatio) so this is usually a
+            // no-op, but it is what makes the two cases where it cannot be work: full screen
+            // (the window is the screen and its shape is not ours to choose) and the transient
+            // shapes of an interactive resize — which used to stretch the picture until the
+            // 300 ms debounce corrected the window.
+            double ratio = DisplayAspectRatio;
+            uint outW = surfaceW, outH = surfaceH;
+
+            if (surfaceW > surfaceH * ratio)
+                outW = (uint)Math.Max(1, Math.Round(surfaceH * ratio));   // too wide -> pillarbox
+            else
+                outH = (uint)Math.Max(1, Math.Round(surfaceW / ratio));   // too tall -> letterbox
+
+            int outX = (int)(surfaceW - outW) / 2;
+            int outY = (int)(surfaceH - outH) / 2;
+
+            _gl.Viewport(outX, outY, outW, outH);
 
             // Log on first frame and whenever the DPI scale changes (window moved to a
             // monitor with a different scale) — this is what users should report when the
             // picture doesn't fill the window.
             if (_firstRender || scaling != _lastLoggedScaling)
             {
-                ColoredConsole.WriteLine($"[GLControl] fb=[[yellow]]{fb}[[/yellow]], hasVao=[[yellow]]{_hasVao}[[/yellow]], scale=[[yellow]]{scaling:0.##}[[/yellow]], viewport=[[yellow]]{outW}x{outH}[[/yellow]], bounds=[[yellow]]{Bounds.Width:0.#}x{Bounds.Height:0.#}[[/yellow]]", Config.ConfigOptions.DebugModes.Quiet);
+                ColoredConsole.WriteLine($"[GLControl] fb=[[yellow]]{fb}[[/yellow]], hasVao=[[yellow]]{_hasVao}[[/yellow]], scale=[[yellow]]{scaling:0.##}[[/yellow]], viewport=[[yellow]]{outW}x{outH}[[/yellow]]+[[yellow]]{outX},{outY}[[/yellow]], surface=[[yellow]]{surfaceW}x{surfaceH}[[/yellow]], bounds=[[yellow]]{Bounds.Width:0.#}x{Bounds.Height:0.#}[[/yellow]]", Config.ConfigOptions.DebugModes.Quiet);
                 _firstRender = false;
                 _lastLoggedScaling = scaling;
             }
@@ -639,7 +678,11 @@ namespace ASE
             _gl.ColorMask(true, true, true, true);
             _gl.DepthMask(false);
 
-            _gl.ClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+            // Black, and it matters: with the scissor test off (disabled just above) this clear
+            // covers the whole surface, so it is what paints the letterbox bars around the
+            // viewport set above. A grey there would frame the picture on every screen wider
+            // than 4:3.
+            _gl.ClearColor(0.0f, 0.0f, 0.0f, 1.0f);
             _gl.Clear((uint)GLEnum.ColorBufferBit);
 
             _gl.UseProgram(prog.Id);

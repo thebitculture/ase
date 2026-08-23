@@ -136,6 +136,10 @@ public partial class DebugWindow : Window
     {
         CPU._moira.RemoveAllBreakpoints();
 
+        // The GEMDOS hard drive rides on breakpoints of its own inside its cartridge code:
+        // they are wiring, not the user's, so they go straight back (see GemdosHD).
+        GemdosHD.RearmHooks();
+
         // The red marks in the listing are copies of Moira's state: they must be cleared too
         foreach (var line in DasmListing)
             line.IsBreakpoint = false;
@@ -207,6 +211,11 @@ public partial class DebugWindow : Window
     /// </summary>
     void ToggleBreakpoint(DasmLine line)
     {
+        // The GEMDOS hard drive's hooks are not breakpoints the user may play with: clearing
+        // one leaves its cartridge branching on undefined flags.
+        if (GemdosHD.IsHookAddress(line.Address))
+            return;
+
         bool wasSet = CPU._moira.IsBreakpoint(line.Address);
 
         if (wasSet)
@@ -250,9 +259,14 @@ public partial class DebugWindow : Window
     void UpdateBreakpointControls()
     {
         var line = lstListing.SelectedItem as DasmLine;
-        tglBreakpoint.IsEnabled = line != null;
-        tglBreakpoint.IsChecked = line != null && CPU._moira.IsBreakpoint(line.Address);
-        btnRunToBp.IsEnabled = CPU._moira.BreakpointCount > 0;
+        bool hook = line != null && GemdosHD.IsHookAddress(line.Address);
+
+        tglBreakpoint.IsEnabled = line != null && !hook;
+        tglBreakpoint.IsChecked = line != null && !hook && CPU._moira.IsBreakpoint(line.Address);
+
+        // The hard drive's own hooks don't count: with only those armed there is nothing
+        // for "Run until breakpoint" to stop at.
+        btnRunToBp.IsEnabled = CPU._moira.BreakpointCount > GemdosHD.HookBreakpointCount;
     }
     
     protected override void OnKeyDown(KeyEventArgs e)
@@ -475,31 +489,40 @@ public partial class DebugWindow : Window
 
         uint addr = start;
 
-        for (int i = 0; i < InstructionsToDisasm; i++)
+        // Disassembling reads memory through the normal bus (Moira's read16Dasm does), so a
+        // listing that wanders into undecoded space would schedule a bus error the machine
+        // would take on resume. These reads are the debugger's, not the CPU's.
+        ASEMain._mem.ReadWithoutBusErrors(() =>
         {
-            var (disStr, disSize) = CPU._moira.Disassemble(addr, 250);
-
-            var data = new StringBuilder(32);
-            for (uint x = 0; x < disSize; x += 2)
-                data.Append($"{ASEMain._mem.Read16(addr + x):X4} ");
-
-            var line = new DasmLine
+            for (int i = 0; i < InstructionsToDisasm; i++)
             {
-                Address = addr,
-                DasmCodeLine = $"{addr:X8} {data.ToString().PadRight(25)} {disStr}"
-            };
+                var (disStr, disSize) = CPU._moira.Disassemble(addr, 250);
 
-            if (addr == pc)
-            {
-                line.IsPC = true;
-                _pcLine = line;
+                var data = new StringBuilder(32);
+                for (uint x = 0; x < disSize; x += 2)
+                    data.Append($"{ASEMain._mem.Read16(addr + x):X4} ");
+
+                var line = new DasmLine
+                {
+                    Address = addr,
+                    DasmCodeLine = $"{addr:X8} {data.ToString().PadRight(25)} {disStr}"
+                };
+
+                if (addr == pc)
+                {
+                    line.IsPC = true;
+                    _pcLine = line;
+                }
+
+                // The GEMDOS hard drive's hooks are internal wiring: shown as ordinary code
+                line.IsBreakpoint = anyBreakpoints && CPU._moira.IsBreakpoint(addr) && !GemdosHD.IsHookAddress(addr);
+
+                DasmListing.Add(line);
+                addr += (uint)disSize;
             }
 
-            line.IsBreakpoint = anyBreakpoints && CPU._moira.IsBreakpoint(addr);
-
-            DasmListing.Add(line);
-            addr += (uint)disSize;
-        }
+            return true;
+        });
     }
 
     /// <summary>
