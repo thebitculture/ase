@@ -129,9 +129,19 @@ namespace ASE
             // STE only: horizontal fine scroll
             if (addr >= 0xFF8264 && addr <= 0xFF8265) return IsSTE;
 
-            // FDC / DMA. Note it stops at $FF860D: $FF860E-$FF860F is the high-density floppy
-            // register of the Mega STE and TT, and answering it claims to be one of those.
+            // FDC / DMA. The ST's DMA chip decodes up to $FF860D and no further: $FF860E-$FF860F
+            // is the high-density floppy register of the Mega STE and TT, and answering it on an
+            // ST claims to be one of those. The STE's MCU does decode the whole block, with no
+            // register behind those two bytes: reads float high, writes go nowhere, and neither
+            // faults.
+            // That distinction is not cosmetic. TOS 2.05 -- the Mega STE's own TOS, which people
+            // do run on an STE -- writes the density register unconditionally from its floppy
+            // driver ($E0357C `move.w $2(a1),$FF860E.w`, and again at $E030BE and $E0352E), with
+            // no bus-error handler installed. Faulting it on an STE ends the boot in two bombs
+            // the moment TOS first touches the drive.
+            // IMPORTANT! -> I should keep this in mind when I extend the emulation to the Mega STE!!!!
             if (addr >= 0xFF8604 && addr <= 0xFF860D) return true;
+            if (addr >= 0xFF860E && addr <= 0xFF860F) return IsSTE;
 
             // PSG. The ST decodes it across the whole page (A8-A15 are not decoded), which is
             // why software reaches it at $FF8800 and at mirrors like $FF8880.
@@ -649,6 +659,13 @@ namespace ASE
                 // Disk commands are forwarded to WD1772.cs, which handles them
                 if (addr >= 0xFF8604 && addr <= 0xFF860D)
                     return WD1772.ReadByte(addr);
+
+                // HD floppy density register ($FF860E-$FF860F). Decoded by the STE's MCU with no
+                // register behind it (see IsDecodedIo, which bus-errors it on ST/Mega): it floats
+                // high rather than answering out of the Ports latch, so a program cannot read
+                // back what it wrote and conclude the drive handles high-density disks.
+                if (addr >= 0xFF860E && addr <= 0xFF860F)
+                    return 0xFF;
 
                  // Blitter ($FF8A00-$FF8A3D)
                  // On the real ST (without blitter), accessing these registers causes a bus error.
@@ -1172,6 +1189,12 @@ namespace ASE
                     return;
                 }
 
+                // HD floppy density register: decoded on the STE, nothing behind it (see
+                // IsDecodedIo). Dropped instead of latched in Ports, so the read path keeps
+                // floating high.
+                if (addr >= 0xFF860E && addr <= 0xFF860F)
+                    return;
+
                 // STE DMA sound + Microwire ($FF8900-$FF8925)
                 if (addr >= 0xFF8900 && addr <= 0xFF8925)
                 {
@@ -1404,8 +1427,9 @@ namespace ASE
             {
                 // No IsDecodedIo check here on purpose: every other write below ends up in
                 // BigEndian.Write16, which is two Write8 calls, and that is where undecoded
-                // addresses are dropped — byte by byte, so a word straddling the end of a
-                // block still writes the half that does exist.
+                // addresses are resolved — byte by byte, so a word straddling the end of a
+                // block still writes the half that does exist and only faults on the half
+                // that does not.
 
                 // FDC
                 if (addr >= 0xFF8604 && addr <= 0xFF860D)
