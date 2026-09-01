@@ -75,6 +75,20 @@ namespace ASE
             public RAMConfigurations RAMConfiguration { get; set; } = RAMConfigurations.RAM_1MB;
             public  bool MaxSpeed { get; set; } = false;
             public string FloppyImagePath { get; set; } = "";
+
+            /// <summary>
+            /// Whether the external drive B: is plugged into the floppy port. Off by default, as
+            /// most STs shipped: with it off the select line reaches nothing and the FDC answers
+            /// every B: access as "no drive" (see WD1772.DriveSelected), which is what TOS' boot
+            /// probe reads to decide the machine has a single floppy. Toggled live from
+            /// File > Connect drive B:, and saved here so the machine comes back as it was left.
+            /// </summary>
+            public bool DriveBEnabled { get; set; } = false;
+
+            /// <summary>Disk image to put in drive B: at startup (--floppy-b); implies the drive
+            /// is connected. Like <see cref="FloppyImagePath"/> it is a starting condition, not a
+            /// record of what the user later inserted by hand.</summary>
+            public string FloppyBImagePath { get; set; } = "";
             /// <summary>
             /// Divisor applied to the host mouse movement before it reaches the ST
             /// (<c>dx = accumulated / MouseSensitivity</c>, see ACIA.cs), so a bigger number
@@ -383,6 +397,17 @@ namespace ASE
                         if (parts.Length > 1)
                             ConfigOptions.RunninConfig.FloppyImagePath = parts[1];
                         break;
+                    case "--floppy-b":
+                        if (parts.Length > 1)
+                        {
+                            ConfigOptions.RunninConfig.FloppyBImagePath = parts[1];
+                            ConfigOptions.RunninConfig.DriveBEnabled = true;
+                        }
+                        break;
+                    case "--drive-b":
+                        ConfigOptions.RunninConfig.DriveBEnabled =
+                            parts.Length < 2 || !bool.TryParse(parts[1], out bool _drvb) || _drvb;
+                        break;
                     case "--acsi":
                         if (parts.Length > 1)
                         {
@@ -558,6 +583,8 @@ namespace ASE
 
             HelpSection("Media and directories");
             HelpOption("--floppy", "=<path>", "Start with a disk image (.st/.msa/.stx/.zip) in drive A");
+            HelpOption("--drive-b", "[=true|false]", "Connect the external drive B: to the floppy port");
+            HelpOption("--floppy-b", "=<path>", "Start with a disk image in drive B (connects the drive)");
             HelpOption("--acsi", "=<path>", "Attach an ACSI hard disk image (raw, 512-byte sectors)");
             HelpOption("--gemdos-dir", "=<path>", "Mount a host folder as a GEMDOS hard drive");
             HelpOption("--boot-hd", "[=true|false]", "Allow booting from the ACSI hard disk image");

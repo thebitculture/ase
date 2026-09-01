@@ -48,7 +48,31 @@ namespace ASE
 
         Bitmap BitmapLedDriveOn;
         Bitmap BitmapLedDriveOff;
-        DateTime TimeLastDriveOn = DateTime.Now;
+
+        // One entry per floppy drive (0 = A, 1 = B): when the FDC last lit its light, and whether
+        // the turn-off has already been posted for the idle stretch it is in. Without that second
+        // flag the once-per-frame poll would queue dispatcher work forever for an idle drive.
+        // MinValue = never accessed, so both drives start idle and paint their label on the
+        // first poll instead of two seconds into the session.
+        readonly DateTime[] TimeLastDriveOn = { DateTime.MinValue, DateTime.MinValue };
+        readonly bool[] DriveLedOffPosted = { false, false };
+
+        // The idle label names the disk in the drive, so a disk inserted, ejected or swapped while
+        // the light is off has to repaint it even though the idle state itself never changed. This
+        // is the disk part of the label last posted for each drive (empty = drive empty).
+        readonly string[] DriveLedDiskPosted = { "", "" };
+
+        // Marquee for the idle labels. A disk file name is usually wider than the strip, so after
+        // MarqueeIdleDelay seconds without activity the label slides left to show the end of the
+        // name and back again, slowly. The timer only lives while there is something to scroll:
+        // DriveLed starts it and OnMarqueeTick stops it when every label fits.
+        const double MarqueeSpeed = 15.0;      // pixels per second
+        const double MarqueeIdleDelay = 3.0;   // seconds of inactivity before it starts
+        const double MarqueeEndPause = 1.5;    // seconds held at each end of the travel
+        DispatcherTimer MarqueeTimer;
+        readonly bool[] DriveLabelIdle = { true, true };
+        readonly DateTime[] DriveLabelSince = { DateTime.Now, DateTime.Now };
+
         DateTime TimeLastTimeTextBlock = DateTime.Now;
 
         // Hard disk light. The emulation only stamps ASEMain.SignalHardDiskActivity(); this
@@ -58,7 +82,13 @@ namespace ASE
         Bitmap BitmapLedHDOff;
         bool HDLedIsOn;
 
-        string ZipFile = "";
+        // Zip each drive's disk came from, so "Change disk from ZIP" knows where to look again.
+        // Empty when the drive holds a plain image, or nothing at all.
+        readonly string[] ZipFile = { "", "" };
+
+        // Drive B as this session started, to tell on closing whether the user changed it —
+        // same reasoning as _fullScreenAtStartup.
+        readonly bool _driveBAtStartup = Config.ConfigOptions.RunninConfig.DriveBEnabled;
 
         // The one MT-32 toolbox window, or null when it is closed (see OnMt32ToolboxClick).
         MT32.Mt32Toolbox _mt32Toolbox;
@@ -80,8 +110,13 @@ namespace ASE
             BitmapLedHDOn = new Bitmap(AssetLoader.Open(new Uri("avares://ASE/Assets/hd_led_on.png")));
             BitmapLedHDOff = new Bitmap(AssetLoader.Open(new Uri("avares://ASE/Assets/hd_led_off.png")));
 
+            // Drive B is remembered in config.json: put the menu and its light in the state the
+            // machine was left in before anything can be inserted into it.
             if (!Design.IsDesignMode)
+            {
+                ApplyDriveBConnection(Config.ConfigOptions.RunninConfig.DriveBEnabled);
                 AddHandler(DragDrop.DropEvent, OnDrop);
+            }
         }
 
         protected override void OnOpened(EventArgs e)
@@ -111,6 +146,13 @@ namespace ASE
 
             // Snap the startup size to the correct ratio once the first layout is done
             Dispatcher.UIThread.Post(EnforceAspectRatio, DispatcherPriority.Loaded);
+
+            // Scrolls an idle drive label whose disk name does not fit the strip. Started here so
+            // a disk inserted from the command line scrolls without waiting for the first FDC
+            // command, and it stops itself as soon as nothing overflows.
+            MarqueeTimer = new DispatcherTimer(DispatcherPriority.Normal) { Interval = TimeSpan.FromMilliseconds(40) };
+            MarqueeTimer.Tick += OnMarqueeTick;
+            MarqueeTimer.Start();
 
             // Attach SDL to the window
             var platformHandle = this.TryGetPlatformHandle();
@@ -224,7 +266,8 @@ namespace ASE
             // written when something deliberately changes it (no window here saves it on the way
             // out), and it would carry along whatever this session's command line overrode. So it
             // is written only when the user actually toggled full screen at some point.
-            if (Config.ConfigOptions.RunninConfig.FullScreen != _fullScreenAtStartup)
+            if (Config.ConfigOptions.RunninConfig.FullScreen != _fullScreenAtStartup
+                || Config.ConfigOptions.RunninConfig.DriveBEnabled != _driveBAtStartup)
                 Program.Config.DumpJsonConfig();
         }
 
@@ -496,24 +539,121 @@ namespace ASE
             Height = target.Height;
         }
 
-        /// <summary>Turns the drive LED on/off; <paramref name="activity"/> ("A: T05 S09",
-        /// captured by the WD1772 when the command starts) is shown next to the LED and
-        /// cleared when the LED goes off.</summary>
-        public void DriveLed(bool On, string activity = "")
+        /// <summary>Turns a floppy drive's LED on/off (0 = A, 1 = B); <paramref name="activity"/>
+        /// ("A: T05 S09", captured by the WD1772 when the command starts) replaces the drive
+        /// letter next to the LED and goes back to just the letter when the LED goes off.</summary>
+        public void DriveLed(int drive, bool On, string activity = "")
         {
+            var led = drive == 1 ? DriveBLedImage : DriveLedImage;
+            var text = drive == 1 ? TextBlockDriveBStatus : TextBlockDriveStatus;
+
+            // Any label change starts from the left; only the idle one is ever scrolled.
+            Canvas.SetLeft(text, 0);
+
             if (On)
             {
-                TimeLastDriveOn = DateTime.Now;
-                DriveLedImage.Source = BitmapLedDriveOn;
+                TimeLastDriveOn[drive] = DateTime.Now;
+                led.Source = BitmapLedDriveOn;
+                text.Opacity = 1.0;
+                DriveLabelIdle[drive] = false;
 
                 if (!string.IsNullOrEmpty(activity))
-                    TextBlockDriveStatus.Text = activity;
+                    text.Text = activity;
             }
             else
             {
-                DriveLedImage.Source = BitmapLedDriveOff;
-                TextBlockDriveStatus.Text = "";
+                led.Source = BitmapLedDriveOff;
+
+                // Idle: the block keeps the drive letter, dimmed like the HDD label, so two
+                // lights side by side are still telling you which drive is which, and names the
+                // disk in it - with no head position to show, the light alone cannot say whether
+                // the drive is loaded, let alone with what.
+                text.Text = (drive == 1 ? "B: " : "A: ") + DriveDiskLabel(drive);
+                text.Opacity = 0.5;
+
+                DriveLabelIdle[drive] = true;
+                DriveLabelSince[drive] = DateTime.Now;
+
+                if (MarqueeTimer != null && !MarqueeTimer.IsEnabled)
+                    MarqueeTimer.Start();
             }
+        }
+
+        /// <summary>The disk half of a drive idle label: the image file name, or "Empty" with no
+        /// disk in the drive ("Disc" for a disk whose path we do not have).</summary>
+        static string DriveDiskLabel(int drive)
+        {
+            var floppy = drive == 1 ? ASEMain.driveB : ASEMain.driveA;
+
+            if (!floppy.HasDisk)
+                return "Empty";
+
+            return string.IsNullOrEmpty(floppy.DisplayName) ? "Disc" : floppy.DisplayName;
+        }
+
+        /// <summary>Slides an idle drive label left and back when its disk name is wider than the
+        /// status-bar strip, so a long file name can be read in full. Stops itself once nothing
+        /// overflows; <see cref="DriveLed"/> starts it again.</summary>
+        void OnMarqueeTick(object sender, EventArgs e)
+        {
+            bool anyPending = false;
+
+            for (int d = 0; d < DriveLabelIdle.Length; d++)
+            {
+                var clip = d == 1 ? DriveBLabelClip : DriveLabelClip;
+                var text = d == 1 ? TextBlockDriveBStatus : TextBlockDriveStatus;
+
+                if (!clip.IsVisible || !DriveLabelIdle[d])
+                {
+                    Canvas.SetLeft(text, 0);
+                    continue;
+                }
+
+                // A label whose text was just replaced has not been laid out yet: keep the timer
+                // alive rather than deciding from a zero width that there is nothing to scroll.
+                if (text.Bounds.Width <= 0)
+                {
+                    anyPending = true;
+                    continue;
+                }
+
+                // The canvas measures the label unconstrained, so Bounds.Width is the text's own
+                // width and the difference is exactly what is hidden past the right edge.
+                double overflow = text.Bounds.Width - clip.Bounds.Width;
+
+                if (overflow <= 0.5)
+                {
+                    Canvas.SetLeft(text, 0);
+                    continue;
+                }
+
+                anyPending = true;
+
+                double t = (DateTime.Now - DriveLabelSince[d]).TotalSeconds - MarqueeIdleDelay;
+
+                if (t < 0)
+                {
+                    Canvas.SetLeft(text, 0);
+                    continue;
+                }
+
+                // One cycle is out, hold, back, hold: a ping-pong rather than a wrap-around, so
+                // the drive letter at the head of the label always comes back into view.
+                double travel = overflow / MarqueeSpeed;
+                double cycle = 2 * travel + 2 * MarqueeEndPause;
+                double p = t % cycle;
+
+                double offset =
+                    p < travel ? p * MarqueeSpeed :
+                    p < travel + MarqueeEndPause ? overflow :
+                    p < 2 * travel + MarqueeEndPause ? overflow - (p - travel - MarqueeEndPause) * MarqueeSpeed :
+                    0;
+
+                Canvas.SetLeft(text, -offset);
+            }
+
+            if (!anyPending)
+                MarqueeTimer.Stop();
         }
 
         public void SetStatusBarText(string text)
@@ -532,11 +672,27 @@ namespace ASE
              * Currently, I've implemented a 2-second timeout to turn off 
              * the LED after the last drive access
              */
-            if ((DateTime.Now - TimeLastDriveOn).TotalSeconds > 2)
+            for (int d = 0; d < TimeLastDriveOn.Length; d++)
             {
-                Dispatcher.UIThread.InvokeAsync(() => {
-                    ASEMain.MainWindow.DriveLed(false);
-                }, DispatcherPriority.Background);
+                bool idle = (DateTime.Now - TimeLastDriveOn[d]).TotalSeconds > 2;
+                // ImagePath, not DisplayName: this runs on the emulation thread once per
+                // frame and only needs to notice a change, so it must not allocate a string.
+                string disk = d == 1 ? ASEMain.driveB.ImagePath : ASEMain.driveA.ImagePath;
+
+                // Repaint on the on->off edge and also when the disk in an already idle drive
+                // changed, since the label names it.
+                bool repaint = idle && (idle != DriveLedOffPosted[d] || disk != DriveLedDiskPosted[d]);
+
+                DriveLedOffPosted[d] = idle;
+                DriveLedDiskPosted[d] = disk;
+
+                if (repaint)
+                {
+                    int drive = d;
+                    Dispatcher.UIThread.InvokeAsync(() => {
+                        ASEMain.MainWindow.DriveLed(drive, false);
+                    }, DispatcherPriority.Background);
+                }
             }
 
             // Hard disk light: polled here (once per frame) rather than posted per access,
@@ -589,7 +745,7 @@ namespace ASE
                         )
                     {
                         HasValidFile = true;
-                        InsertDisk(s, null);
+                        InsertDisk(0, s, null);
                         break;
                     }
                 }
@@ -601,37 +757,48 @@ namespace ASE
             e.Handled = true;
         }
 
-        public async void OnOpenImageClick(object sender, RoutedEventArgs e)
+        public void OnOpenImageClick(object sender, RoutedEventArgs e) => OpenImageInto(0);
+
+        public void OnOpenImageBClick(object sender, RoutedEventArgs e) => OpenImageInto(1);
+
+        async void OpenImageInto(int drive)
         {
             ASEMain.CaptureMouse(false);
 
-            var (canceled, selpath) = await Dialogs.OpenFile("Select disk image file",
+            var (canceled, selpath) = await Dialogs.OpenFile($"Select disk image file for drive {DriveLetter(drive)}:",
                 Config.DialogStartFolder(Config.ConfigOptions.RunninConfig.DiskImagesPath),
                 new FileFilter("ST disk images", ["*.st", "*.msa", "*.stx", "*.zip"]));
 
             if (!canceled && selpath.Count() == 1)
-                InsertDisk(selpath.ElementAt(0), null);
+                InsertDisk(drive, selpath.ElementAt(0), null);
         }
 
-        public async void OnChangeDiskClick(object sender, RoutedEventArgs e)
+        public void OnChangeDiskClick(object sender, RoutedEventArgs e)
         {
             // Another disk of the same zip is still the same game, so it keeps whatever
             // library entry (and MT-32 profile) is already loaded.
-            InsertDisk(ZipFile, MT32.Mt32Profiles.CurrentGame);
+            InsertDisk(0, ZipFile[0], MT32.Mt32Profiles.CurrentGame);
         }
 
+        public void OnChangeDiskBClick(object sender, RoutedEventArgs e) => InsertDisk(1, ZipFile[1], null);
+
+        /// <summary>The two floppy drives, by index: 0 = A, 1 = B.</summary>
+        static FloppyImage Drive(int drive) => drive == 1 ? ASEMain.driveB : ASEMain.driveA;
+
+        static char DriveLetter(int drive) => drive == 1 ? 'B' : 'A';
+
         /// <summary>
-        /// Puts a disk image in drive A with the emulation thread parked at a frame boundary, so
+        /// Puts a disk image in a drive with the emulation thread parked at a frame boundary, so
         /// the image contents and geometry never change under a sector read in flight. Failures of
         /// the load itself (truncated image, corrupt zip) come back in <paramref name="message"/>
         /// instead of escaping the async void handlers that call this.
         /// </summary>
-        static bool InsertIntoDriveA(string imageFile, out string message)
+        static bool InsertIntoDrive(int drive, string imageFile, out string message)
         {
             bool inserted = false;
             string loadMessage = "";
 
-            if (!ASEMain.RunWhilePaused(() => inserted = ASEMain.driveA.Insert(imageFile, out loadMessage),
+            if (!ASEMain.RunWhilePaused(() => inserted = Drive(drive).Insert(imageFile, out loadMessage),
                                         out string error))
                 loadMessage = $"Could not read [[red]]{imageFile}[[/red]]: {error}";
 
@@ -640,15 +807,16 @@ namespace ASE
         }
 
         /// <summary>
-        /// Loads a disk image into drive A and offers the reboot. <paramref name="libraryGame"/>
-        /// is the catalogue entry the image came from, or null for anything opened by hand:
-        /// it is what decides the game's MT-32 instrument mapping (see <see cref="MT32.Mt32Profiles"/>).
+        /// Loads a disk image into a drive and, for drive A, offers the reboot.
+        /// <paramref name="libraryGame"/> is the catalogue entry the image came from, or null for
+        /// anything opened by hand: it is what decides the game's MT-32 instrument mapping
+        /// (see <see cref="MT32.Mt32Profiles"/>).
         /// </summary>
-        async void InsertDisk(string ImageFile, Models.LibraryItem libraryGame)
+        async void InsertDisk(int drive, string ImageFile, Models.LibraryItem libraryGame)
         {
-            DisableEjectMenu();
+            DisableEjectMenu(drive);
 
-            bool inserted = InsertIntoDriveA(ImageFile, out string message);
+            bool inserted = InsertIntoDrive(drive, ImageFile, out string message);
 
             if (!inserted)
             {
@@ -661,18 +829,18 @@ namespace ASE
                     // Nothing picked: whatever was in the drive is still in it, no disk change
                     if (selectedFile == null)
                     {
-                        RefreshDiskMenus();
+                        RefreshDiskMenus(drive);
                         return;
                     }
 
-                    if (!InsertIntoDriveA($"{ImageFile}|{selectedFile}", out message))
+                    if (!InsertIntoDrive(drive, $"{ImageFile}|{selectedFile}", out message))
                     {
                         await Dialogs.MessageBox("Error", message, MessageBoxDialogType.Ok, MessageBoxIconType.Error, MessageBoxButton.Ok);
                         return;
                     }
 
-                    ZipFile = ImageFile;
-                    ItemMenuChangeDisk.IsEnabled = true;
+                    ZipFile[drive] = ImageFile;
+                    ChangeDiskItem(drive).IsEnabled = true;
                     ImageFile = selectedFile;
                 }
                 else
@@ -686,48 +854,109 @@ namespace ASE
                 ColoredConsole.WriteLine(message);
             }
 
-            // Applied before the reboot prompt on purpose: a power-cycle re-sends the mapped
-            // programs to a fresh module (MidiManager.Initialize), so the game comes up with
-            // its instruments already in place.
-            MT32.Mt32Profiles.SetCurrentGame(libraryGame);
+            // Drive A is where the game goes: it is the one that carries the MT-32 mapping and
+            // the only one worth rebooting for. A disk put in B: is data for whatever is already
+            // running, so it just goes in — the FDC reports the change on its own
+            // (FloppyImage.SignalDiskTransition) and the program picks it up.
+            if (drive == 0)
+            {
+                // Applied before the reboot prompt on purpose: a power-cycle re-sends the mapped
+                // programs to a fresh module (MidiManager.Initialize), so the game comes up with
+                // its instruments already in place.
+                MT32.Mt32Profiles.SetCurrentGame(libraryGame);
 
-            // Answering No is a real option now: the FDC reports the disk change to the running
-            // program (see FloppyImage.SignalDiskTransition), which is what multi-disk games and
-            // GEMDOS need to pick up the new disk without rebooting.
-            var response = await Dialogs.MessageBox("Disk inserted", "Reboot?", MessageBoxDialogType.YesNo, MessageBoxIconType.Question, MessageBoxButton.Yes);
+                // Answering No is a real option now: the FDC reports the disk change to the running
+                // program (see FloppyImage.SignalDiskTransition), which is what multi-disk games and
+                // GEMDOS need to pick up the new disk without rebooting.
+                var response = await Dialogs.MessageBox("Disk inserted", "Reboot?", MessageBoxDialogType.YesNo, MessageBoxIconType.Question, MessageBoxButton.Yes);
 
-            if (response == MessageBoxButton.Yes)
-                ASEMain.HardReset();
+                if (response == MessageBoxButton.Yes)
+                    ASEMain.HardReset();
+            }
 
-            ItemMenuEjectDisk.IsEnabled = true;
+            EjectDiskItem(drive).IsEnabled = true;
 
-            SetStatusBarText($"Disk {Path.GetFileName(ImageFile)} inserted in drive A");
+            SetStatusBarText($"Disk {Path.GetFileName(ImageFile)} inserted in drive {DriveLetter(drive)}");
         }
 
-        public void OnEjecImageClick(object sender, RoutedEventArgs e)
+        public void OnEjecImageClick(object sender, RoutedEventArgs e) => EjectFrom(0);
+
+        public void OnEjecImageBClick(object sender, RoutedEventArgs e) => EjectFrom(1);
+
+        void EjectFrom(int drive)
         {
             // Same rendezvous as inserting: the emulation thread must not be reading the image
             // while it is taken away from under it.
-            ASEMain.RunWhilePaused(ASEMain.driveA.Eject, out _);
-            ZipFile = "";
+            ASEMain.RunWhilePaused(Drive(drive).Eject, out _);
+            ZipFile[drive] = "";
 
-            // Empty drive: no library game any more, so the MT-32 mapping goes with it.
-            MT32.Mt32Profiles.SetCurrentGame(null);
+            // Empty drive A: no library game any more, so the MT-32 mapping goes with it. B: never
+            // carried one, so ejecting from it leaves the running game's instruments alone.
+            if (drive == 0)
+                MT32.Mt32Profiles.SetCurrentGame(null);
 
-            DisableEjectMenu();
+            DisableEjectMenu(drive);
         }
 
-        void DisableEjectMenu()
+        MenuItem ChangeDiskItem(int drive) => drive == 1 ? ItemMenuChangeDiskB : ItemMenuChangeDisk;
+
+        MenuItem EjectDiskItem(int drive) => drive == 1 ? ItemMenuEjectDiskB : ItemMenuEjectDisk;
+
+        void DisableEjectMenu(int drive)
         {
-            ItemMenuChangeDisk.IsEnabled = false;
-            ItemMenuEjectDisk.IsEnabled = false;
+            ChangeDiskItem(drive).IsEnabled = false;
+            EjectDiskItem(drive).IsEnabled = false;
         }
 
-        /// <summary>Puts the disk menu entries back in sync with what is actually in drive A.</summary>
-        void RefreshDiskMenus()
+        /// <summary>Puts a drive's disk menu entries back in sync with what is actually in it.</summary>
+        void RefreshDiskMenus(int drive)
         {
-            ItemMenuEjectDisk.IsEnabled = ASEMain.driveA.HasDisk;
-            ItemMenuChangeDisk.IsEnabled = !string.IsNullOrEmpty(ZipFile);
+            // A disconnected drive B has no entries to enable, whatever it is holding.
+            bool present = drive == 0 || Config.ConfigOptions.RunninConfig.DriveBEnabled;
+
+            EjectDiskItem(drive).IsEnabled = present && Drive(drive).HasDisk;
+            ChangeDiskItem(drive).IsEnabled = present && !string.IsNullOrEmpty(ZipFile[drive]);
+        }
+
+        /// <summary>
+        /// Plugs the external drive B: in or out. It is a cable, not a setting that waits for a
+        /// reset: the FDC stops answering for B: the moment it goes (see WD1772.DriveSelected),
+        /// and TOS' own floppy count follows within a frame (ASEMain.EnforceFloppyDriveCount).
+        /// A program already running may still have the old drive map cached, which is what the
+        /// reset in the message is for.
+        /// </summary>
+        public void OnConnectDriveBClick(object sender, RoutedEventArgs e)
+        {
+            bool connect = !Config.ConfigOptions.RunninConfig.DriveBEnabled;
+
+            // Unplugging takes the disk with it: a drive that is not there cannot be holding one.
+            if (!connect)
+                EjectFrom(1);
+
+            ApplyDriveBConnection(connect);
+
+            SetStatusBarText(connect
+                ? "Drive B: connected, reset ST if a program is already running"
+                : "Drive B: disconnected");
+        }
+
+        /// <summary>Applies the drive B connection to the config, the File menu and the status
+        /// bar light. Called from the constructor too, so a drive left connected in config.json
+        /// comes back with its menu entries and its LED already in place.</summary>
+        void ApplyDriveBConnection(bool connected)
+        {
+            Config.ConfigOptions.RunninConfig.DriveBEnabled = connected;
+
+            // A drive that is not there has no zip left to change disks from either
+            if (!connected)
+                ZipFile[1] = "";
+
+            ItemMenuConnectDriveB.Header = connected ? "Disconnect drive B:" : "Connect drive B:";
+            ItemMenuOpenDiskB.IsEnabled = connected;
+            RefreshDiskMenus(1);
+
+            DriveBLedImage.IsVisible = connected;
+            DriveBLabelClip.IsVisible = connected;
         }
 
         /// <summary>
@@ -834,8 +1063,10 @@ namespace ASE
                 return;
             }
 
-            // The snapshot may have re-inserted the disk that was in drive A
-            ItemMenuEjectDisk.IsEnabled = ASEMain.driveA.HasDisk;
+            // The snapshot carries the drives: which disks were in them, and whether B: was
+            // even plugged in.
+            ApplyDriveBConnection(Config.ConfigOptions.RunninConfig.DriveBEnabled);
+            RefreshDiskMenus(0);
 
             SetStatusBarText($"Snapshot {Path.GetFileName(path)} restored");
         }
@@ -848,7 +1079,7 @@ namespace ASE
             string gameFile = await library.ShowDialog<string>(this);
 
             if (!string.IsNullOrEmpty(gameFile))
-                InsertDisk(gameFile, library.SelectedGame);
+                InsertDisk(0, gameFile, library.SelectedGame);
         }
         
         private void OnConfigureLibraryClick(object sender, RoutedEventArgs e)

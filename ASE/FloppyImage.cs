@@ -17,7 +17,6 @@ namespace ASE
 
         public byte[] Data;
         public Configuration DiskConfig;
-        public List<Configuration> Configurations = new List<Configuration>();
 
         // STX (Pasti) images keep their own per-track/per-sector structures instead of the
         // linear Data buffer; the WD1772 branches on Stx != null.
@@ -30,6 +29,13 @@ namespace ASE
         // Path of the currently inserted image ("volume.zip|entry" for zipped images).
         // Stored in snapshots so the same disk can be re-inserted on restore.
         public string ImagePath = "";
+
+        // Just the file name of what is in the drive, for the status bar: no path, and for a
+        // zipped image the entry inside the volume, which is the disk that was actually inserted.
+        public string DisplayName =>
+            string.IsNullOrEmpty(ImagePath)
+                ? ""
+                : Path.GetFileName(ImagePath.Split('|').Last());
 
         public bool HasDisk => Data != null || Stx != null;
 
@@ -76,21 +82,6 @@ namespace ASE
         /// <summary>Cancels a pending transition. Used on a machine reset: TOS re-reads
         /// everything from scratch, so there is nothing left to notify.</summary>
         public void ClearDiskTransition() => Volatile.Write(ref _wpForcedUntilVbl, 0);
-
-        public FloppyImage()
-        {
-            // Make array of disk configurations from file sizes.
-            for (int caras = 1; caras < 3; caras++)
-                for (int pistas = 79; pistas < 83; pistas++)
-                    for (int sectores = 8; sectores < 13; sectores++)
-                        Configurations.Add(new Configuration()
-                        {
-                            Sides = caras,
-                            Tracks = pistas,
-                            SectorsPerTrack = sectores,
-                            SectorSize = 512
-                        });
-        }
 
         /// <summary>
         /// Loads a disk image into this drive. On success the disk change is signalled to the FDC
@@ -184,42 +175,50 @@ namespace ASE
             // ST image format
             else if (path.EndsWith(".st", StringComparison.OrdinalIgnoreCase))
             {
-                bool FilesizeMatched = false;
-                long ImageSize = (zip == null ? new FileInfo(path).Length : zip.GetEntry(path).Length);
+                byte[] image;
 
-                // Deduce the disk configuration from the file size.
-                Configurations.Find(x =>
+                // Read first: the geometry is worked out from the disk's own boot sector, not
+                // from the size of the file holding it (see DetectStGeometry).
+                if (zip == null)
                 {
-                    if (x.SizeInBytes == ImageSize)
-                    {
-                        DiskConfig = x;
-                        FilesizeMatched = true;
-                        return true;
-                    }
-                    return false;
-                });
+                    image = File.ReadAllBytes(path);
+                }
+                else
+                {
+                    var entry = zip.GetEntry(path);
 
-                if (!FilesizeMatched)
+                    using Stream entryStream = entry.Open();
+                    using MemoryStream ms = new MemoryStream((int)entry.Length);
+
+                    entryStream.CopyTo(ms);
+                    image = ms.ToArray();
+                }
+
+                var geometry = DetectStGeometry(image, out string how);
+
+                if (geometry == null)
                 {
-                    message = $"Floppy image unknown size, ejected: [[red]]{path}[[/red]]";
+                    message = $"Floppy image geometry not recognized ({image.Length} bytes), ejected: [[red]]{path}[[/red]]";
                     Eject();
                     return false;
                 }
 
-                if (zip == null)
-                {
-                    Data = File.ReadAllBytes(path);
-                }
-                else
-                {
-                    using Stream entryStream = zip.GetEntry(path).Open();
-                    using MemoryStream ms = new MemoryStream((int)ImageSize);
+                DiskConfig = geometry;
+                Data = image;
 
-                    entryStream.CopyTo(ms);
-                    Data = ms.ToArray();
-                }
+                // The drive answers with the geometry, so the buffer has to match it exactly:
+                // trailing junk past the last sector is dropped and a short last track is filled
+                // with zeros rather than throwing when it is read.
+                if (Data.Length != DiskConfig.SizeInBytes)
+                    Array.Resize(ref Data, DiskConfig.SizeInBytes);
 
                 Stx = null;
+
+                ColoredConsole.WriteLine(
+                    $"[[cyan]]FDC[[/cyan]] {Path.GetFileName(path)}: {DiskConfig.Tracks} tracks, " +
+                    $"{DiskConfig.SectorsPerTrack} sectors, {DiskConfig.Sides} side(s) ({how})",
+                    ConfigOptions.DebugModes.Quiet);
+
                 message = $"Floppy image loaded: [[green]]{path}[[/green]]";
             }
             // MSA image format
@@ -362,6 +361,147 @@ namespace ASE
             ImagePath = string.IsNullOrEmpty(ZipVolume) ? path : $"{ZipVolume}|{path}";
 
             return true;
+        }
+
+        // ---------------- .ST geometry ----------------
+        //
+        // A raw .ST image is just the sectors of the disk one after another, with no header
+        // saying how they are arranged, and the file size alone cannot say either: 737280 bytes
+        // is the standard 80 tracks / 9 sectors / 2 sides disk, but it is equally 60/12/2 or
+        // 48/15/2 - every factorisation of 1440 sectors fits. Answering with whichever came
+        // first in a table of sizes is a coin toss, and it was losing it: the table was built
+        // tracks-ascending, so a standard disk was read back as 60 tracks of 12 sectors.
+        //
+        // The disk carries the answer itself, in the boot sector's BIOS Parameter Block - the
+        // same fields TOS reads to mount it. They are little-endian words (the BPB is
+        // Intel-ordered even on a 68000): sectors per track at 24, sides at 26, and the total
+        // sector count at 19, which is what says the block describes THIS file rather than
+        // being whatever a protected loader left in its boot sector. The track count is taken
+        // from the file rather than from the BPB whenever the file divides exactly, because
+        // images with an extra track or two past what the BPB declares are common and those
+        // tracks are real data.
+        //
+        // Only when the boot sector is not a usable BPB is the size guessed, and then in the
+        // order of what an ST disk actually is (below) instead of table order. Semantics follow
+        // Hatari's Floppy_FindDiskDetails.
+
+        // BPB field offsets inside the boot sector.
+        const int BpbBytesPerSector = 11;
+        const int BpbTotalSectors = 19;
+        const int BpbSectorsPerTrack = 24;
+        const int BpbSides = 26;
+
+        // Bounds a geometry has to stay inside to be believed at all: 90 tracks covers the 80 of
+        // a standard disk plus every over-formatted variant (81-86), and 21 sectors the densest
+        // HD track.
+        const int MaxTracks = 90;
+        const int MaxSectorsPerTrack = 21;
+
+        // The sector counts ST disks are actually formatted with, most common first: 9 is the
+        // standard, 10 and 11 the usual extended formats, 12 exists, 8 and 7 are rare, and the
+        // last two are HD media. This order is the tie-breaker when several factorisations of
+        // the same file size are possible.
+        static readonly int[] SectorsPerTrackByPreference = { 9, 10, 11, 12, 8, 7, 18, 21 };
+
+        static int ReadLE16(byte[] data, int offset) => data[offset] | (data[offset + 1] << 8);
+
+        /// <summary>
+        /// Works out the geometry of a raw .ST image: from the boot sector's BPB when it holds
+        /// one that describes this file, otherwise from the file size. Returns null when neither
+        /// can explain it. <paramref name="source"/> says which of the two answered.
+        /// </summary>
+        static Configuration DetectStGeometry(byte[] image, out string source)
+        {
+            source = "";
+
+            int totalSectors = image.Length / 512;
+
+            if (totalSectors < 2)
+                return null;
+
+            // ---- the disk's own boot sector ----
+            int bps = ReadLE16(image, BpbBytesPerSector);
+            int spt = ReadLE16(image, BpbSectorsPerTrack);
+            int sides = ReadLE16(image, BpbSides);
+            int nsects = ReadLE16(image, BpbTotalSectors);
+
+            int unit = spt * sides;
+
+            // The block has to describe THIS file, because a loader that put its own code in the
+            // boot sector can leave anything in those bytes: Sega's Super Hang-On declares 9
+            // sectors per track, 1 side and a total of 9 sectors for an 819200-byte image. What
+            // catches that one is the file not dividing into whole tracks of the shape it claims;
+            // the declared total is otherwise allowed to fall a few tracks short of the file,
+            // since an image with extra tracks past what the BPB says is common (Out Run: 82
+            // tracks of real data, BPB says 80).
+            bool usableBpb =
+                bps == 512 &&
+                (sides == 1 || sides == 2) &&
+                spt >= 1 && spt <= MaxSectorsPerTrack &&
+                nsects >= totalSectors - 8 * unit &&
+                nsects <= totalSectors + 8 * unit;
+
+            if (usableBpb)
+            {
+                // Tracks come from the file whenever it divides exactly: an image with tracks
+                // past what the BPB declares still has them, and they are real data. Only when
+                // the file is not a whole number of tracks does the declared total decide, and
+                // then only if it is within a track of the file's own size.
+                int tracks = totalSectors % unit == 0 ? totalSectors / unit
+                           : Math.Abs(nsects - totalSectors) <= unit && nsects % unit == 0 ? nsects / unit
+                           : 0;
+
+                if (tracks >= 1 && tracks <= MaxTracks)
+                {
+                    source = "from boot sector";
+
+                    return new Configuration
+                    {
+                        Sides = sides,
+                        Tracks = tracks,
+                        SectorsPerTrack = spt,
+                        SectorSize = 512
+                    };
+                }
+            }
+
+            // ---- no usable BPB: guess, but in the order a real disk is likely to be ----
+            //
+            // Two passes, so a track count in the range an ST disk actually uses beats any other
+            // factorisation that also divides the file exactly. Double-sided is tried first
+            // within each pass, which is what makes a 368640-byte file come out as the
+            // single-sided 80/9/1 it is on an ST rather than a PC-shaped 40/9/2.
+            for (int pass = 0; pass < 2; pass++)
+            {
+                int minTracks = pass == 0 ? 78 : 20;
+                int maxTracks = pass == 0 ? 86 : MaxTracks;
+
+                for (int sides2 = 2; sides2 >= 1; sides2--)
+                    foreach (int spt2 in SectorsPerTrackByPreference)
+                    {
+                        int unit2 = spt2 * sides2;
+
+                        if (totalSectors % unit2 != 0)
+                            continue;
+
+                        int tracks = totalSectors / unit2;
+
+                        if (tracks < minTracks || tracks > maxTracks)
+                            continue;
+
+                        source = "guessed from file size, no usable boot sector";
+
+                        return new Configuration
+                        {
+                            Sides = sides2,
+                            Tracks = tracks,
+                            SectorsPerTrack = spt2,
+                            SectorSize = 512
+                        };
+                    }
+            }
+
+            return null;
         }
 
         public void Eject()

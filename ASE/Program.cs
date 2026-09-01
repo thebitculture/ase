@@ -1,4 +1,4 @@
-/*
+﻿/*
  * - ATARI SYSTEM EMULATOR - 
  * 
  * The Bit Culture 2026
@@ -299,6 +299,15 @@ namespace ASE
                 string message;
                 bool inserted = ASEMain.driveA.Insert(ConfigOptions.RunninConfig.FloppyImagePath, out message);
                 ColoredConsole.WriteLine(message);
+            }
+
+            // Drive B only exists when it is connected (--drive-b, or the File menu on a previous
+            // run); --floppy-b turns it on by itself, so a path here always has a drive to go in.
+            if (ConfigOptions.RunninConfig.DriveBEnabled
+                && !string.IsNullOrEmpty(ConfigOptions.RunninConfig.FloppyBImagePath))
+            {
+                ASEMain.driveB.Insert(ConfigOptions.RunninConfig.FloppyBImagePath, out string messageB);
+                ColoredConsole.WriteLine(messageB);
             }
 
             // Create window

@@ -10,35 +10,108 @@
 		Background="#1A1A1A"
 		Width="800" Height="600">
 
+		<Window.Resources>
+			<ResourceDictionary>
+
+				<ControlTheme x:Key="MenuSectionHeaderTheme"
+							  TargetType="MenuItem"
+							  BasedOn="{StaticResource {x:Type MenuItem}}">
+					<Setter Property="IsHitTestVisible" Value="False" />
+					<Setter Property="Focusable" Value="False" />
+					<Setter Property="IsTabStop" Value="False" />
+					<Setter Property="FontSize" Value="10" />
+					<Setter Property="FontWeight" Value="SemiBold" />
+					<Setter Property="Opacity" Value="0.65" />
+					<Setter Property="Padding" Value="12,10,12,4" />
+					<Setter Property="Template">
+						<ControlTemplate>
+							<Border
+								Padding="{TemplateBinding Padding}"
+								Background="Transparent">
+
+								<ContentPresenter
+									Content="{TemplateBinding Header}"
+									ContentTemplate="{TemplateBinding HeaderTemplate}"
+									HorizontalAlignment="Left"
+									VerticalAlignment="Center"
+									RecognizesAccessKey="False" />
+
+							</Border>
+						</ControlTemplate>
+					</Setter>
+
+				</ControlTheme>
+
+			</ResourceDictionary>
+		</Window.Resources>
+
 	<DockPanel LastChildFill="True">
 		<Menu DockPanel.Dock="Top" Name="MainMenu" Background="Transparent">
 
 			<MenuItem Header="_File">
+
+				<MenuItem Header="DRIVE A:" Theme="{StaticResource MenuSectionHeaderTheme}" />
 				<MenuItem Header="_Open disk image…" Click="OnOpenImageClick">
 					<MenuItem.Icon>
 						<Svg Path="avares://ASE/Assets/Icons/disk.svg" Width="16" Height="16"/>
 					</MenuItem.Icon>
 				</MenuItem>
-				<MenuItem Header="_Change disk from ZIP…" Click="OnChangeDiskClick" Name="ItemMenuChangeDisk" IsEnabled="False" />
-				<MenuItem Header="_Eject disk image / ZIP" Click="OnEjecImageClick" Name="ItemMenuEjectDisk" IsEnabled="False" />
+				<MenuItem Header="_Change disk from ZIP…" Click="OnChangeDiskClick" Name="ItemMenuChangeDisk" IsEnabled="False">
+					<MenuItem.Icon>
+						<Svg Path="avares://ASE/Assets/Icons/zip.svg" Width="16" Height="16"/>
+					</MenuItem.Icon>
+				</MenuItem>
+				<MenuItem Header="_Eject disk image / ZIP" Click="OnEjecImageClick" Name="ItemMenuEjectDisk" IsEnabled="False">
+					<MenuItem.Icon>
+						<Svg Path="avares://ASE/Assets/Icons/eject.svg" Width="16" Height="16"/>
+					</MenuItem.Icon>
+				</MenuItem>
+				<Separator />
+				
+				<!-- File options for drive B -->
+				<MenuItem Header="DRIVE B:" Theme="{StaticResource MenuSectionHeaderTheme}" />
+				<MenuItem Header="Connect drive B:" Name="ItemMenuConnectDriveB" Click="OnConnectDriveBClick">
+					<MenuItem.Icon>
+						<Svg Path="avares://ASE/Assets/Icons/plug.svg" Width="16" Height="16"/>
+					</MenuItem.Icon>
+				</MenuItem>
+				<!-- Options if drive B is connected -->
+				<MenuItem Header="Open disk image…" Name="ItemMenuOpenDiskB" Click="OnOpenImageBClick" IsEnabled="False">
+					<MenuItem.Icon>
+						<Svg Path="avares://ASE/Assets/Icons/disk.svg" Width="16" Height="16"/>
+					</MenuItem.Icon>
+				</MenuItem>
+				<MenuItem Header="Change disk from ZIP…" Name="ItemMenuChangeDiskB" Click="OnChangeDiskBClick" IsEnabled="False">
+					<MenuItem.Icon>
+						<Svg Path="avares://ASE/Assets/Icons/zip.svg" Width="16" Height="16"/>
+					</MenuItem.Icon>
+				</MenuItem>
+				<MenuItem Header="Eject disk image / ZIP" Name="ItemMenuEjectDiskB" Click="OnEjecImageBClick" IsEnabled="False">
+					<MenuItem.Icon>
+						<Svg Path="avares://ASE/Assets/Icons/eject.svg" Width="16" Height="16"/>
+					</MenuItem.Icon>
+				</MenuItem>
+
 				<Separator/>
 				<MenuItem Header="Save snapshot" Click="OnSaveSnapshotClick" InputGesture="F11" >
 					<MenuItem.Icon>
 						<Svg Path="avares://ASE/Assets/Icons/cone-striped.svg" Width="16" Height="16"/>
 					</MenuItem.Icon>
 				</MenuItem>
-				<MenuItem Header="Restore snapshot…" Click="OnRestoreSnapshotClick" />
+				<MenuItem Header="Restore snapshot…" Click="OnRestoreSnapshotClick">
+					<MenuItem.Icon>
+						<Svg Path="avares://ASE/Assets/Icons/fast-forward.svg" Width="16" Height="16"/>
+					</MenuItem.Icon>
+				</MenuItem>
 				<Separator/>
 				<MenuItem Header="_Library…" Click="OnLibraryClick">
 					<MenuItem.Icon>
 						<Svg Path="avares://ASE/Assets/Icons/collection-fill.svg" Width="16" Height="16"/>
 					</MenuItem.Icon>
 				</MenuItem>
-				<MenuItem Header="Configure Library…" Click="OnConfigureLibraryClick" />
-				<Separator/>
-				<MenuItem Header="_Quit" Click="OnExitClick">
+				<MenuItem Header="Configure Library…" Click="OnConfigureLibraryClick">
 					<MenuItem.Icon>
-						<Svg Path="avares://ASE/Assets/Icons/power.svg" Width="16" Height="16"/>
+						<Svg Path="avares://ASE/Assets/Icons/search.svg" Width="16" Height="16"/>
 					</MenuItem.Icon>
 				</MenuItem>
 			</MenuItem>
@@ -75,7 +148,12 @@
 						<Svg Path="avares://ASE/Assets/Icons/arrow-clockwise.svg" Width="16" Height="16"/>
 					</MenuItem.Icon>
 				</MenuItem>
+				<MenuItem Header="_Quit" Click="OnExitClick">
+					<MenuItem.Icon>
+						<Svg Path="avares://ASE/Assets/Icons/power.svg" Width="16" Height="16"/>
+					</MenuItem.Icon>
 				</MenuItem>
+			</MenuItem>
 
 			<MenuItem Header="Help">
 				<MenuItem Header="About ASE…" Click="OnAboutClick" >
@@ -98,35 +176,73 @@
 				BorderBrush="#2C2C2C"
 				BorderThickness="0,1,0,0">
 			<DockPanel LastChildFill="False">
-				<Image Name="HDLedImage"
-				       Source="./Assets/hd_led_off.png"
-				       DockPanel.Dock="Right"
-				       VerticalAlignment="Center"
-				       Height="22" />
-				<TextBlock Text="HDD"
-				           DockPanel.Dock="Right"
-				           VerticalAlignment="Center"
-				           Margin="0,0,5,0"
-				           FontSize="12"
-				           Opacity="0.5" />
-
-				<Border DockPanel.Dock="Right"
-						Width="2"
-						Background="#10FFFFFF"
-						Margin="10,0"/>
-
-				<Image Name="DriveLedImage"
-				       Source="./Assets/drive_led_off.png"
-				       DockPanel.Dock="Right"
-				       VerticalAlignment="Center"
-				       Height="22" />
-				<TextBlock Name="TextBlockDriveStatus"
-				           DockPanel.Dock="Right"
-				           VerticalAlignment="Center"
-				           Margin="0,0,5,0"
-				           FontSize="12"
-				           Foreground="{DynamicResource AccentTextBrush}" />
-
+				<Border DockPanel.Dock="Right" CornerRadius="4" BorderThickness="1" BorderBrush="#10FFFFFF" Padding="14,2,14,0">
+					<Border.Background>
+						<LinearGradientBrush StartPoint="0%,0%" EndPoint="0%,100%">
+							<GradientStop Color="#000000" Offset="0.0"/>
+							<GradientStop Color="#202020" Offset="0.2"/>
+						</LinearGradientBrush>
+					</Border.Background>
+					<StackPanel Orientation="Horizontal">
+						<!-- Drive A: light first, label to its right, like the HDD pair at the end
+						     of the strip. The label lives in a clipping canvas because a canvas
+						     measures its children unconstrained, so the text keeps its natural
+						     width and a name too long for the strip is scrolled by MainWindow's
+						     marquee timer (Canvas.Left) instead of being cut off. -->
+						<Image Name="DriveLedImage"
+						       Source="./Assets/drive_led_off.png"
+						       VerticalAlignment="Center"
+						       Height="22" />
+						<Canvas Name="DriveLabelClip"
+						        Width="130" Height="18"
+						        ClipToBounds="True"
+						        VerticalAlignment="Center"
+						        Margin="5,0,0,0">
+							<TextBlock Name="TextBlockDriveStatus"
+							           Canvas.Left="0" Canvas.Top="1"
+							           FontSize="12"
+							           Opacity="0.5"
+							           Text="A: Empty"
+							           Foreground="{DynamicResource AccentTextBrush}" />
+						</Canvas>
+						<!-- Drive B, the same pair; the 14 px opens the gap between both drives -->
+						<Image Name="DriveBLedImage"
+						       Source="./Assets/drive_led_off.png"
+						       VerticalAlignment="Center"
+						       Height="22"
+						       Margin="14,0,0,0"
+						       IsVisible="False" />
+						<Canvas Name="DriveBLabelClip"
+						        Width="130" Height="18"
+						        ClipToBounds="True"
+						        VerticalAlignment="Center"
+						        Margin="5,0,0,0"
+						        IsVisible="False">
+							<TextBlock Name="TextBlockDriveBStatus"
+							           Canvas.Left="0" Canvas.Top="1"
+							           FontSize="12"
+							           Opacity="0.5"
+							           Text="B: Empty"
+							           Foreground="{DynamicResource AccentTextBrush}" />
+						</Canvas>
+						
+						<Border
+							Width="2"
+							Background="#10FFFFFF"
+							Margin="10,0"/>
+						
+						<Image Name="HDLedImage"
+						       Source="./Assets/hd_led_off.png"
+						       VerticalAlignment="Center"
+						       Height="22" />
+						<TextBlock Text="HDD"
+						           VerticalAlignment="Center"
+						           Margin="5,0,0,0"
+						           FontSize="12"
+						           Opacity="0.5" />
+					</StackPanel>
+				</Border>
+				
 				<TextBlock Name="TextBlockStatusBar"
 				           VerticalAlignment="Center"
 				           FontSize="12"

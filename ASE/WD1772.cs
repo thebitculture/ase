@@ -40,7 +40,21 @@ namespace ASE
         // Estado
         static int currentDrive = -1;
         static int currentSide;
-        static int headTrack;
+
+        // Head position, per drive. Each drive parks its own head where it left it: the FDC has a
+        // single track register, and the TOS floppy driver reloads it with the track it believes
+        // the selected drive is at, skipping the seek when that already matches what it wants. A
+        // shared head therefore compared against the *other* drive's position the moment TOS
+        // alternated between A: and B:, and the access came back Record Not Found. Slot 2 is the
+        // scratch the step pulses fall into with no drive selected -- nothing out there moves.
+        static readonly int[] headTracks = new int[3];
+        static int HeadIndex => currentDrive == 0 ? 0 : currentDrive == 1 ? 1 : 2;
+        static int headTrack
+        {
+            get => headTracks[HeadIndex];
+            set => headTracks[HeadIndex] = value;
+        }
+
         static int stepDirection = 1;
         static bool dmaError;
         static int nextIdSector = 0;    // rotating sector index for READ ADDRESS
@@ -54,6 +68,17 @@ namespace ASE
         // Active disk according to the drive selection made through the YM2149's port A
         static FloppyImage ActiveDrive => currentDrive == 1 ? ASEMain.driveB : ASEMain.driveA;
 
+        // Drive B is a box on the end of a cable that may simply not be there (File > Connect
+        // drive B:). Unplugged, the select line reaches nothing: TR00, INDEX and WPT are
+        // open-collector inputs pulled inactive at the FDC, so they all read as false and every
+        // command that needs a drive to answer fails. That is what TOS' boot-time probe reads to
+        // decide whether this machine has a second floppy at all -- RESTORE steps out looking for
+        // TR00 and gets a seek error instead.
+        static bool DriveBConnected => ConfigOptions.RunninConfig.DriveBEnabled;
+
+        /// <summary>Whether a drive is actually on the other end of the current selection.</summary>
+        static bool DriveSelected => currentDrive == 0 || (currentDrive == 1 && DriveBConnected);
+
         // Head position ("A: T05 S09"), captured when each command starts and shown
         // in the status bar next to the LED while the drive has activity.
         static string ActivityText =>
@@ -66,6 +91,8 @@ namespace ASE
         private const byte STATUS_CRC_ERROR = 0x08;
         private const byte STATUS_RECORD_NOT_FOUND = 0x10;
         private const byte STATUS_RECORD_TYPE = 0x20;
+        // Same bit read in Type I form, where it means the spin-up sequence completed
+        private const byte STATUS_SPIN_UP = 0x20;
         private const byte STATUS_WRITE_PROTECT = 0x40;
         private const byte STATUS_MOTOR_ON = 0x80;
         private const byte STATUS_INDEX_PULSE = 0x02;
@@ -100,7 +127,7 @@ namespace ASE
             dmaAddress = 0;
             currentDrive = -1;
             currentSide = 0;
-            headTrack = 0;
+            Array.Clear(headTracks, 0, headTracks.Length);
             stepDirection = 1;
             dmaSectorCount = 0;
             dmaBytesInSector = DMA_SECTOR_SIZE;
@@ -486,6 +513,17 @@ namespace ASE
         // bits and sector positions stay exact no matter how often the FDC is ticked.
         static long motorStopClock = 0;
         static bool MotorOn => CPU._moira.Clock < motorStopClock;
+
+        /// <summary>
+        /// Whether anything is turning in front of the head right now. The drive answering the
+        /// select line puts an index pulse on the bus once per revolution while its motor runs,
+        /// with or without a disk in it: on a 3.5" drive the sensor reads the spindle, not the
+        /// medium, which is why TOS finds an empty drive A: at boot exactly as it finds a loaded
+        /// one. With drive B unplugged — or no drive selected at all — the line has nothing
+        /// driving it and no pulse ever arrives, which is what stalls the spin-up sequence
+        /// (see ExecuteCommand).
+        /// </summary>
+        static bool IndexPulsesPresent => MotorOn && DriveSelected;
         // Bit 1 of the status is index pulse after Type I / Force Interrupt, DRQ after Type II/III
         static bool lastCommandTypeI = true;
 
@@ -511,7 +549,10 @@ namespace ASE
         {
             // FinishStxOp can chain the next sector of a multi-sector command; keep
             // flushing until the whole chain has completed (the DMA count bounds it).
-            while (stxOp != null)
+            // A command parked waiting for index pulses is left alone: it carries no data
+            // and its whole point is that it never completes, so it travels in the snapshot
+            // as the flag it is (see SaveState).
+            while (stxOp != null && !stxOp.WaitingForIndex)
                 ProcessStxOp(stxOp.CompleteClock);
         }
 
@@ -545,6 +586,16 @@ namespace ASE
             // Appended: the DMA chip's undriven-bit latch and its position inside the sector
             w.U16(ff8604RecentVal);
             w.I32(dmaBytesInSector);
+
+            // Appended: both heads (the headTrack above is only the selected drive's)
+            w.I32(headTracks[0]);
+            w.I32(headTracks[1]);
+
+            // Appended: a Type I command parked in the spin-up sequence with nothing answering
+            // the select line. It is the one operation FlushPendingOp does not complete before
+            // saving, so without this the restored machine would come back busy with nothing
+            // left to retire it (a Force Interrupt still would, as on the real chip).
+            w.Bool(stxOp != null && stxOp.WaitingForIndex);
         }
 
         public static void LoadState(Snapshot.Reader r)
@@ -576,8 +627,21 @@ namespace ASE
             ff8604RecentVal = r.Remaining > 0 ? r.U16() : (ushort)0;
             dmaBytesInSector = r.Remaining > 0 ? r.I32() : DMA_SECTOR_SIZE;
 
+            // Both heads, appended after headTrack (which has already landed in the selected
+            // drive's slot): an older snapshot leaves the other drive's head where it was.
+            if (r.Remaining > 0)
+            {
+                headTracks[0] = r.I32();
+                headTracks[1] = r.I32();
+            }
+
             // An in-flight STX operation is never serialized (it completes before saving)
             stxOp = null;
+
+            // ...with one exception: a Type I parked in the spin-up sequence, which by
+            // definition never completes and so has to be put back (see SaveState).
+            if (r.Remaining > 0 && r.Bool())
+                stxOp = new StxOp { CompleteClock = long.MaxValue, WaitingForIndex = true };
         }
 
         /// <summary>
@@ -607,15 +671,17 @@ namespace ASE
                 // (see FloppyImage.SignalDiskTransition), so it can't be a frozen snapshot.
                 st &= unchecked((byte)~(STATUS_INDEX_PULSE | STATUS_TRACK0 | STATUS_WRITE_PROTECT));
 
-                // With no drive selected the TR00, INDEX and WPRT inputs are all inactive
-                if (currentDrive == -1)
+                // With no drive selected -- or drive B selected while it is unplugged -- the
+                // TR00, INDEX and WPRT inputs have nothing driving them and all read inactive
+                if (!DriveSelected)
                     return st;
 
                 if (headTrack == 0)
                     st |= STATUS_TRACK0;
 
-                // No index pulses without a spinning motor and a disk in the drive
-                if (motorOn && ActiveDrive.HasDisk &&
+                // No index pulses without a spinning motor (see IndexPulsesPresent: an empty
+                // but connected drive still pulses, its sensor sits on the motor's spindle)
+                if (IndexPulsesPresent &&
                     CPU._moira.Clock % CYCLES_PER_REVOLUTION < INDEX_PULSE_WIDTH_CYCLES)
                     st |= STATUS_INDEX_PULSE;
 
@@ -639,7 +705,11 @@ namespace ASE
         private static void UpdateTypeIStatus()
         {
             statusRegister = 0;
-            statusRegister |= 0x20; // Spin-up completed
+            statusRegister |= STATUS_SPIN_UP;
+
+            // Nothing answering the select line: the drive inputs stay inactive
+            if (!DriveSelected)
+                return;
 
             if (headTrack == 0)
                 statusRegister |= STATUS_TRACK0;
@@ -651,15 +721,28 @@ namespace ASE
         {
             // Force Interrupt terminates a command in progress; any other command written
             // while the FDC is busy is ignored, like on the real WD1772.
-            if ((command & 0xF0) == CMD_FORCE_INTERRUPT)
+            bool forceInterrupt = (command & 0xF0) == CMD_FORCE_INTERRUPT;
+
+            if (forceInterrupt)
                 stxOp = null;
             else if (stxOp != null)
                 return;
 
+            // A Force Interrupt has to know whether it interrupted anything: it keeps the
+            // status of a command in progress and only rewrites it when the chip was idle
+            // (see the Type IV path below), so both are captured before the reset.
+            bool wasBusy = (statusRegister & STATUS_BUSY) != 0;
+            byte statusBeforeCommand = statusRegister;
+
             commandRegister = command;
 
-            // Type I commands are 0x00-0x7F; Force Interrupt also presents Type I status
-            lastCommandTypeI = command < 0x80 || (command & 0xF0) == CMD_FORCE_INTERRUPT;
+            // Type I commands are 0x00-0x7F. Force Interrupt presents Type I status too, but
+            // only when it did not interrupt anything — otherwise the interrupted command's
+            // status stays as it is, in its own form.
+            if (!forceInterrupt)
+                lastCommandTypeI = command < 0x80;
+            else if (!wasBusy)
+                lastCommandTypeI = true;
 
             // Every command spins up the motor; it stays on for ~9 revolutions afterwards.
             // Whether it was already spinning decides the Type II/III spin-up delay on STX.
@@ -670,13 +753,44 @@ namespace ASE
             statusRegister |= STATUS_BUSY;
             ClearInterrupt();
 
-            // Captured here (emulation thread) so track/sector match the command that
+            // Captured here (emulation thread) so drive/track/sector match the command that
             // turns on the LED, not the moment the UI processes the queued work
             string activity = ActivityText;
+            int ledDrive = currentDrive == 1 ? 1 : 0;
 
             Dispatcher.UIThread.InvokeAsync(() => {
-                ASEMain.MainWindow.DriveLed(true, activity);
+                ASEMain.MainWindow.DriveLed(ledDrive, true, activity);
             }, DispatcherPriority.Background);
+
+            // A Type I command whose h bit (3) is clear asks the chip for the spin-up sequence:
+            // with the motor stopped it starts it and waits for SIX INDEX PULSES before the
+            // command runs at all. Nothing answers the select line when drive B is unplugged, so
+            // those pulses never come and the command never starts, never ends and never
+            // interrupts — the chip stays busy until a Force Interrupt retires it.
+            //
+            // That silence is how a program tells a second drive from an empty cable, and
+            // completing the command with a seek error instead (which is what a WD1772 reports
+            // only after it has really stepped 255 times looking for TR00) answers "there IS a
+            // drive there" to the shape of probe everyone uses. Psygnosis' Barbarian II is the
+            // case that found it: its loader selects drive B, sends RESTORE ($03) and spins on
+            // GPIP5 for ~3 s; the interrupt arriving at all is what it stores as "two drives",
+            // so it asked for disk two in B: on a machine that has no B: — and then read from a
+            // drive that cannot answer. TOS' own probe is built the same way and copes either
+            // way: it times out after 2 s (1 s with the motor already running) and issues the
+            // Force Interrupt itself ($E0175A in TOS 1.06).
+            //
+            // Only Type I is modelled here. A Type II/III command with no drive answering hangs
+            // on the real chip too (it hunts for an ID field it needs index pulses to give up
+            // on), but it still completes with Record Not Found in ASE — nothing has needed it
+            // and that path is where every loader lives.
+            if (command < 0x80 && (command & 0x08) == 0 && !motorWasOn && !DriveSelected)
+            {
+                // Busy is already set and the interrupt already cleared above: parking the
+                // command is all that is left. Only Force Interrupt (or a reset) clears it —
+                // a drive appearing mid-wait does not resume it, unlike the real chip.
+                stxOp = new StxOp { CompleteClock = long.MaxValue, WaitingForIndex = true };
+                return;
+            }
 
             // Type I (0xF0)
             byte hiNibble = (byte)(command & 0xF0);
@@ -722,7 +836,7 @@ namespace ASE
             // set and the data flows to the DMA byte by byte while the disk rotates,
             // which is what timing-based protections (Copylock etc.) measure.
             if (command >= 0x80 && (command & 0xF0) != CMD_FORCE_INTERRUPT
-                && currentDrive != -1 && ActiveDrive.Stx != null)
+                && DriveSelected && ActiveDrive.Stx != null)
             {
                 StartStxCommand(command, motorWasOn);
                 return;
@@ -772,10 +886,26 @@ namespace ASE
             }
 
             // Type IV: Force Interrupt (0xD0-0xDF)
-            if ((command & 0xF0) == CMD_FORCE_INTERRUPT)
+            if (forceInterrupt)
             {
-                statusRegister &= unchecked((byte)~STATUS_BUSY);
-                UpdateTypeIStatus();
+                // The status register is NOT rebuilt here. A Force Interrupt that stops a
+                // command in progress only drops the busy bit and leaves everything the
+                // interrupted command put there — contents and Type I/II form alike; only a
+                // Force Interrupt arriving at an idle chip switches the register to Type I
+                // form, and even then it just clears the spin-up bit and raises motor on
+                // (Hatari's FDC_TypeIV_ForceInterrupt, verified on an STF).
+                //
+                // Rewriting it as a fresh Type I status is what broke Turrican (Kixx, .STX):
+                // its boot loader reads a whole track with READ SECTOR MULTIPLE, waits for the
+                // DMA address to reach its target, stops the chip with $D0 and then tests the
+                // status against #$1C — lost data / CRC / record not found. In Type I form bit 2
+                // is TR00, not lost data, so a perfectly good read of track 0 came back as an
+                // error. The loader's retry path re-enters its read routine with D0 still
+                // holding the $D0 opcode, which it writes to the sector register: from there it
+                // asked for sector 208 forever, which is where it was found parked.
+                statusRegister = (byte)(wasBusy
+                    ? statusBeforeCommand & ~STATUS_BUSY
+                    : statusBeforeCommand & ~(STATUS_BUSY | STATUS_SPIN_UP));
 
                 byte intFlags = (byte)(command & 0x0F);
                 if (intFlags != 0)
@@ -837,6 +967,12 @@ namespace ASE
             trackRegister = 0;
             UpdateTypeIStatus();
 
+            // RESTORE steps outwards until TR00 comes back and gives up after 255 pulses with a
+            // seek error (bit 4, the bit that carries RNF in Type II form). With drive B
+            // unplugged that error is the whole answer to TOS' "is there a second drive?".
+            if (!DriveSelected)
+                statusRegister |= STATUS_RECORD_NOT_FOUND;
+
             // V flag (bit 2): verify reads an ID field, which fails with no disk
             if ((commandRegister & 0x04) != 0 && !ActiveDrive.HasDisk)
                 statusRegister |= STATUS_RECORD_NOT_FOUND;
@@ -858,8 +994,8 @@ namespace ASE
 
             UpdateTypeIStatus();
 
-            // V flag (bit 2): verify reads an ID field, which fails with no disk
-            if ((commandRegister & 0x04) != 0 && !ActiveDrive.HasDisk)
+            // V flag (bit 2): verify reads an ID field, which fails with no disk (or no drive)
+            if ((commandRegister & 0x04) != 0 && (!DriveSelected || !ActiveDrive.HasDisk))
                 statusRegister |= STATUS_RECORD_NOT_FOUND;
 
             statusRegister &= 0xFE;
@@ -885,7 +1021,7 @@ namespace ASE
         {
             bool multi = (commandRegister & 0x10) != 0; // bit 4 = multiple
 
-            if (currentDrive == -1 || !ActiveDrive.HasDisk)
+            if (!DriveSelected || !ActiveDrive.HasDisk)
             {
                 // No drive selected or no disk: no ID field can be read -> Record Not Found
                 statusRegister |= STATUS_RECORD_NOT_FOUND;
@@ -984,7 +1120,7 @@ namespace ASE
 
         private static void ExecuteWriteSector()
         {
-            if (currentDrive == -1 || !ActiveDrive.HasDisk)
+            if (!DriveSelected || !ActiveDrive.HasDisk)
             {
                 statusRegister |= STATUS_RECORD_NOT_FOUND;
                 return;
@@ -1052,7 +1188,7 @@ namespace ASE
 
         private static void ExecuteReadAddress()
         {
-            if (currentDrive == -1 || !ActiveDrive.HasDisk)
+            if (!DriveSelected || !ActiveDrive.HasDisk)
             {
                 statusRegister |= STATUS_RECORD_NOT_FOUND;
                 return;
@@ -1090,7 +1226,7 @@ namespace ASE
         // hang forever on an empty transfer.
         private static void ExecuteReadTrack()
         {
-            if (currentDrive == -1 || !ActiveDrive.HasDisk)
+            if (!DriveSelected || !ActiveDrive.HasDisk)
             {
                 statusRegister |= STATUS_RECORD_NOT_FOUND;
                 return;
@@ -1122,7 +1258,7 @@ namespace ASE
         // the transfer to finish do not hang.
         private static void ExecuteWriteTrack()
         {
-            if (currentDrive == -1 || !ActiveDrive.HasDisk)
+            if (!DriveSelected || !ActiveDrive.HasDisk)
             {
                 statusRegister |= STATUS_RECORD_NOT_FOUND;
                 return;
@@ -1302,6 +1438,8 @@ namespace ASE
             public bool DrainWriteTrack;      // write track: consume the format stream, keep the image
             public bool SetSectorReg;         // read address: ID track number -> sector register
             public byte SectorRegAtEnd;
+            public bool WaitingForIndex;      // Type I parked in the spin-up sequence: no index
+                                              // pulses, so it never completes (see ExecuteCommand)
         }
 
         static StxOp stxOp;

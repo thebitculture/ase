@@ -465,6 +465,8 @@ namespace ASE
                     _mfp.irqController.RaiseVBL();
                     Volatile.Write(ref _vblCount, _vblCount + 1);
 
+                    EnforceFloppyDriveCount();
+
                     // Steer the audio queue back towards its target latency. Once per frame is
                     // the right granularity: it reacts within a frame of a stall without the
                     // synthesis path having to look at the queue at all.
@@ -850,10 +852,12 @@ namespace ASE
             var prevModel = ConfigOptions.RunninConfig.STModel;
             var prevRam = ConfigOptions.RunninConfig.RAMConfiguration;
             var prevMono = ConfigOptions.RunninConfig.MonochromeMonitor;
+            var prevDriveB = ConfigOptions.RunninConfig.DriveBEnabled;
 
             ConfigOptions.RunninConfig.STModel = snap.Model;
             ConfigOptions.RunninConfig.RAMConfiguration = snap.RamConfig;
             ConfigOptions.RunninConfig.MonochromeMonitor = snap.Mono;
+            ConfigOptions.RunninConfig.DriveBEnabled = snap.DriveBConnected;
 
             try
             {
@@ -868,11 +872,65 @@ namespace ASE
                 ConfigOptions.RunninConfig.STModel = prevModel;
                 ConfigOptions.RunninConfig.RAMConfiguration = prevRam;
                 ConfigOptions.RunninConfig.MonochromeMonitor = prevMono;
+                ConfigOptions.RunninConfig.DriveBEnabled = prevDriveB;
 
                 TurnOn();
                 MainWindow?.RefreshAspectRatio();
                 return false;
             }
+        }
+
+        // TOS system variables this patches. _memvalid holds $752019 once TOS has finished
+        // sizing memory and has initialised the system variable area.
+        const uint SysVarMemvalid = 0x420;
+        const uint SysVarNflops = 0x4A6;
+        const uint MemvalidMagic = 0x752019;
+
+        /// <summary>
+        /// Keeps TOS' floppy count (_nflops, $4A6) in step with how many drives are actually
+        /// connected, once per VBL.
+        /// <para>
+        /// TOS works the count out for itself, and works it out right as long as the FDC answers
+        /// the way real hardware does: its detection routine ($FC0F44 in TOS 1.02, $E01892 in
+        /// TOS 1.62) zeroes _nflops and then, for drive 0 and drive 1, issues a <b>RESTORE and
+        /// tests TR00</b> (retrying once through a SEEK to track 10), counting the drives whose
+        /// TR00 comes back. What drops an unplugged B: out of that count is
+        /// <see cref="WD1772"/> leaving TR00, INDEX and WPT inactive for a selection nothing
+        /// answers — this poke is not what fixes it.
+        /// </para>
+        /// <para>
+        /// What it is for is the case TOS cannot see: that probe runs <b>once, at boot</b>, while
+        /// drive B is a cable the File menu plugs and unplugs with the machine running. Without
+        /// the refresh, a drive connected after boot stays invisible to TOS and a drive unplugged
+        /// after boot stays a fitted second drive. The value decides everything downstream: the
+        /// single-drive redirection in floprd/flopwr/flopver ($FC1EBE / $E01818) is gated on
+        /// <c>_nflops == 1</c> exactly, and it is what turns a B: access into the "Please insert
+        /// disk B into drive A:" prompt followed by a read of physical drive 0.
+        /// </para>
+        /// <para>
+        /// Note what this does <b>not</b> change: _drvbits ($4C2) always carries A: and B:,
+        /// because TOS sets both bits (<c>ori.l #3,$4C2</c>) as soon as any drive answers — a
+        /// program that enumerates drives with Drvmap() sees a B: on a one-drive ST too, and
+        /// that is authentic, not a leak in the emulation.
+        /// </para>
+        /// </summary>
+        static void EnforceFloppyDriveCount()
+        {
+            var mem = _mem;
+
+            if (mem == null)
+                return;
+
+            // Not before TOS has initialised the system variables: until then the memory test
+            // owns low RAM, and writing into what it is about to read back would corrupt the
+            // size it settles on.
+            if (mem.Read32(SysVarMemvalid) != MemvalidMagic)
+                return;
+
+            ushort drives = (ushort)(ConfigOptions.RunninConfig.DriveBEnabled ? 2 : 1);
+
+            if (mem.Read16(SysVarNflops) != drives)
+                mem.Write16(SysVarNflops, drives);
         }
 
         public static void Shutdown()

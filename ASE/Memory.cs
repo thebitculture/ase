@@ -156,13 +156,39 @@ namespace ASE
             if (addr >= 0xFFFA00 && addr <= 0xFFFA2F) return true;   // MFP 68901
             if (addr >= 0xFFFC00 && addr <= 0xFFFC07) return true;   // ACIAs: keyboard, MIDI
 
+            // Mega ST/STE real-time clock (see IsRtcBlock): decoded in every model, with no chip
+            // behind it -- the second block, after the HD density register, that has to answer
+            // without being implemented.
+            if (IsRtcBlock(addr)) return true;
+
             // Everything else is a chip this machine does not carry: the SCU/VME controller
             // ($FF8E00-$FF8E0F) and the cache/speed register ($FF8E21) of a Mega STE, its SCC
-            // ($FF8C80-$FF8C87), the Mega ST/STE real-time clock ($FFFC20-$FFFC3F, which ASE
-            // does not emulate in any model), TT and Falcon registers, and the gaps between
-            // blocks.
+            // ($FF8C80-$FF8C87), TT and Falcon registers, and the gaps between blocks.
             return false;
         }
+
+        /// <summary>
+        /// The Mega ST/STE real-time clock block ($FFFC20-$FFFC3F, an RP5C15 on odd bytes). ASE
+        /// emulates no clock in any model, but the block is <b>decoded</b> all the same: on a real
+        /// machine it answers whether or not the clock board is fitted, reading open bus when it
+        /// is not. Only this block is decoded, not the rest of the page around the ACIAs -- what
+        /// the gaps at $FFFC08-$FFFC1F and above $FFFC3F do is untested, so they keep faulting.
+        /// <para>
+        /// TOS 1.02 -- the Mega's own TOS, also sold as the upgrade for plain STs -- depends on
+        /// exactly that. Its clock probe at $FC4C0C writes $09 to $FFFC3B, MOVEPs $0A05 into
+        /// $FFFC25/27 and compares what comes back, taking a software fallback when it differs;
+        /// the ROM installs no bus-error handler anywhere, so faulting the write sent the
+        /// exception to the permanent vector and ended every cold boot in two bombs. TOS 1.04
+        /// boots because it never runs that probe.
+        /// </para>
+        /// <para>
+        /// It must not be served out of <see cref="Ports"/> either: echoing the pattern back is
+        /// what tells TOS -- and EmuTOS, which probes the same block to decide it is on a Mega --
+        /// that a clock IS fitted. Reads float high and writes are dropped, so the comparison
+        /// fails and the machine is correctly taken for one without a clock.
+        /// </para>
+        /// </summary>
+        static bool IsRtcBlock(uint addr) => addr >= 0xFFFC20 && addr <= 0xFFFC3F;
 
         /// <summary>
         /// End of the address window the machine decodes for system ROM (exclusive). A 256KB
@@ -699,6 +725,10 @@ namespace ASE
                 if (addr == STPortAdress.ST_MIDIDATA)
                     return MidiAcia.ReadData();
 
+                // Mega ST/STE clock: decoded, empty socket (see IsRtcBlock)
+                if (IsRtcBlock(addr))
+                    return 0xFF;
+
                 // Video Address Pointer ($FF8205/07/09): computed live so it advances through
                 // the active display and freezes in the borders, as games that poll it expect.
                 if (addr == STPortAdress.ST_HIVADRPOINT)
@@ -816,6 +846,10 @@ namespace ASE
                     return 0xFFFF;
                 }
 
+                // Mega ST/STE clock: decoded, empty socket (see IsRtcBlock)
+                if (IsRtcBlock(addr))
+                    return 0xFFFF;
+
                 // Any other I/O port is read without special treatment.
                 return BigEndian.Read16(addr);
             }
@@ -874,6 +908,10 @@ namespace ASE
                     BusError(addr, false);
                     return 0xFFFFFFFF;
                 }
+
+                // Mega ST/STE clock: decoded, empty socket (see IsRtcBlock)
+                if (IsRtcBlock(addr))
+                    return 0xFFFFFFFF;
 
                 return BigEndian.Read32(addr);
             }
@@ -1209,6 +1247,12 @@ namespace ASE
 
                 // STE extended joystick/joypad ports ($FF9200-$FF9223): writes are ignored
                 if (addr >= 0xFF9200 && addr <= 0xFF9223)
+                    return;
+
+                // Mega ST/STE clock: decoded, nothing behind it (see IsRtcBlock). Dropped rather
+                // than latched in Ports, or a probe would read its own pattern back and conclude
+                // the machine has a clock.
+                if (IsRtcBlock(addr))
                     return;
 
                 // ACIA

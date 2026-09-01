@@ -112,6 +112,7 @@ namespace ASE
             public ConfigOptions.STModels Model;
             public ConfigOptions.RAMConfigurations RamConfig;
             public bool Mono;
+            public bool DriveBConnected;
             public string DriveAPath = "";
             public string DriveBPath = "";
             public Dictionary<string, byte[]> Sections = new();
@@ -143,6 +144,11 @@ namespace ASE
                 w.Str(ASEMain.driveB.ImagePath);
                 // Appended after the original fields so older readers (which stop here) still load.
                 w.U8((byte)(ConfigOptions.RunninConfig.MonochromeMonitor ? 1 : 0));
+
+                // Whether drive B was plugged in. The path above says what was in it, not whether
+                // the machine had the drive at all — and an unplugged B: is a different machine to
+                // the software (see WD1772.DriveSelected).
+                w.U8((byte)(ConfigOptions.RunninConfig.DriveBEnabled ? 1 : 0));
             });
 
             WriteSection(fs, "CPU ", WriteCpu);
@@ -278,8 +284,10 @@ namespace ASE
             snap.RamConfig = (ConfigOptions.RAMConfigurations)ram;
             snap.DriveAPath = cfg.Str();
             snap.DriveBPath = cfg.Str();
-            // Monitor type is appended after the original fields; absent in older snapshots.
+            // Monitor type and drive B are appended after the original fields; absent in older
+            // snapshots, which then restore with drive B unplugged.
             snap.Mono = cfg.Remaining > 0 && cfg.Bool();
+            snap.DriveBConnected = cfg.Remaining > 0 && cfg.Bool();
 
             // Consistency checks that don't need the machine
             int romLen = snap.Sections["ROM "].Length - 4;
@@ -341,7 +349,12 @@ namespace ASE
 
             // Best effort: put back the disks that were inserted when the snapshot was taken
             ReinsertDrive(ASEMain.driveA, snap.DriveAPath, 'A');
-            ReinsertDrive(ASEMain.driveB, snap.DriveBPath, 'B');
+
+            // Only if the machine has the drive: a snapshot written before drive B could be
+            // unplugged carries a path but no connection flag, and a disk sitting in a drive
+            // that is not there is a state the UI has no way to show or clear.
+            if (ConfigOptions.RunninConfig.DriveBEnabled)
+                ReinsertDrive(ASEMain.driveB, snap.DriveBPath, 'B');
         }
 
         static void ReadCpu(Reader r)
