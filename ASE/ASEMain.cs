@@ -339,7 +339,15 @@ namespace ASE
                     // absorbed line to line instead of accumulating — that is what keeps the video
                     // boundaries locked to the cycle grid Spectrum 512's screen-wide cycle-counted
                     // palette routine relies on (otherwise its colours drift down the picture).
-                    long frameClockBase = CPU._moira.Clock;
+                    // Aligned DOWN to the 4-cycle MMU bus grid: the raw clock at this point still
+                    // carries the overshoot of the previous frame's last instruction (0..~20
+                    // cycles, arbitrary parity), and taking it verbatim re-phases every line of
+                    // the new frame against the bus-slot grid ApplyBusWait aligns CPU accesses
+                    // to. On real hardware that phase is rigid — the video fetches ARE the grid —
+                    // and cycle-counted palette code (Spectrum 512) shows the drift as colour
+                    // columns shimmering a few pixels frame to frame. All line lengths (512/508/
+                    // 224) are multiples of 4, so alignment established here holds all frame.
+                    long frameClockBase = CPU._moira.Clock & ~3L;
                     long lineBase = frameClockBase;
                     bool hitBreakpoint = false;
 

@@ -58,6 +58,28 @@ namespace ASE
             private static readonly uint[] _pal = new uint[16];   // ARGB, updated live by palette writes
             private static readonly byte[] _work = new byte[32];  // raw $FF8240 bytes, mutated as events apply
 
+            // Hatari encodes the same correction as 7 extra 4-cycle spans (28 cycles) in
+            // Spec512_StartScanLine ("'7' is required to align pixels and colors"); ASE's value
+            // differs because Moira's precise timing stamps the write at a different point inside
+            // the instruction than Hatari's convention.
+            // 19 is the value at which every image renders clean (20 applied some entries one pixel early,
+            // spraying wrong-coloured pixels on a few images). Without the lead every mid-line
+            // palette change shows up that many low-res pixels late — invisible on flat palette
+            // splits, but a Spectrum 512 photo shows it wherever consecutive values of an entry
+            // differ.
+            //
+            // The BORDER samples colour 0 with ONE MORE cycle of lead (PaintBorderSpan). The
+            // stamps sit on the 4-cycle bus grid, so a single integer cannot place both edges:
+            // the display columns calibrate to 19, but the colour-0 write that on real hardware
+            // (and Hatari) already covers the first right-border pixel needs 20 there — with 19
+            // on both, a 1-px stripe of the previous border colour runs down the display→border
+            // seam. Sub-grid detail the 4-aligned stamps cannot express, split empirically.
+            //
+            // I think this needs further investigation, and it would be useful if this variable
+            // could be set either as an environment variable or as a parameter so we can run more tests.
+            const int PaletteWriteLead = 19;
+            const int BorderWriteLead  = PaletteWriteLead + 1;
+
             /// <summary>
             /// Renders one full texture row (border + active display) for the given line.
             /// The whole row is first filled with the background colour (palette entry 0, the
@@ -97,12 +119,50 @@ namespace ASE
                 VideoTiming.PalEvent[] palEv = VideoTiming.PaletteEvents;
                 int evIdx = 0;
 
+                // Applies to _work/_pal every pending palette event stamped at or before cyc.
+                // Events are chronological, so each phase below only ever moves evIdx forward.
+                void ApplyPaletteUpTo(int cyc)
+                {
+                    while (evIdx < palCount && palEv[evIdx].Cycle <= cyc)
+                    {
+                        int off = palEv[evIdx].ByteOffset;
+                        _work[off] = palEv[evIdx].Val;
+                        int ci = off >> 1;
+                        _pal[ci] = StColorToArgb8888((ushort)((_work[ci * 2] << 8) | _work[ci * 2 + 1]));
+                        evIdx++;
+                    }
+                }
+
+                // Border pixels for tube cycles [cycFrom, cycTo), replaying the colour-0 writes at
+                // their horizontal position. The real border shows palette register 0 LIVE, so on a
+                // line with mid-line writes (Spectrum 512) the border is striped within the line,
+                // not one solid colour; a single line-start value painted black bars into the left
+                // border where the write stream had left colour 0 at the previous line's last value.
+                void PaintBorderSpan(int cycFrom, int cycTo)
+                {
+                    if (cycFrom < VideoTiming.VISIBLE_LEFT_CYCLE) cycFrom = VideoTiming.VISIBLE_LEFT_CYCLE;
+                    if (cycTo > VideoTiming.VISIBLE_RIGHT_CYCLE) cycTo = VideoTiming.VISIBLE_RIGHT_CYCLE;
+                    for (int cyc = cycFrom; cyc < cycTo; cyc++)
+                    {
+                        ApplyPaletteUpTo(cyc + BorderWriteLead);
+                        int bx = (cyc - VideoTiming.VISIBLE_LEFT_CYCLE) * 2;
+                        buffer[rowBase + bx] = _pal[0];
+                        buffer[rowBase + bx + 1] = _pal[0];
+                    }
+                }
+
                 uint border = _pal[0];
                 for (int x = 0; x < width; x++)
                     buffer[rowBase + x] = border;
 
                 if (!li.HasDisplay)
+                {
+                    // Pure border line: still replay the colour-0 writes across it (the visible
+                    // striping above/below a Spectrum 512 picture). No cost on ordinary lines.
+                    if (palCount > 0)
+                        PaintBorderSpan(VideoTiming.VISIBLE_LEFT_CYCLE, VideoTiming.VISIBLE_RIGHT_CYCLE);
                     return;
+                }
 
                 // Low resolution (4 planes, pixel-doubled into the texture) vs medium (2 planes, 1:1).
                 bool low = (li.Res & 0x03) == 0;
@@ -127,6 +187,10 @@ namespace ASE
                 int scroll = li.HScroll & 0x0F;
                 int outPixels = groups * 16;
 
+                // Left border, in draw (and therefore event) order before the display.
+                if (palCount > 0)
+                    PaintBorderSpan(VideoTiming.VISIBLE_LEFT_CYCLE, li.DeStart);
+
                 int srcGroup = -1;
                 ushort w0 = 0, w1 = 0, w2 = 0, w3 = 0;
 
@@ -144,20 +208,11 @@ namespace ASE
                     }
                     int bit = 15 - (srcPixel & 0x0F);
 
-                    // Apply any palette writes that land at or before this pixel's DE cycle.
-                    // Cheap no-op for ordinary frames, where the line has no mid-line writes.
+                    // Apply any palette writes that land at or before this pixel, shifted by the
+                    // fetch->emission pipeline (PaletteWriteLead). Cheap no-op for ordinary
+                    // frames, where the line has no mid-line writes.
                     if (evIdx < palCount)
-                    {
-                        int cyc = li.DeStart + (low ? p : (p >> 1));
-                        while (evIdx < palCount && palEv[evIdx].Cycle <= cyc)
-                        {
-                            int off = palEv[evIdx].ByteOffset;
-                            _work[off] = palEv[evIdx].Val;
-                            int ci = off >> 1;
-                            _pal[ci] = StColorToArgb8888((ushort)((_work[ci * 2] << 8) | _work[ci * 2 + 1]));
-                            evIdx++;
-                        }
-                    }
+                        ApplyPaletteUpTo(li.DeStart + (low ? p : (p >> 1)) + PaletteWriteLead);
 
                     int idx = ((w0 >> bit) & 1)
                             | (((w1 >> bit) & 1) << 1)
@@ -178,6 +233,10 @@ namespace ASE
                         tx += 1;
                     }
                 }
+
+                // Right border, after the display so the event cursor keeps moving forward.
+                if (palCount > 0)
+                    PaintBorderSpan(li.DeStop, VideoTiming.VISIBLE_RIGHT_CYCLE);
             }
 
             private static unsafe ushort ReadBEWord(uint srcLine, int group, int planes, int plane)
