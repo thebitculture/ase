@@ -1,11 +1,16 @@
+﻿using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Media;
+using Avalonia.Media.Imaging;
+using Avalonia.Platform;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text;
 using TinyDialogsNet;
 
@@ -87,6 +92,10 @@ public partial class DebugWindow : Window
             hexView.Poke = (a, v) => ASEMain._mem.DebugPoke8(a, v);
             hexView.CursorMoved += (addr, val) => txtMemStatus.Text = $"${addr:X6} = ${val:X2}";
             hexView.GotoAddress(0);
+
+            // Bitmap explorer: needs the memory monitor above it (the "From memory cursor"
+            // button reads hexView.CursorAddress) and the machine already parked.
+            InitBitmapExplorer();
             // Scrolling must happen once the ListBox has a size and has created its containers
             Opened += (_, _) => Dispatcher.UIThread.Post(
                 () => ScrollToLine(IndexOfAddress(CPU._moira.PC)), DispatcherPriority.Background);
@@ -106,6 +115,8 @@ public partial class DebugWindow : Window
 
         if (!Design.IsDesignMode)
         {
+            _bitmapSurface?.Dispose();
+            _bitmapSurface = null;
             ASEMain.ExitUiPause();
         }
     }
@@ -646,6 +657,410 @@ public partial class DebugWindow : Window
                 IsBreakpoint = (i == 32 || i == 20),
                 DasmCodeLine = $"{lineAddr + i * 2:X8} 1A1B 1C1D 1E1F             move.l #$FFFF0000,(a1)"
             });
+        }
+    }
+
+    // ------------------------------------------------------------------------------------
+    // Bitmap explorer
+    //
+    // Paints a stretch of RAM as if the shifter were fetching it: bytes are read as Atari
+    // bitplanes (planes interleaved word by word, most significant bit leftmost) and coloured
+    // with the machine's live palette registers. It is a way of *finding* graphics — a sprite
+    // sheet only lines up when the bytes-per-line matches its real width, so the picture
+    // snapping into place is what tells you the format is right.
+    //
+    // The machine is frozen for as long as the debugger is open (EnterUiPause in the
+    // constructor), so a render is a snapshot: nothing behind it changes until the user
+    // continues, and there is no need to poll.
+    // ------------------------------------------------------------------------------------
+
+    /// <summary>Colour registers on the shifter ($FF8240-$FF825F).</summary>
+    const int PaletteEntries = 16;
+
+    /// <summary>
+    /// False until the controls exist and the machine has been sampled. The NumericUpDowns
+    /// raise ValueChanged while the XAML is being loaded, long before the constructor has
+    /// reached its own initialization, and a render at that point would dereference nulls.
+    /// </summary>
+    bool _bitmapReady;
+
+    /// <summary>
+    /// The bitmap currently shown, kept so it can be exported and disposed. It is built at the
+    /// ST's own resolution (one texel per ST pixel) and magnified by the Image's Width/Height,
+    /// so the zoom costs no memory and the PNG export is 1:1 without a second render.
+    /// </summary>
+    WriteableBitmap _bitmapSurface;
+
+    readonly Border[] _palSwatches = new Border[PaletteEntries];
+    readonly ushort[] _palRaw = new ushort[PaletteEntries];
+
+    // Geometry of the dump currently on screen. The pointer readout reads these rather than
+    // recomputing them from the controls, so what it names can never disagree with what was
+    // actually drawn — the column count in particular depends on the viewport, not on a control.
+    int _bmpRows, _bmpCols, _bmpColWidth, _bmpLineBytes, _bmpPlanes, _bmpZoom;
+    uint _bmpStart;
+
+    void InitBitmapExplorer()
+    {
+        // Past the configured RAM the bus reads back zeros, so there is nothing to look at:
+        // the spinner stops where the machine's memory does.
+        numBmpAddr.Maximum = Math.Max(0, ASEMain._mem.RamSize - 1);
+
+        for (int i = 0; i < PaletteEntries; i++)
+        {
+            var swatch = new Border
+            {
+                Height = 15,
+                Margin = new Thickness(1),
+                CornerRadius = new CornerRadius(2),
+                BorderThickness = new Thickness(1),
+                BorderBrush = Brushes.Black
+            };
+
+            _palSwatches[i] = swatch;
+            palStrip.Children.Add(swatch);
+        }
+
+        // The wheel walks the dump, which is the gesture the whole tab is built around. The
+        // handler has to tunnel: the ScrollViewer marks the event handled in its own
+        // OnPointerWheelChanged, so a bubbling handler would never see it.
+        bmpScroll.AddHandler(InputElement.PointerWheelChangedEvent, OnBitmapWheel, RoutingStrategies.Tunnel);
+        bmpScroll.PointerMoved += OnBitmapPointerMoved;
+
+        _bitmapReady = true;
+
+        // First address written from here, not from the XAML: NumericUpDown only runs the
+        // converter over a value that CHANGES, so a value declared in the markup leaves the
+        // box empty — which is how a converted spinner presents when it looks broken.
+        numBmpAddr.Value = 0;
+
+        // ValueChanged has normally rendered already by now; the explicit call covers the
+        // case where the value was 0 to begin with and nothing was raised.
+        RenderBitmap();
+    }
+
+    /// <summary>Bytes one line of the dump consumes: the width in bytes, once per bitplane.</summary>
+    int BitmapLineBytes()
+        => (int)(numBmpBytes.Value ?? 40) * (int)(numBmpPlanes.Value ?? 4);
+
+    /// <summary>
+    /// Rebuilds the whole visible dump. Rows are chosen to fill the viewport at the current
+    /// zoom, so the picture always reaches the bottom edge and nothing hides below the fold —
+    /// which is why only the horizontal axis has a scrollbar.
+    /// </summary>
+    void RenderBitmap()
+    {
+        if (!_bitmapReady)
+            return;
+
+        int bytesWide = (int)(numBmpBytes.Value ?? 40);
+        int planes = (int)(numBmpPlanes.Value ?? 4);
+        int zoom = (int)(numBmpZoom.Value ?? 4);
+        uint start = (uint)(numBmpAddr.Value ?? 0);
+
+        int lineBytes = bytesWide * planes;
+
+        // The spinner's step is one line of the picture being shown, so holding the arrow
+        // scrolls the dump instead of tearing it: a sprite sheet keeps its phase.
+        if (numBmpAddr.Increment != lineBytes)
+            numBmpAddr.Increment = lineBytes;
+
+        // Width of one strip of the dump. With wrap on, several of them sit side by side.
+        int colWidth = bytesWide * 8;
+
+        // Viewport, not Bounds: a horizontal scrollbar eats into the height from the inside and
+        // Bounds would keep counting the rows it covers.
+        double viewH = bmpScroll.Viewport.Height > 0 ? bmpScroll.Viewport.Height : bmpScroll.Bounds.Height;
+        double viewW = bmpScroll.Viewport.Width > 0 ? bmpScroll.Viewport.Width : bmpScroll.Bounds.Width;
+
+        int rows = Math.Max(1, (int)(viewH / zoom));
+
+        // A strip wider than the pane still gets a single column and the horizontal scrollbar;
+        // wrapping only ever adds columns that actually fit.
+        int cols = tglBmpWrap.IsChecked == true
+                 ? Math.Max(1, (int)(viewW / ((double)colWidth * zoom)))
+                 : 1;
+
+        int width = colWidth * cols;
+
+        uint[] pal = ReadActivePalette(planes);
+        UpdatePaletteStrip(pal, planes);
+
+        var mem = ASEMain._mem;
+        uint[] pixels = new uint[width * rows];
+
+        // Planes are interleaved in WORD units, which is how the shifter fetches them: plane 0's
+        // word, plane 1's word, and so on, then the next 16 pixels. A width with an odd byte
+        // count cannot fill its last unit, so that byte is stored on its own, one per plane —
+        // the layout is not a real ST one, but it keeps the line exactly lineBytes long so the
+        // dump stays in phase instead of drifting a byte per row.
+        int fullUnits = bytesWide >> 1;
+        int tailBase = fullUnits * planes * 2;
+
+        // The line is fetched once and then decoded out of this buffer: going through
+        // DebugPeek8 per plane per pixel repeats every byte eight times, and at zoom 1 a
+        // full-width dump is over a million reads — enough to make dragging a spinner stutter.
+        byte[] lineBuf = new byte[lineBytes];
+
+        // Column by column: memory runs down one strip and carries on at the top of the next,
+        // so a run of sprites fills the pane instead of trailing off the bottom of a single
+        // strip — which is what turns it into a sheet. With wrap off there is exactly one
+        // column and this is the plain top-to-bottom walk it replaces.
+        for (int c = 0; c < cols; c++)
+        {
+            uint colBase = start + (uint)(c * rows * lineBytes);
+            int colX = c * colWidth;
+
+            for (int y = 0; y < rows; y++)
+            {
+                uint lineBase = colBase + (uint)(y * lineBytes);
+                int rowBase = y * width + colX;
+
+                // DebugPeek8, not Read8: this walks wherever the user points it, and the ordinary
+                // bus path would schedule bus errors the parked machine takes on resume (the same
+                // reason the renderer fetches through ReadVideoWord — see Video.cs).
+                for (int i = 0; i < lineBytes; i++)
+                    lineBuf[i] = mem.DebugPeek8(lineBase + (uint)i);
+
+                for (int x = 0; x < colWidth; x++)
+                {
+                    int b = x >> 3;          // byte of the plane this pixel lives in
+                    int bit = 7 - (x & 7);   // leftmost pixel is the most significant bit
+                    int unit = b >> 1;
+                    bool whole = unit < fullUnits;
+                    int baseOff = whole ? (unit * planes) * 2 + (b & 1) : tailBase;
+                    int planeStride = whole ? 2 : 1;
+
+                    int idx = 0;
+                    for (int p = 0; p < planes; p++)
+                        idx |= ((lineBuf[baseOff + p * planeStride] >> bit) & 1) << p;
+
+                    pixels[rowBase + x] = pal[idx];
+                }
+            }
+        }
+
+        // StColorToArgb8888 lays the components out the way the emulator's framebuffer does
+        // (0xAABBGGRR), which is Rgba8888 in memory — the same pairing ASEMain's screenshot uses.
+        var bmp = new WriteableBitmap(new PixelSize(width, rows), new Vector(96, 96),
+                                      PixelFormats.Rgba8888, AlphaFormat.Opaque);
+        using (var fb = bmp.Lock())
+        {
+            byte[] row = new byte[width * 4];
+            for (int y = 0; y < rows; y++)
+            {
+                Buffer.BlockCopy(pixels, y * width * 4, row, 0, row.Length);
+                Marshal.Copy(row, 0, fb.Address + y * fb.RowBytes, row.Length);
+            }
+        }
+
+        PixelImage.Source = bmp;
+        PixelImage.Width = width * zoom;
+        PixelImage.Height = rows * zoom;
+
+        // Swapped in before the old one goes, so the Image never holds a disposed bitmap.
+        _bitmapSurface?.Dispose();
+        _bitmapSurface = bmp;
+
+        _bmpRows = rows;
+        _bmpCols = cols;
+        _bmpColWidth = colWidth;
+        _bmpLineBytes = lineBytes;
+        _bmpPlanes = planes;
+        _bmpZoom = zoom;
+        _bmpStart = start;
+
+        uint last = start + (uint)(cols * rows * lineBytes) - 1;
+        string shape = cols > 1 ? $"{cols} cols of {colWidth}x{rows} px" : $"{colWidth}x{rows} px";
+        txtBmpInfo.Text = $"${start:X6} - ${last:X6}\n{lineBytes} bytes/line, {shape}, {1 << planes} colours";
+        txtBmpStatus.Text = $"${start:X6}";
+    }
+
+    /// <summary>
+    /// The machine's live colour registers, converted with the same routine the renderer uses
+    /// (so an STE gives its 4096-colour reading and an ST its 512-colour one).
+    /// </summary>
+    uint[] ReadActivePalette(int planes)
+    {
+        var mem = ASEMain._mem;
+        uint[] pal = new uint[PaletteEntries];
+
+        for (int i = 0; i < PaletteEntries; i++)
+        {
+            uint reg = Memory.STPortAdress.ST_PALLETE + (uint)(i * 2);
+            _palRaw[i] = (ushort)((mem.DebugPeek8(reg) << 8) | mem.DebugPeek8(reg + 1));
+            pal[i] = Video.AtariStRenderer.StColorToArgb8888(_palRaw[i]);
+        }
+
+        // High resolution never runs the registers through the DAC: register 0 only picks normal
+        // vs reverse video and the rest keep whatever colour a previous mode left in them (see
+        // Video.BlitLineMono). A 1-plane dump on an SM124 is therefore black and white, not the
+        // leftover pair the registers would otherwise paint it in.
+        if (VideoTiming.Mono && planes == 1)
+        {
+            bool white = (_palRaw[0] & 0x0FFF) != 0;
+            pal[0] = white ? 0xFFFFFFFFu : 0xFF000000u;
+            pal[1] = white ? 0xFF000000u : 0xFFFFFFFFu;
+        }
+
+        return pal;
+    }
+
+    /// <summary>
+    /// Repaints the 16 swatches. Entries the current bitplane count cannot reach are dimmed, so
+    /// it is plain which part of the palette the dump is actually addressing.
+    /// </summary>
+    void UpdatePaletteStrip(uint[] pal, int planes)
+    {
+        int used = 1 << planes;
+
+        for (int i = 0; i < PaletteEntries; i++)
+        {
+            // The colours the dump is actually painted with, so the monochrome override above
+            // shows up here too instead of the leftover registers behind it.
+            uint c = pal[i];
+            // 0xAABBGGRR, see RenderBitmap: red is the low byte.
+            _palSwatches[i].Background = new SolidColorBrush(
+                Color.FromRgb((byte)c, (byte)(c >> 8), (byte)(c >> 16)));
+            _palSwatches[i].Opacity = i < used ? 1.0 : 0.25;
+            ToolTip.SetTip(_palSwatches[i], $"{i}: ${_palRaw[i]:X4}");
+        }
+    }
+
+    /// <summary>Moves the start address by a number of bytes, clamped to the spinner's range.</summary>
+    void ScrollBitmapAddress(int bytes)
+    {
+        decimal value = (numBmpAddr.Value ?? 0) + bytes;
+        numBmpAddr.Value = Math.Clamp(value, numBmpAddr.Minimum, numBmpAddr.Maximum);
+    }
+
+    public void OnBitmapParamChanged(object sender, NumericUpDownValueChangedEventArgs e)
+    {
+        RenderBitmap();
+    }
+
+    public void OnBitmapViewportSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        // The height decides how many rows fit and, when wrapping, the width decides how many
+        // columns do.
+        if (e.HeightChanged || e.WidthChanged)
+            RenderBitmap();
+    }
+
+    public void OnBitmapWrapChanged(object sender, RoutedEventArgs e)
+    {
+        RenderBitmap();
+    }
+
+    /// <summary>
+    /// Wheel up walks BACKWARDS through memory, so the picture moves the way the wheel does:
+    /// the dump scrolls like any other document, and the address behind it follows. Reading it
+    /// the other way round (wheel up = higher address) is defensible on a strip of memory, but
+    /// it means pushing the wheel away to make the content come down, and that is confusing.
+    ///
+    /// Ctrl is the reason the tab is usable at all on real game data: a sprite sheet almost
+    /// never begins on a boundary of the line width being drawn, and a byte at a time is what
+    /// rolls it into phase — with only whole lines, a sheet sitting two bytes further on can
+    /// never be brought into view. Shift is the same gesture eight times faster, for crossing
+    /// a bank of memory looking for something that resolves into a picture.
+    /// </summary>
+    void OnBitmapWheel(object sender, PointerWheelEventArgs e)
+    {
+        if (!_bitmapReady)
+            return;
+
+        int dir = Math.Sign(e.Delta.Y);
+        if (dir == 0)
+            return;
+
+        int step = e.KeyModifiers.HasFlag(KeyModifiers.Control) ? 1
+                 : e.KeyModifiers.HasFlag(KeyModifiers.Shift) ? BitmapLineBytes() * 8
+                 : BitmapLineBytes();
+
+        ScrollBitmapAddress(-dir * step);
+        e.Handled = true;
+    }
+
+    /// <summary>
+    /// Reports the address under the pointer. This is the point of the whole tab: you spot a
+    /// sprite, put the mouse on its top-left corner and the status pill names the byte it
+    /// starts at.
+    /// </summary>
+    void OnBitmapPointerMoved(object sender, PointerEventArgs e)
+    {
+        if (!_bitmapReady || _bitmapSurface == null)
+            return;
+
+        var pos = e.GetPosition(PixelImage);
+        int px = (int)(pos.X / _bmpZoom);
+        int py = (int)(pos.Y / _bmpZoom);
+
+        if (px < 0 || py < 0 || px >= _bmpColWidth * _bmpCols || py >= _bmpRows)
+            return;
+
+        // Which strip the pointer is over, and how far into it. Each column consumed a whole
+        // pane's worth of lines before this one started.
+        int col = px / _bmpColWidth;
+        int cx = px - col * _bmpColWidth;
+
+        // Byte holding this pixel in plane 0 — the address a sprite ripper wants.
+        int b = cx >> 3;
+        int unit = b >> 1;
+        int fullUnits = (_bmpColWidth >> 3) >> 1;
+        int off = unit < fullUnits ? (unit * _bmpPlanes) * 2 + (b & 1) : fullUnits * _bmpPlanes * 2;
+
+        uint line = _bmpStart + (uint)((col * _bmpRows + py) * _bmpLineBytes);
+        txtBmpStatus.Text = $"x{cx,4} y{py,4}  line ${line:X6}  byte ${line + (uint)off:X6}";
+    }
+
+    public void OnBitmapScreenBaseClick(object sender, RoutedEventArgs e)
+    {
+        var mem = ASEMain._mem;
+        bool isSTE = Config.ConfigOptions.RunninConfig.STModel == Config.ConfigOptions.STModels.STE;
+
+        // The video BASE registers, not the live counter: this is where the frame starts.
+        // The low byte only exists on an STE, and its bit 0 is not part of the address.
+        uint screen = ((uint)mem.DebugPeek8(Memory.STPortAdress.ST_SCRHIGHADDR) << 16)
+                    | ((uint)mem.DebugPeek8(Memory.STPortAdress.ST_SCRMIDADDR) << 8)
+                    | (isSTE ? (uint)(mem.DebugPeek8(Memory.STPortAdress.ST_SCRLOWADDR) & 0xFE) : 0u);
+
+        numBmpAddr.Value = Math.Clamp((decimal)screen, numBmpAddr.Minimum, numBmpAddr.Maximum);
+    }
+
+    public void OnBitmapMemoryCursorClick(object sender, RoutedEventArgs e)
+    {
+        numBmpAddr.Value = Math.Clamp((decimal)hexView.CursorAddress, numBmpAddr.Minimum, numBmpAddr.Maximum);
+    }
+
+    /// <summary>
+    /// Writes the visible dump as a PNG at 1:1 — one file pixel per ST pixel, so the sprites can
+    /// be cut out of it in a paint program without undoing the zoom.
+    /// </summary>
+    public void OnBitmapExportClick(object sender, RoutedEventArgs e)
+    {
+        if (_bitmapSurface == null)
+            return;
+
+        uint start = (uint)(numBmpAddr.Value ?? 0);
+
+        // Proposed inside the configured screenshots directory, next to the F11 captures
+        Directory.CreateDirectory(Config.ScreenshotsDir);
+        var (canceled, path) = TinyDialogs.SaveFileDialog("Export bitmap dump",
+            Path.Combine(Config.ScreenshotsDir, $"ase_bitmap_{start:X6}.png"),
+            new FileFilter("PNG image", ["*.png"]));
+
+        if (canceled || string.IsNullOrWhiteSpace(path))
+            return;
+
+        try
+        {
+            _bitmapSurface.Save(path, PngBitmapEncoderOptions.Default);
+            txtBmpStatus.Text = $"Saved: {Path.GetFileName(path)}";
+        }
+        catch (Exception ex)
+        {
+            TinyDialogs.MessageBox("Error", $"Could not export the bitmap: {ex.Message}",
+                MessageBoxDialogType.Ok, MessageBoxIconType.Error, MessageBoxButton.Ok);
         }
     }
 }

@@ -12,6 +12,12 @@
     also be reused in controls outside an aseDialog if desired.
   -->
 
+    <!--
+      <Design.PreviewWith>
+            <NumericUpDown Classes="SmallSpinner" Value="4" Minimum="0" Maximum="4" Increment="1" />
+        </Design.PreviewWith>
+    -->
+
   <!-- Dialog surface -->
   <Style Selector="Window.aseDialog">
     <Setter Property="Background" Value="{DynamicResource DialogBackgroundBrush}"/>
@@ -128,6 +134,17 @@
   <Style Selector="RadioButton.optionCard:disabled">
     <Setter Property="Opacity" Value="0.5"/>
   </Style>
+
+    <!-- Numeric control -->
+    <Style Selector="NumericUpDown.SmallSpinner /template/ ButtonSpinner /template/ RepeatButton">
+        <Setter Property="Width" Value="24"/>
+        <Setter Property="MinWidth" Value="24" />
+        <Setter Property="Padding" Value="0"/>
+    </Style>
+    <Style Selector="NumericUpDown.SmallSpinner PathIcon">
+        <Setter Property="Width" Value="10"/>
+        <Setter Property="Height" Value="5"/>
+    </Style>
 
   <!--
     An option card's illustration is a multi-coloured SVG, not a monochrome

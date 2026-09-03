@@ -1,4 +1,4 @@
-<Window xmlns="https://github.com/avaloniaui"
+﻿<Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
@@ -14,6 +14,10 @@
         UseLayoutRounding="True"
         Width="1120"
         Height="810">
+
+    <Window.Resources>
+        <local:NumericControlHexConverter x:Key="HexConverter"/>
+    </Window.Resources>
 
     <Window.Styles>
         <!-- Debugger-specific styles. Shared dialog styling lives in AseDialogs.axaml. -->
@@ -559,6 +563,246 @@
                         </Grid>
                     </Border>
                 </Grid>
+            </TabItem>
+
+            <!-- Bitmap explorer -->
+            <TabItem>
+                <TabItem.Header>
+                    <StackPanel Orientation="Horizontal"
+                                Spacing="8"
+                                VerticalAlignment="Center">
+                        <Svg Path="avares://ASE/Assets/Icons/image.svg"
+                                 Width="17"
+                                 Height="17"
+                                 VerticalAlignment="Center" />
+                        <TextBlock Text="Bitmap explorer"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                </TabItem.Header>
+
+                <Grid Margin="0,14,0,8"
+                      RowDefinitions="*,Auto"
+                      ColumnDefinitions="*,390"
+                      RowSpacing="12"
+                      ColumnSpacing="12">
+
+                    <!--
+                      Display. The bitmap is built at the ST's own resolution and blown up by an
+                      integer factor with Stretch="Fill" plus nearest-neighbour sampling, so one
+                      ST pixel is exactly Zoom device pixels and nothing is ever filtered. Only
+                      the horizontal axis scrolls: the row count is computed to fill the viewport,
+                      so there is never anything below the fold.
+                    -->
+                    <Border Grid.Row="0" Grid.Column="0"
+                            Classes="codeSurface"
+                            Padding="1"
+                            ClipToBounds="True">
+                        <ScrollViewer x:Name="bmpScroll"
+                                      Background="Black"
+                                      ToolTip.Tip="Wheel: scrolls one line. Shift+wheel: eight lines. Ctrl+wheel: a single byte, to roll a sprite that does not start on a line boundary into phase."
+                                      HorizontalScrollBarVisibility="Auto"
+                                      VerticalScrollBarVisibility="Disabled"
+                                      SizeChanged="OnBitmapViewportSizeChanged">
+                            <Image Name="PixelImage"
+                                   Stretch="Fill"
+                                   HorizontalAlignment="Left"
+                                   VerticalAlignment="Top"
+                                   RenderOptions.BitmapInterpolationMode="None" />
+                        </ScrollViewer>
+                    </Border>
+
+                    <Border Grid.Row="0"
+                            Grid.Column="1"
+                            Classes="card">
+
+                        <StackPanel Spacing="12">
+
+                            <StackPanel Spacing="2">
+                                <TextBlock Classes="section"
+                                           Text="Bitmap explorer" />
+                                <TextBlock Classes="description"
+                                           TextWrapping="Wrap"
+                                           Text="Reads RAM as Atari bitplanes and paints it with the palette the machine is holding right now. Use it to find sprites, tiles and screen buffers." />
+                            </StackPanel>
+
+                            <Grid ColumnDefinitions="Auto,*"
+                                  ColumnSpacing="8">
+                                <TextBlock Classes="fieldLabel"
+                                           VerticalAlignment="Center"
+                                           Text="Start address" />
+                                <!--
+                                  Increment is set from the code-behind to one bitmap line
+                                  (bytes width x bitplanes), so the spinner scrolls the dump line
+                                  by line and a sprite sheet stays in phase.
+                                -->
+                                <!--
+                                  Value is deliberately NOT set here: it starts null and the
+                                  code-behind writes the first address, which is what makes
+                                  NumericUpDown run the converter and actually paint the box.
+                                  A value declared in XAML never changes, so the control would
+                                  come up blank.
+                                -->
+                                <NumericUpDown Grid.Column="1"
+                                               x:Name="numBmpAddr"
+                                               Minimum="0"
+                                               Maximum="4194303"
+                                               Increment="160"
+                                               ClipValueToMinMax="True"
+                                               TextConverter="{StaticResource HexConverter}"
+                                               ValueChanged="OnBitmapParamChanged"
+                                               ToolTip.Tip="Hexadecimal address of the first byte of the dump ($ and 0x are accepted). The arrows move one bitmap line." />
+                            </Grid>
+
+                            <Border Height="1" Background="{DynamicResource CardBorderBrush}" />
+
+                            <Grid ColumnDefinitions="*,14,*" ColumnSpacing="0">
+                                <Grid Grid.Column="0"
+                                      ColumnDefinitions="Auto,*"
+                                      ColumnSpacing="8">
+                                    <TextBlock Classes="fieldLabel"
+                                               VerticalAlignment="Center"
+                                               Text="Bytes width" />
+                                    <NumericUpDown Grid.Column="1"
+                                                   x:Name="numBmpBytes"
+                                                   Classes="SmallSpinner"
+                                                   Value="40"
+                                                   Minimum="2"
+                                                   Maximum="80"
+                                                   Increment="2"
+                                                   FormatString="0"
+                                                   ValueChanged="OnBitmapParamChanged"
+                                                   ToolTip.Tip="Bytes per bitplane on each line: 8 pixels per byte (a 16-pixel wide sprite is 2)" />
+                                </Grid>
+
+                                <Grid Grid.Column="2"
+                                      ColumnDefinitions="Auto,*"
+                                      ColumnSpacing="8">
+                                    <TextBlock Classes="fieldLabel"
+                                               VerticalAlignment="Center"
+                                               Text="Bitplanes" />
+                                    <NumericUpDown Grid.Column="1"
+                                                   x:Name="numBmpPlanes"
+                                                   Classes="SmallSpinner"
+                                                   Value="4"
+                                                   Minimum="1"
+                                                   Maximum="4"
+                                                   Increment="1"
+                                                   FormatString="0"
+                                                   ValueChanged="OnBitmapParamChanged"
+                                                   ToolTip.Tip="Planes interleaved per line: 1 = 2 colours, 2 = 4, 3 = 8, 4 = 16" />
+                                </Grid>
+                            </Grid>
+
+                            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
+                                <TextBlock Classes="fieldLabel"
+                                           VerticalAlignment="Center"
+                                           Text="Zoom" />
+                                <NumericUpDown Grid.Column="1"
+                                               x:Name="numBmpZoom"
+                                               Classes="SmallSpinner"
+                                               Value="4"
+                                               Minimum="1"
+                                               Maximum="12"
+                                               Increment="1"
+                                               FormatString="0"
+                                               ValueChanged="OnBitmapParamChanged"
+                                               ToolTip.Tip="Device pixels per ST pixel. An ST pixel drawn 1:1 is unreadably small on a modern screen, hence the default of 4." />
+                            </Grid>
+
+                            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
+                                <TextBlock Classes="fieldLabel"
+                                           VerticalAlignment="Center"
+                                           Text="Wrap" />
+                                <ToggleSwitch Grid.Column="1"
+                                              x:Name="tglBmpWrap"
+                                              HorizontalAlignment="Right"
+                                              VerticalAlignment="Center"
+                                              MinWidth="0"
+                                              OffContent="Single strip"
+                                              OnContent="Columns"
+                                              IsCheckedChanged="OnBitmapWrapChanged"
+                                              ToolTip.Tip="Off: one strip the width of the line, scrolled. On: the dump carries on at the top of the next column when it reaches the bottom, filling the pane - which is what turns a run of sprites into a sheet." />
+                            </Grid>
+
+                            <Border Height="1" Background="{DynamicResource CardBorderBrush}" />
+
+                            <StackPanel Spacing="6">
+                                <TextBlock Classes="fieldLabel"
+                                           Text="ACTIVE PALETTE" />
+                                <!--
+                                  The 16 colour registers as they stand at $FF8240. Entries the
+                                  current bitplane count cannot reach are dimmed, so it is obvious
+                                  which part of the strip the dump is actually using.
+                                -->
+                                <UniformGrid x:Name="palStrip"
+                                             Rows="2"
+                                             Columns="8" />
+                            </StackPanel>
+
+                            <Border Height="1" Background="{DynamicResource CardBorderBrush}" />
+
+                            <TextBlock x:Name="txtBmpInfo"
+                                       Classes="description"
+                                       TextWrapping="Wrap"
+                                       FontFamily="Courier New"
+                                       Text="-" />
+                        </StackPanel>
+
+                    </Border>
+
+                    <!-- Bitmap command bar -->
+                    <Border Grid.Row="1"
+                            Grid.Column="0"
+                            Grid.ColumnSpan="2"
+                            Classes="card"
+                            Padding="10">
+                        <Grid ColumnDefinitions="Auto,Auto,1,Auto,*,Auto"
+                              ColumnSpacing="8">
+
+                            <Button Grid.Column="0"
+                                    x:Name="btnBmpScreenBase"
+                                    Classes="compact"
+                                    Click="OnBitmapScreenBaseClick"
+                                    ToolTip.Tip="Jump to the address the shifter is displaying from ($FF8201/03/0D)">Screen base</Button>
+
+                            <Button Grid.Column="1"
+                                    x:Name="btnBmpMemCursor"
+                                    Classes="compact"
+                                    Click="OnBitmapMemoryCursorClick"
+                                    ToolTip.Tip="Jump to the byte the Memory tab is parked on">From memory cursor</Button>
+
+                            <Border Grid.Column="2"
+                                    Width="1"
+                                    Margin="6,2"
+                                    Background="{DynamicResource CardBorderBrush}"
+                                    VerticalAlignment="Stretch" />
+
+                            <Button Grid.Column="3"
+                                    x:Name="btnBmpExport"
+                                    Classes="compact"
+                                    Click="OnBitmapExportClick"
+                                    ToolTip.Tip="Writes the dump as a PNG at 1:1 (one file pixel per ST pixel), ready to cut sprites out of">
+                                <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                    <Svg Path="avares://ASE/Assets/Icons/camera.svg"
+                                         Width="15"
+                                         Height="15"
+                                         VerticalAlignment="Center" />
+                                    <TextBlock Text="Export PNG..." VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Button>
+
+                            <Border Grid.Column="5"
+                                    Classes="statusPill"
+                                    VerticalAlignment="Center"
+                                    HorizontalAlignment="Right">
+                                <TextBlock x:Name="txtBmpStatus"
+                                           Classes="statusPill"
+                                           FontFamily="Courier New">Bitmap</TextBlock>
+                            </Border>
+                        </Grid>
+                    </Border>
+                </Grid>
+
             </TabItem>
         </TabControl>
 

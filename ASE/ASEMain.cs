@@ -568,6 +568,29 @@ namespace ASE
 
                 CPU._moira.RunForCycles(want);
 
+                // A double fault leaves the 68000 halted, and there is nothing left to run: the
+                // next slice would fault on the same instruction, and the one after that, for as
+                // long as the emulator lives. Park the machine exactly as a breakpoint does, so
+                // the state that caused it can be read and snapshotted instead of being buried
+                // under its own console output.
+                //
+                // ONCE, though. Popping the debugger is a request to look at the machine, not a
+                // state the machine is in: closing it resumes, the CPU is still halted, and
+                // reopening the window on the next slice makes the emulator impossible to drive
+                // — Continue brings it straight back and there is no way to reach the menu and
+                // reset. After the first report the halted CPU simply executes nothing: the
+                // frame loop keeps running, so the last picture stays on screen and the UI stays
+                // alive, which is what a halted 68000 looks like from the outside anyway.
+                if (CPU._moira.Halted)
+                {
+                    if (_cpuHaltReported)
+                        return false;
+
+                    _cpuHaltReported = true;
+                    ReportCpuHalted();
+                    return true;
+                }
+
                 int elapsed = (int)(CPU._moira.Clock - before);
                 if (elapsed <= 0) break;   // no progress (e.g. a swallowed exception): never spin forever
 
@@ -591,6 +614,44 @@ namespace ASE
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// Prints the context of a halted CPU. The interesting part is rarely the PC — by the
+        /// time a double fault happens the program has usually been running through whatever
+        /// memory it landed in for a while — but the stack pointer and the group-0 vectors say
+        /// immediately whether the program had a handler at all and whether it had anywhere left
+        /// to stack the frame, which is what separates "the emulation faulted where hardware
+        /// would not" from "the program was already lost".
+        /// </summary>
+        /// <summary>
+        /// Set once the halt has been reported and the debugger opened for it. Cleared by
+        /// <see cref="TurnOn"/>, which is the only way out of a halt — as on the real chip.
+        /// </summary>
+        static bool _cpuHaltReported;
+
+        static void ReportCpuHalted()
+        {
+            var cpu = CPU._moira;
+
+            uint Vector(uint at) => ((uint)_mem.DebugPeek8(at) << 24) | ((uint)_mem.DebugPeek8(at + 1) << 16)
+                                  | ((uint)_mem.DebugPeek8(at + 2) << 8) | _mem.DebugPeek8(at + 3);
+
+            ColoredConsole.WriteLine(
+                "[[red]]CPU halted[[/red]]: double fault — a bus or address error was taken while the frame " +
+                "for another one was still being stacked. A real 68000 stops here until it is reset.",
+                ConfigOptions.DebugModes.Quiet);
+            ColoredConsole.WriteLine(
+                $"  PC=${cpu.PC & 0xFFFFFF:X6} PC0=${cpu.PC0 & 0xFFFFFF:X6} SR=${cpu.SR:X4} " +
+                $"SP=${cpu.SP & 0xFFFFFF:X6} IRD=${cpu.IRD:X4} IRC=${cpu.IRC:X4}",
+                ConfigOptions.DebugModes.Quiet);
+            ColoredConsole.WriteLine(
+                $"  vectors: bus error ($008)=${Vector(0x08):X6}, address error ($00C)=${Vector(0x0C):X6}",
+                ConfigOptions.DebugModes.Quiet);
+            ColoredConsole.WriteLine(
+                "  The machine is parked in the debugger; File > Save snapshot captures this exact state. " +
+                "The CPU stays stopped after you continue — reset the machine to restart it.",
+                ConfigOptions.DebugModes.Quiet);
         }
 
         /// <summary>
@@ -770,6 +831,10 @@ namespace ASE
         /// over the freshly initialized machine without any thread contention.</param>
         public static bool TurnOn(Action afterInit = null)
         {
+            // A power-on is the only way out of a halted CPU (InitCpu builds a fresh Moira, so
+            // the core's own flag goes with it — this is the report latch beside it).
+            _cpuHaltReported = false;
+
             // Starts with mouse uncaptured
             CaptureMouse(false);
 

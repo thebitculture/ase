@@ -1,4 +1,4 @@
-/*
+﻿/*
  *
  * Memory control functions.
  * Acts as GLUE and MMU in the Atari ST.
@@ -64,6 +64,12 @@ namespace ASE
         public const uint CartBase = 0xFA0000;
         public const uint CartEnd = 0xFC0000;   // exclusive
 
+        // The ST's system ROM window ($FC0000-$FEFFFF). A 192KB TOS fills it exactly; a 256KB
+        // one sits at $E00000 instead and leaves this window empty — but still *decoded*,
+        // which is the load-bearing part (see IsUndecoded).
+        const uint StRomBase = 0xFC0000;
+        const uint StRomEnd = 0xFF0000;   // exclusive
+
         // The GLUE decodes the whole 0x000000-0x3FFFFF region as RAM. Addresses inside this
         // region but beyond the configured MMU banks read as 0 (void), they never bus error.
         const uint RamRegionEnd = 0x400000;
@@ -76,18 +82,43 @@ namespace ASE
         const uint UnmappedIoTop = 0xFFFF00;
 
         /// <summary>
-        /// Everything between the RAM region and the I/O area that is not ROM or the cartridge
-        /// port decodes to nothing on an ST/STE, and the bus times out: $400000-$DFFFFF, the
-        /// half of $E00000-$FEFFFF the TOS image does not occupy, $F00000-$F9FFFF and
-        /// $FF0000-$FF7FFF. Answering a bus error there rather than 0xFF is what lets software
-        /// *probe* for hardware, which is how drivers and protections detect what is fitted:
-        /// they install a bus-error handler, touch the address and take the fault as "absent".
-        /// The ICD Pro hard disk driver hangs forever without this — it polls the Falcon IDE
-        /// status at $FFF00039 waiting for BSY to clear, and 0xFF has BSY permanently set.
+        /// Everything between the RAM region and the I/O area that is neither ROM nor the
+        /// cartridge port decodes to nothing on an ST/STE, and the bus times out:
+        /// $400000-$DFFFFF, the part of $E00000-$EFFFFF a 256KB TOS image does not occupy,
+        /// $F00000-$F9FFFF and $FF0000-$FF7FFF. Answering a bus error there rather than 0xFF is
+        /// what lets software *probe* for hardware, which is how drivers and protections detect
+        /// what is fitted: they install a bus-error handler, touch the address and take the
+        /// fault as "absent". The ICD Pro hard disk driver hangs forever without this — it polls
+        /// the Falcon IDE status at $FFF00039 waiting for BSY to clear, and 0xFF has BSY
+        /// permanently set.
+        /// <para>
+        /// <b>The ST ROM window $FC0000-$FEFFFF is decoded whatever TOS is loaded</b>, and is
+        /// the one exclusion here that does not follow from where the image sits. It is the
+        /// ROM's own decode area: a 192KB TOS fills it, a 256KB one is selected in the
+        /// $E00000 window instead and leaves it empty, but the decoder still answers — the bus
+        /// does not time out there on any ST. Faulting it broke, for example, <b>IK+</b> on a
+        /// machine running a 256KB TOS, and the crash lands nowhere near its cause: the game's
+        /// random number generator uses the ROM as its random table — <c>lea $00FC0000,a0</c>
+        /// then <c>move.w (a0,d0.w),d0</c> at $36D2 — so with a 256KB TOS it reads an address
+        /// that holds nothing. That read used to answer $FF and the RNG just returned dull
+        /// numbers; once it faulted, the bus error went to a vector the game has pointed, along
+        /// with vectors 2-11, at <i>ordinary code</i> ($14FA — the same "make stray exceptions
+        /// harmless" idiom as The Addams Family, but aimed at a live routine instead of an
+        /// <c>rte</c>). The CPU landed there in supervisor mode with the 14-byte frame still on
+        /// the stack, ran on into <c>jsr $6FC6</c> and never unwound it, leaking 10 bytes a turn
+        /// until the supervisor stack walked down from $0ED2 through the vectors and the game's
+        /// own code, and the machine ended up executing zeroed RAM up to $400000. Reading the
+        /// window as open bus is also what the window past a 256KB image already does.
+        /// 
+        /// Note: These are some tests I ran with a few games. The results are inconclusive, and
+        /// I’m not sure whether they’re related to the suspected root cause, but I’m documenting
+        /// them here in case they’re useful for future investigation.
+        /// </para>
         /// </summary>
         bool IsUndecoded(uint addr) =>
             addr >= RamRegionEnd && addr < PortsBase &&
             !(addr >= TosBase && addr < RomWindowEnd) &&
+            !(addr >= StRomBase && addr < StRomEnd) &&
             !(addr >= CartBase && addr < CartEnd);
 
         /// <summary>
@@ -124,10 +155,12 @@ namespace ASE
             if (addr >= 0xFF820C && addr <= 0xFF820F) return IsSTE;
 
             if (addr >= 0xFF8240 && addr <= 0xFF825F) return true;   // palette
-            if (addr >= 0xFF8260 && addr <= 0xFF8261) return true;   // resolution
 
-            // STE only: horizontal fine scroll
-            if (addr >= 0xFF8264 && addr <= 0xFF8265) return IsSTE;
+            // Resolution ($FF8260/61) and the whole rest of the shifter block behind it. Only
+            // those first two bytes are registers; everything up to $FF827F is decoded with
+            // nothing driving it and must NOT fault (see IsVoidIo). The STE's horizontal fine
+            // scroll at $FF8264/65 lives inside this block and is served before the void path.
+            if (addr >= 0xFF8260 && addr <= 0xFF827F) return true;
 
             // FDC / DMA. The ST's DMA chip decodes up to $FF860D and no further: $FF860E-$FF860F
             // is the high-density floppy register of the Mega STE and TT, and answering it on an
@@ -154,12 +187,16 @@ namespace ASE
             if (addr >= 0xFF9200 && addr <= 0xFF9223) return true;
 
             if (addr >= 0xFFFA00 && addr <= 0xFFFA2F) return true;   // MFP 68901
+            if (addr >= 0xFFFA30 && addr <= 0xFFFA3F) return true;   // rest of the MFP page: void
             if (addr >= 0xFFFC00 && addr <= 0xFFFC07) return true;   // ACIAs: keyboard, MIDI
+            if (addr >= 0xFFFC08 && addr <= 0xFFFC1F) return true;   // gap before the clock: void
 
             // Mega ST/STE real-time clock (see IsRtcBlock): decoded in every model, with no chip
             // behind it -- the second block, after the HD density register, that has to answer
             // without being implemented.
             if (IsRtcBlock(addr)) return true;
+
+            if (addr >= 0xFFFC40 && addr <= 0xFFFDFF) return true;   // gap after the clock: void
 
             // Everything else is a chip this machine does not carry: the SCU/VME controller
             // ($FF8E00-$FF8E0F) and the cache/speed register ($FF8E21) of a Mega STE, its SCC
@@ -189,6 +226,59 @@ namespace ASE
         /// </para>
         /// </summary>
         static bool IsRtcBlock(uint addr) => addr >= 0xFFFC20 && addr <= 0xFFFC3F;
+
+        /// <summary>
+        /// Every block the machine <b>decodes</b> with no register behind it: reads come back at
+        /// a fixed level, writes go nowhere, and neither raises a bus error. It is the middle
+        /// ground between a chip that answers and address space that faults, and getting it
+        /// wrong in either direction breaks software -- a block that faults where hardware
+        /// answers takes down programs that touch it, and one served out of <see cref="Ports"/>
+        /// hands a detection routine its own pattern back.
+        /// <para>
+        /// The shifter's block is the one that has cost the most. Only $FF8260/61 are registers,
+        /// but the GLUE decodes right through to $FF827F and answers there: Hatari's tables list
+        /// $FF8262 for 30 bytes on the ST and $FF8262/$FF8266 for the STE (with the fine scroll
+        /// in between) as <c>IoMem_VoidRead</c> -- "No bus errors here". Faulting them broke
+        /// <b>The Addams Family</b> (Ocean): it addresses the block through a register and its
+        /// access reaches $FF8263. The game points every exception vector at a bare <c>rte</c>
+        /// (at $A1A0: <c>lea $8,a0</c> then <c>move.l #$145F6,(a0)+</c> up to $400), which is a
+        /// common way of making stray exceptions harmless -- but an <c>rte</c> cannot retire the
+        /// 14-byte frame a bus/address error pushes. It popped the status word and the faulting
+        /// address as if they were SR and PC, jumped to that address ($FF8263, odd), faulted
+        /// again, and each turn of the loop leaked the 8 bytes of frame it had not consumed.
+        /// The supervisor stack walked from $1000 down to $10, erasing the vectors and the
+        /// system variables on the way. That is the signature to look for: low RAM filled with
+        /// one repeating 8-byte pattern whose halves read as an instruction word, a status
+        /// register and a PC -- the IR field names the instruction that faulted and the
+        /// address field names the register block the emulation should not have faulted.
+        /// </para>
+        /// </summary>
+        static bool IsVoidIo(uint addr)
+        {
+            // Shifter block past the resolution register. On an STE $FF8264/65 IS a register (the
+            // horizontal fine scroll) and is served by its own handler before this is consulted;
+            // on an ST nothing is there and it reads back like the rest of the block.
+            if (addr >= 0xFF8262 && addr <= 0xFF827F)
+                return !(IsSTE && (addr == STPortAdress.ST_HSCROLL_NP || addr == STPortAdress.ST_HSCROLL));
+
+            if (IsRtcBlock(addr)) return true;
+
+            // The MFP page above the USART registers, and the gaps either side of the clock
+            if (addr >= 0xFFFA30 && addr <= 0xFFFA3F) return true;
+            if (addr >= 0xFFFC08 && addr <= 0xFFFC1F) return true;
+            if (addr >= 0xFFFC40 && addr <= 0xFFFDFF) return true;
+
+            return false;
+        }
+
+        /// <summary>
+        /// What an undriven decoded block reads back as. The shifter's floats high on an ST and
+        /// is driven low by the STE's GSTMCU -- Hatari's tables use <c>IoMem_VoidRead</c> for the
+        /// first and <c>IoMem_VoidRead_00</c> ("return 0 not ff") for the second. Everything else
+        /// here is an empty socket and floats high.
+        /// </summary>
+        static byte VoidIoByte(uint addr)
+            => IsSTE && addr >= 0xFF8262 && addr <= 0xFF827F ? (byte)0x00 : (byte)0xFF;
 
         /// <summary>
         /// End of the address window the machine decodes for system ROM (exclusive). A 256KB
@@ -725,9 +815,11 @@ namespace ASE
                 if (addr == STPortAdress.ST_MIDIDATA)
                     return MidiAcia.ReadData();
 
-                // Mega ST/STE clock: decoded, empty socket (see IsRtcBlock)
-                if (IsRtcBlock(addr))
-                    return 0xFF;
+                // Decoded with nothing behind it (the shifter's tail, the Mega clock, the I/O
+                // gaps): floats at its own level instead of answering out of the Ports latch,
+                // where a value written earlier would still be sitting (see IsVoidIo).
+                if (IsVoidIo(addr))
+                    return VoidIoByte(addr);
 
                 // Video Address Pointer ($FF8205/07/09): computed live so it advances through
                 // the active display and freezes in the borders, as games that poll it expect.
@@ -846,9 +938,11 @@ namespace ASE
                     return 0xFFFF;
                 }
 
-                // Mega ST/STE clock: decoded, empty socket (see IsRtcBlock)
-                if (IsRtcBlock(addr))
-                    return 0xFFFF;
+                // Decoded with nothing behind it (see IsVoidIo). Both halves are resolved
+                // separately: a word straddling the end of such a block still reads the half
+                // that is a real register.
+                if (IsVoidIo(addr) || IsVoidIo(addr + 1))
+                    return (ushort)((Read8(addr) << 8) | Read8(addr + 1));
 
                 // Any other I/O port is read without special treatment.
                 return BigEndian.Read16(addr);
@@ -909,9 +1003,11 @@ namespace ASE
                     return 0xFFFFFFFF;
                 }
 
-                // Mega ST/STE clock: decoded, empty socket (see IsRtcBlock)
-                if (IsRtcBlock(addr))
-                    return 0xFFFFFFFF;
+                // Decoded with nothing behind it (see IsVoidIo), byte by byte for the same
+                // reason as the word path above.
+                if (IsVoidIo(addr) || IsVoidIo(addr + 3))
+                    return ((uint)Read8(addr) << 24) | ((uint)Read8(addr + 1) << 16)
+                         | ((uint)Read8(addr + 2) << 8) | Read8(addr + 3);
 
                 return BigEndian.Read32(addr);
             }
@@ -1185,10 +1281,12 @@ namespace ASE
                 // STE horizontal fine scroll. $FF8264 and $FF8265 are the same 4-bit latch; only
                 // $FF8265 adds the shifter's prefetch cycle. Both slots are kept in sync so a read
                 // back (and a snapshot restore, through VideoTiming.RestoreFromPorts) sees it.
-                if (addr == STPortAdress.ST_HSCROLL || addr == STPortAdress.ST_HSCROLL_NP)
+                // Guarded on the model, not handled and then ignored: a plain ST has no latch
+                // here at all, so the write has to fall through to the void path below instead
+                // of being stored where a read would find it again.
+                if (IsSTE && (addr == STPortAdress.ST_HSCROLL || addr == STPortAdress.ST_HSCROLL_NP))
                 {
-                    if (IsSTE)
-                        VideoTiming.OnHScrollWrite(v, addr == STPortAdress.ST_HSCROLL);
+                    VideoTiming.OnHScrollWrite(v, addr == STPortAdress.ST_HSCROLL);
                     v &= 0x0F;                       // 4-bit latch: that is all it reads back as
                     Ports[STPortAdress.ST_HSCROLL - PortsBase] = v;
                     Ports[STPortAdress.ST_HSCROLL_NP - PortsBase] = v;
@@ -1249,10 +1347,10 @@ namespace ASE
                 if (addr >= 0xFF9200 && addr <= 0xFF9223)
                     return;
 
-                // Mega ST/STE clock: decoded, nothing behind it (see IsRtcBlock). Dropped rather
-                // than latched in Ports, or a probe would read its own pattern back and conclude
-                // the machine has a clock.
-                if (IsRtcBlock(addr))
+                // Decoded with nothing behind it (see IsVoidIo). Dropped rather than latched in
+                // Ports: a probe that reads its own pattern back concludes the chip is fitted,
+                // which is exactly what the Mega clock block must not answer.
+                if (IsVoidIo(addr))
                     return;
 
                 // ACIA

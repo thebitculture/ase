@@ -89,7 +89,24 @@ namespace ASE
 
         // -------------------- Execution --------------------
 
-        public void Reset() => Native.moira_reset(_h);
+        public void Reset()
+        {
+            Halted = false;
+            Native.moira_reset(_h);
+        }
+
+        /// <summary>
+        /// True once the core has thrown across the P/Invoke boundary. In practice that means a
+        /// DOUBLE FAULT: a bus or address error taken while the CPU was still stacking the frame
+        /// for another one — classically a fault reached with a stack pointer that no longer
+        /// points at RAM. A real 68000 stops dead there, asserting HALT until it is reset, and
+        /// modelling that is not a nicety: the CPU has made no progress, so swallowing the
+        /// exception and running on re-faults on the same instruction on the very next slice,
+        /// forever, printing as it goes. From outside that is not a crash, it is "the emulator
+        /// stopped responding" — with no way left to snapshot the state that caused it.
+        /// Cleared by <see cref="Reset"/>; a power-on builds a new instance anyway.
+        /// </summary>
+        public bool Halted { get; private set; }
 
         /// <summary>Execute a single instruction.</summary>
         public void Step() => Native.moira_execute(_h);
@@ -99,27 +116,24 @@ namespace ASE
         /// breakpoint is reached (check <see cref="BreakpointWasHit"/> right after the call).
         /// </summary>
         /// <remarks>This method catches all exceptions thrown by the emulator loop since it executes in a different thread.</remarks>
-        const int MaxReportedBusFaults = 5;
-        int _busFaults;
-
         public void RunForCycles(long cycles)
         {
+            if (Halted)
+                return;
+
             try
             {
                 Native.moira_execute_cycles(_h, cycles);
             }
             catch (Exception ex)
             {
-                // The exception was thrown inside one of the bus callbacks and crossed the native
-                // boundary. Say WHAT it was: a bare "something failed" here is unusable, and this
-                // is the only place the failure is ever seen. Reported in full the first few times
-                // (an exception per instruction would otherwise scroll the console away), then
-                // counted.
-                _busFaults++;
-                if (_busFaults <= MaxReportedBusFaults)
-                    Console.WriteLine($"Not controlled exception in Moira: {ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}");
-                else if (_busFaults == MaxReportedBusFaults + 1)
-                    Console.WriteLine("Not controlled exception in Moira: further occurrences suppressed");
+                // The exception was thrown inside the core and crossed the native boundary, which
+                // Moira only does for what it cannot handle at all — a double fault. Say WHAT it
+                // was (a bare "something failed" here is unusable, and this is the only place the
+                // failure is ever seen) and stop the CPU: see Halted for why running on is worse
+                // than useless. Printed once, because it can now only happen once per reset.
+                Halted = true;
+                Console.WriteLine($"Not controlled exception in Moira: {ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}");
             }
         }
 
@@ -162,8 +176,13 @@ namespace ASE
 
         public void TriggerBusError(uint ErrorAdress, bool IsWrite)
         {
+            // The PC matters as much as the address: a fault in undecoded space says nothing
+            // about its cause on its own, and the instruction that caused it is the whole
+            // diagnosis. IK+ was a single read of $FC000C from $36D8 — its random number
+            // generator indexing the ST ROM window — and without the PC that line named
+            // nothing. The I/O paths in Memory.cs log the block they belong to on top of this.
             if (Config.ConfigOptions.RunninConfig.DebugMode >= Config.ConfigOptions.DebugModes.Information)
-                ColoredConsole.WriteLine($"Moira: Triggering bus error at address [[red]]{ErrorAdress:X}[[/red]] (isWrite=[[magenta]]{IsWrite}[[/magenta]])");
+                ColoredConsole.WriteLine($"Moira: Triggering bus error at address [[red]]{ErrorAdress:X}[[/red]] (isWrite=[[magenta]]{IsWrite}[[/magenta]]) from PC=[[cyan]]${PC0:X6}[[/cyan]]");
 
             Native.moira_triggerBusError(_h, ErrorAdress, IsWrite);
         }

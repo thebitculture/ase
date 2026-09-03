@@ -788,6 +788,18 @@ namespace ASE
                 // Busy is already set and the interrupt already cleared above: parking the
                 // command is all that is left. Only Force Interrupt (or a reset) clears it —
                 // a drive appearing mid-wait does not resume it, unlike the real chip.
+                //
+                // Traced because the consequence is total: the chip stays busy, every later
+                // command is ignored, and a program waiting on the interrupt waits forever. It
+                // is meant to happen only for a selection nothing answers (drive B unplugged);
+                // seeing it for currentDrive = -1 means no drive was selected when the command
+                // was written, and that is the first thing to check if a game that used to load
+                // suddenly stops.
+                ColoredConsole.WriteLine(
+                    $"[[cyan]]FDC[[/cyan]] Type I ${command:X2} parked waiting for index pulses " +
+                    $"(drive={currentDrive}, motor off) — only a Force Interrupt can retire it",
+                    ConfigOptions.DebugModes.Information);
+
                 stxOp = new StxOp { CompleteClock = long.MaxValue, WaitingForIndex = true };
                 return;
             }
