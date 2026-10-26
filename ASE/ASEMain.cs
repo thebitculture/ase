@@ -86,7 +86,7 @@ namespace ASE
         // by a sleep. Machines exchanging over a cable care about each other's present: in a
         // burst each runs up to a frame ahead of the wall clock, with its own phase, so a byte
         // reaches the other end after it has finished its frame and waits for the next — a frame
-        // or two per exchange (Stunt Car Racer, NETPLAY.md §6.3), and per hop of a MIDI ring.
+        // or two per exchange (NETPLAY.md §6.3), and per hop of a MIDI ring.
         // Paced in slices, every machine stays within a slice of the wall clock, and what the
         // USART or the MIDI ACIA sent leaves at the end of each one. Only with a cable: for
         // ordinary input the burst is the better shape, since the input is read just before the
@@ -465,6 +465,11 @@ namespace ASE
                         if (VideoTiming.DisplayEnabledNow())
                             _mfp.TickTimerB_EventCount();
 
+                        // The STE's sound DMA tops up its FIFO once a line, where the display
+                        // stops; the end of a sound frame happens here, at the last fetch.
+                        if (isSTE)
+                            STEDmaSound.RefillFifo();
+
                         // Run the rest of the scanline (H-Blank / right border). Its length is NOT
                         // a constant: the GLUE's horizontal counter wraps at 508 cycles in 60 Hz
                         // and 512 in 50 Hz, so the frequency in effect at the wrap point decides.
@@ -480,10 +485,10 @@ namespace ASE
                         // The HBL fires at the END of the line (cycle 512 at 50 Hz, 508 at 60 Hz,
                         // 224 in mono: Hatari's Hbl_Int_Pos_*), not where the display stops, so
                         // its handler starts at the beginning of the next line. Code synced to it
-                        // counts cycles from there: The Chaos Engine on STE waits 95 NOPs after an
-                        // HBL to write the video counter in the right border, and an HBL raised at
-                        // cycle 376 put that write in the middle of the next line's display — the
-                        // status panel came out 32 bytes off and shaking.
+                        // counts cycles from there: a split screen timed with NOPs after the HBL to
+                        // write the video counter in the right border lands in the middle of the
+                        // next line's display when the HBL is raised at the display stop (cycle
+                        // 376) — 32 bytes off, and shaking with the interrupt jitter.
                         _mfp.irqController.RaiseHBL();
 
                         // Everything above (both CPU slices and the chips they drive) is charged

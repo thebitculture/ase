@@ -228,8 +228,25 @@ namespace ASE
         /// <summary>Clears the controller status byte (called from the DMA/FDC reset).</summary>
         public static void ResetCommandStatus() => _status = 0;
 
-        /// <summary>Status byte read at $FF8604 while the HDC is selected.</summary>
-        public static byte ReadStatus() => EmulationOn ? _status : (byte)0xFF;
+        /// <summary>
+        /// Status byte read at $FF8604 while the HDC is selected. Like every access to the ACSI
+        /// bus, the read retires the target's IRQ (MiSTer's acsi.v clears it on any CPU access).
+        /// <para>
+        /// Nothing else would: the IRQ shares GPIP5 with the FDC's, and one left asserted after
+        /// the last hard-disk command holds the line low for good. TOS' floppy driver then finds
+        /// its "interrupt" the moment it starts waiting, so it sends the READ while the SEEK
+        /// before it is still stepping; the chip ignores a command written while busy, and TOS
+        /// takes whatever was already in its buffer for the sector it asked for.
+        /// </para>
+        /// </summary>
+        public static byte ReadStatus()
+        {
+            if (!EmulationOn)
+                return 0xFF;
+
+            WD1772.SetHdcIrq(false);
+            return _status;
+        }
 
         /// <summary>
         /// A command byte written to $FF8604 with the HDC selected. <paramref name="addr"/>
@@ -281,7 +298,14 @@ namespace ASE
             if (TargetDev.Enabled)
             {
                 WD1772.SetDmaError(_dmaError);
-                WD1772.SetHdcIrq(true);
+
+                // A transfer this byte has just run reports itself, with the IRQ that follows
+                // the data phase (DmaTransfer schedules it). Raising one now as well gave a
+                // driver that writes the last byte with the DMA already on two of them: it took
+                // the first, read the status, and the second arrived after that read with
+                // nothing left to retire it, stranding GPIP5 low (see ReadStatus).
+                if (_irqRaiseClock < 0)
+                    WD1772.SetHdcIrq(true);
             }
         }
 

@@ -15,6 +15,11 @@
  * The XSINT signal (high while a frame is playing) is wired to MFP GPIP7 and
  * to the Timer A event input, so programs can get an interrupt at end of frame.
  *
+ * The DMA does not feed the DAC directly: it fetches words into an 8-byte FIFO
+ * once per scanline, and the DAC empties it at the sample rate. The frame
+ * counter, the end of frame and XSINT all follow the fetches, which run up to
+ * 8 bytes ahead of what is heard (Hatari's dmaSnd.c, MiSTer's gstshifter.v).
+ *
  *
  * Official repository 👉 https://github.com/thebitculture/ase
  *
@@ -24,8 +29,14 @@ namespace ASE
 {
     public static class STEDmaSound
     {
-        // Sample rates selected by bits 0-1 of the sound mode register
-        static readonly int[] SampleRates = { 6258, 12517, 25033, 50066 };
+        // Sample clock: 50 kHz is CPU/160 (gstshifter.v: 32 MHz/640), one 250 kHz tick in five,
+        // and bits 0-1 of the sound mode halve it down to 6.25 kHz. Counted in the PSG's 250 kHz
+        // ticks (32 CPU cycles each), so the rates are exact: 6258/12517/25033/50066 Hz are the
+        // same clocks quoted against an 8.0106 MHz CPU.
+        const int SampleClockCycle = 40;   // ticks of the slowest rate; every rate divides it
+
+        // The FIFO between the DMA and the DAC (Hatari's DMASND_FIFO_SIZE)
+        const int FifoSize = 8;
 
         // Control / mode registers
         static byte control;            // $FF8901: bit 0 = play, bit 1 = loop
@@ -37,9 +48,16 @@ namespace ASE
 
         // Active frame
         static bool playing;
-        static uint frameCounter;       // current DMA address
+        static uint frameCounter;       // address of the DMA's next fetch
         static uint frameEnd;           // latched end address
-        static double phase;            // fractional sample accumulator (250 kHz steps)
+
+        // Fetched bytes not yet played: a ring of FifoSize, the oldest at fifoPos
+        static readonly byte[] fifo = new byte[FifoSize];
+        static int fifoPos;
+        static int fifoCount;
+
+        // Free-running, like gstshifter.v's aclk_cnt: starting a frame does not re-phase it
+        static int sampleClock;
 
         // Latest decoded sample, exposed to the YM2149 mixer
         static float sampleLeft;
@@ -67,7 +85,9 @@ namespace ASE
             playing = false;
             frameCounter = 0;
             frameEnd = 0;
-            phase = 0;
+            fifoPos = 0;
+            fifoCount = 0;
+            sampleClock = 0;
             sampleLeft = 0;
             sampleRight = 0;
             mwCyclesRemaining = 0;
@@ -96,7 +116,7 @@ namespace ASE
             w.U32(frameEndReg);
             w.U32(frameCounter);
             w.U32(frameEnd);
-            w.F64(phase);
+            w.F64(0);           // was a fractional sample phase; the sample clock is appended below
             w.F32(sampleLeft);
             w.F32(sampleRight);
             w.U16(mwData);
@@ -106,6 +126,13 @@ namespace ASE
             w.F32(lmcMasterGain);
             w.F32(lmcLeftGain);
             w.F32(lmcRightGain);
+
+            // Appended: the FIFO and the sample clock. Older snapshots stop above and restore
+            // with the FIFO empty, refilled from frameCounter at the next line.
+            w.Bytes(fifo);
+            w.U8((byte)fifoPos);
+            w.U8((byte)fifoCount);
+            w.U8((byte)sampleClock);
         }
 
         public static void LoadState(Snapshot.Reader r)
@@ -120,7 +147,7 @@ namespace ASE
             frameEndReg = r.U32();
             frameCounter = r.U32();
             frameEnd = r.U32();
-            phase = r.F64();
+            r.F64();
             sampleLeft = r.F32();
             sampleRight = r.F32();
             mwData = r.U16();
@@ -130,6 +157,15 @@ namespace ASE
             lmcMasterGain = r.F32();
             lmcLeftGain = r.F32();
             lmcRightGain = r.F32();
+
+            fifoPos = fifoCount = sampleClock = 0;
+            if (r.Remaining >= FifoSize + 3)
+            {
+                Array.Copy(r.Bytes(FifoSize), fifo, FifoSize);
+                fifoPos = r.U8() % FifoSize;
+                fifoCount = Math.Min((int)r.U8(), FifoSize);
+                sampleClock = r.U8() % SampleClockCycle;
+            }
         }
 
         /// <summary>
@@ -184,9 +220,9 @@ namespace ASE
                 case 0xFF8905: return (byte)(frameStartReg >> 8);
                 case 0xFF8907: return (byte)(frameStartReg & 0xFE);
 
-                case 0xFF8909: return (byte)((frameCounter >> 16) & 0x3F);
-                case 0xFF890B: return (byte)(frameCounter >> 8);
-                case 0xFF890D: return (byte)(frameCounter & 0xFE);
+                case 0xFF8909: return (byte)((FrameCount >> 16) & 0x3F);
+                case 0xFF890B: return (byte)(FrameCount >> 8);
+                case 0xFF890D: return (byte)(FrameCount & 0xFE);
 
                 case 0xFF890F: return (byte)((frameEndReg >> 16) & 0x3F);
                 case 0xFF8911: return (byte)(frameEndReg >> 8);
@@ -205,6 +241,11 @@ namespace ASE
             }
         }
 
+        // The counter the CPU reads: where the DMA fetches next while a frame runs, and the
+        // frame start while none does, since the counter is loaded from it for as long as the
+        // DMA is idle (sndcnt.v loads sfb while sframe is low; Hatari's DmaSnd_GetFrameCount).
+        static uint FrameCount => playing ? frameCounter : frameStartReg;
+
         public static void WriteByte(uint addr, byte v)
         {
             switch (addr)
@@ -222,6 +263,15 @@ namespace ASE
                 case 0xFF8913: frameEndReg = (frameEndReg & 0x3FFF00) | ((uint)v & 0xFE); break;
 
                 case 0xFF8921:
+                    // Left bytes are on even addresses: going from mono to stereo with an odd
+                    // byte at the head of the FIFO would swap the channels for good, so it is
+                    // dropped (Hatari's DmaSnd_FIFO_SetStereo)
+                    if ((soundMode & 0x80) != 0 && (v & 0x80) == 0 && (fifoPos & 1) != 0)
+                    {
+                        fifoPos = (fifoPos + 1) % FifoSize;
+                        if (fifoCount > 0) fifoCount--;
+                    }
+
                     soundMode = (byte)(v & 0x83);
                     break;
 
@@ -256,9 +306,21 @@ namespace ASE
         /// of the play bit and stops on the 1 -> 0 one; writing the register with play already
         /// set changes nothing, which is what the hardware does and what a VBL-driven replayer
         /// relies on — it rewrites start/end and $01 every frame and expects the frame in flight
-        /// to run to its end. (Verified against a traced run: those replayers arm the DMA a few
-        /// hundred microseconds into the frame and it always completes before the next VBL, so
-        /// the engine is idle by the time the write arrives.)
+        /// to run to its end.
+        /// <para>
+        /// The engine is idle when that write arrives because the frame ends when the DMA has
+        /// *fetched* its last word, up to 8 bytes before the DAC plays it (see
+        /// <see cref="RefillFifo"/>). A replayer with no loop bit and one video frame of samples
+        /// per buffer leaves only a few hundred cycles between the last sample and the next VBL
+        /// (250 bytes at 12.5 kHz is 160000 cycles of a 160256-cycle frame), and a HOG blit
+        /// running into the VBL delays its handler by thousands; the FIFO's head start is what
+        /// absorbs that. Ended on the last sample played instead, a third of the frames found the
+        /// DMA still busy, the write was lost and the next frame stayed silent: choppy sound.
+        /// </para>
+        /// <para>
+        /// Neither edge touches the FIFO: what it holds is played out, and a new frame's bytes
+        /// queue behind it.
+        /// </para>
         /// </summary>
         static void SetControl(byte v)
         {
@@ -268,12 +330,11 @@ namespace ASE
             if ((old & 0x01) == 0 && (control & 0x01) != 0)
             {
                 // play 0 -> 1: start a new frame
-                phase = 0;
                 StartNewFrame();
             }
             else if ((old & 0x01) != 0 && (control & 0x01) == 0)
             {
-                // play 1 -> 0: stop immediately
+                // play 1 -> 0: stop fetching
                 playing = false;
                 SetXsint(false);
             }
@@ -299,41 +360,71 @@ namespace ASE
         }
 
         /// <summary>
-        /// Advances the DMA sound engine by one 250 kHz step. Called from the YM2149
-        /// synthesis loop so DMA samples line up with the PSG output.
+        /// Advances the DAC by one 250 kHz step. Called from the YM2149 synthesis loop so DMA
+        /// samples line up with the PSG output. On a tick of the sample clock the DAC takes the
+        /// next sample from the FIFO; with nothing there it keeps the last one.
         /// </summary>
         public static void Step250k()
         {
-            if (!playing)
+            if (++sampleClock == SampleClockCycle)
+                sampleClock = 0;
+
+            if (sampleClock % (5 << (3 - (soundMode & 0x03))) != 0)
                 return;
 
-            phase += SampleRates[soundMode & 0x03] / 250000.0;
-
-            while (phase >= 1.0 && playing)
-            {
-                phase -= 1.0;
-                FetchNextSample();
-            }
-        }
-
-        static void FetchNextSample()
-        {
+            // The DMA tops the FIFO up every line, and a real STE never lets it run dry while
+            // playing (8 bytes per line against 6.4 at 50 kHz stereo). Here the line's refill
+            // can land an instruction late, so a dry FIFO with the DMA on fetches at once, as
+            // Hatari's DmaSnd_FIFO_PullByte does.
             bool mono = (soundMode & 0x80) != 0;
+            int needed = mono ? 1 : 2;
+
+            if (fifoCount < needed)
+                RefillFifo();
+
+            if (fifoCount < needed)
+                return;
 
             if (mono)
             {
-                sampleLeft = sampleRight = (sbyte)ASEMain._mem.Read8(frameCounter) / 128.0f;
-                frameCounter += 1;
+                sampleLeft = sampleRight = (sbyte)PullByte() / 128.0f;
             }
             else
             {
-                sampleLeft = (sbyte)ASEMain._mem.Read8(frameCounter) / 128.0f;
-                sampleRight = (sbyte)ASEMain._mem.Read8(frameCounter + 1) / 128.0f;
-                frameCounter += 2;
+                sampleLeft = (sbyte)PullByte() / 128.0f;
+                sampleRight = (sbyte)PullByte() / 128.0f;
             }
+        }
 
-            if (frameCounter >= frameEnd)
+        static byte PullByte()
+        {
+            byte b = fifo[fifoPos];
+            fifoPos = (fifoPos + 1) % FifoSize;
+            fifoCount--;
+            return b;
+        }
+
+        /// <summary>
+        /// The DMA's turn on the bus, once per line where the display stops (Hatari's
+        /// DmaSnd_STE_HBL_Update, at cycle 376 in 50 Hz low resolution): it fetches words until
+        /// the FIFO is full. The counter steps with each fetch, so the end of a frame — XSINT
+        /// falling, the loop or the stop — comes when the last word is fetched, not when it is
+        /// heard. The end is the counter *equal* to the end address (MiSTer's `snd == sft`): a
+        /// frame whose end lies below its start runs on round the 22-bit counter.
+        /// </summary>
+        public static void RefillFifo()
+        {
+            while (playing && FifoSize - fifoCount >= 2)
             {
+                ushort word = ASEMain._mem.ReadVideoWord(frameCounter);
+                fifo[(fifoPos + fifoCount) % FifoSize] = (byte)(word >> 8);
+                fifo[(fifoPos + fifoCount + 1) % FifoSize] = (byte)word;
+                fifoCount += 2;
+
+                frameCounter = (frameCounter + 2) & 0x3FFFFE;
+                if (frameCounter != frameEnd)
+                    continue;
+
                 // End of frame: lower XSINT (triggers GPIP7/Timer A) and loop or stop
                 SetXsint(false);
 

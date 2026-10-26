@@ -103,7 +103,10 @@ namespace ASE
             mfpAcc = 0;
             _lastUpdateClock = 0;
             AER = 0x00;
-            GPIP = 0xFF; // Inputs default to pull-up
+            // Inputs default to pull-up, except bit 3: the blitter's INT, which it drives low while
+            // idle. On every model -- MiSTer wires GPIP3 to the blitter's INTn even with the chip
+            // disabled, and Hatari leaves it at 0 unless a blit runs (see SetBlitterLineLevel).
+            GPIP = 0xF7;
             VR = 0x40;   // Vector base 64 ($40)
 
             // Clear interrupt registers
@@ -124,6 +127,17 @@ namespace ASE
         {
             if (mono) GPIP &= 0x7F;
             else GPIP |= 0x80;
+        }
+
+        /// <summary>
+        /// Puts the blitter's INT level on GPIP bit 3 (high while busy) without the edge logic of
+        /// SetGPIOBit: for a blitter restored from a snapshot, where the level is state, not an
+        /// event. Snapshots from before the line was wired carry the pull-up there.
+        /// </summary>
+        public void SetBlitterLineLevel(bool high)
+        {
+            if (high) GPIP |= 0x08;
+            else GPIP &= 0xF7;
         }
 
         public bool HasActiveInterrupts()
@@ -524,6 +538,8 @@ namespace ASE
                 // Bit 1 = RS232 carrier detect, bit 2 = clear to send (RegB bits 1 and 2)
                 if (bit == 1) SetInterruptPending(RegB.GPIP1, true);
                 else if (bit == 2) SetInterruptPending(RegB.GPIP2, true);
+                // Bit 3 = blitter INT, "blit done" (RegB Bit 3)
+                else if (bit == 3) SetInterruptPending(RegB.Blitter, true);
                 // Bit 4 = ACIA (RegB Bit 6)
                 else if (bit == 4) SetInterruptPending(RegB.ACIA, true);
                 // Bit 5 = FDC (RegB Bit 7)

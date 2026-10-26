@@ -75,9 +75,9 @@ namespace ASE
         const uint RamRegionEnd = 0x400000;
 
         // The top page of the I/O area ($FFFF00-$FFFFFF) decodes to no device on the ST/STE,
-        // so reads bus-error on real hardware. Some copy protections (e.g. Ocean's Batman the
-        // Movie loader) deliberately fault there and feed the exception back into their
-        // decryptor; returning data instead of faulting breaks them. Writes are ignored, as
+        // so reads bus-error on real hardware. Some copy protections deliberately fault there
+        // and feed the exception back into their decryptor; returning data instead of faulting
+        // breaks them. Writes are ignored, as
         // for other void I/O.
         const uint UnmappedIoTop = 0xFFFF00;
 
@@ -96,19 +96,13 @@ namespace ASE
         /// the one exclusion here that does not follow from where the image sits. It is the
         /// ROM's own decode area: a 192KB TOS fills it, a 256KB one is selected in the
         /// $E00000 window instead and leaves it empty, but the decoder still answers — the bus
-        /// does not time out there on any ST. Faulting it broke, for example, <b>IK+</b> on a
-        /// machine running a 256KB TOS, and the crash lands nowhere near its cause: the game's
-        /// random number generator uses the ROM as its random table — <c>lea $00FC0000,a0</c>
-        /// then <c>move.w (a0,d0.w),d0</c> at $36D2 — so with a 256KB TOS it reads an address
-        /// that holds nothing. That read used to answer $FF and the RNG just returned dull
-        /// numbers; once it faulted, the bus error went to a vector the game has pointed, along
-        /// with vectors 2-11, at <i>ordinary code</i> ($14FA — the same "make stray exceptions
-        /// harmless" idiom as The Addams Family, but aimed at a live routine instead of an
-        /// <c>rte</c>). The CPU landed there in supervisor mode with the 14-byte frame still on
-        /// the stack, ran on into <c>jsr $6FC6</c> and never unwound it, leaking 10 bytes a turn
-        /// until the supervisor stack walked down from $0ED2 through the vectors and the game's
-        /// own code, and the machine ended up executing zeroed RAM up to $400000. Reading the
-        /// window as open bus is also what the window past a 256KB image already does.
+        /// does not time out there on any ST. Software reads it — as a table of pseudo-random
+        /// data, for one — and with a 256KB TOS such a read finds nothing there but must not
+        /// fault: a single bus error, taken by a program whose exception vectors point at an
+        /// <c>rte</c> or at ordinary code, walks the supervisor stack down through the vectors
+        /// and ends far from its cause (HARDWARE-NOTES.md, <i>Reading a crashed machine</i>).
+        /// Reading the window as open bus is also what the window past a 256KB image already
+        /// does.
         /// 
         /// Note: These are some tests I ran with a few games. The results are inconclusive, and
         /// I’m not sure whether they’re related to the suspected root cause, but I’m documenting
@@ -257,18 +251,15 @@ namespace ASE
         /// The shifter's block is the one that has cost the most. Only $FF8260/61 are registers,
         /// but the GLUE decodes right through to $FF827F and answers there: Hatari's tables list
         /// $FF8262 for 30 bytes on the ST and $FF8262/$FF8266 for the STE (with the fine scroll
-        /// in between) as <c>IoMem_VoidRead</c> -- "No bus errors here". Faulting them broke
-        /// <b>The Addams Family</b> (Ocean): it addresses the block through a register and its
-        /// access reaches $FF8263. The game points every exception vector at a bare <c>rte</c>
-        /// (at $A1A0: <c>lea $8,a0</c> then <c>move.l #$145F6,(a0)+</c> up to $400), which is a
-        /// common way of making stray exceptions harmless -- but an <c>rte</c> cannot retire the
-        /// 14-byte frame a bus/address error pushes. It popped the status word and the faulting
-        /// address as if they were SR and PC, jumped to that address ($FF8263, odd), faulted
-        /// again, and each turn of the loop leaked the 8 bytes of frame it had not consumed.
-        /// The supervisor stack walked from $1000 down to $10, erasing the vectors and the
-        /// system variables on the way. That is the signature to look for: low RAM filled with
-        /// one repeating 8-byte pattern whose halves read as an instruction word, a status
-        /// register and a PC -- the IR field names the instruction that faulted and the
+        /// in between) as <c>IoMem_VoidRead</c> -- "No bus errors here". Software addressing
+        /// the shifter through a register can reach them, and a fault there, with every
+        /// exception vector pointing at a bare <c>rte</c> (a common way of making stray
+        /// exceptions harmless), loops: an <c>rte</c> cannot retire the 14-byte frame a
+        /// bus/address error pushes, so it pops the status word and the faulting address as SR
+        /// and PC, jumps there, faults again and leaks 8 bytes a turn until the supervisor stack
+        /// has erased the vectors and the system variables. The signature to look for: low RAM
+        /// filled with one repeating 8-byte pattern whose halves read as an instruction word, a
+        /// status register and a PC -- the IR field names the instruction that faulted and the
         /// address field names the register block the emulation should not have faulted.
         /// </para>
         /// </summary>
@@ -574,10 +565,10 @@ namespace ASE
         // the blitter hands the CPU a quota of *accesses*, not of cycles, and this is the only
         // place that sees them (see Blitter.NoteCpuBusAccess). Counting before the access, not
         // after, is what keeps the write that starts a blit from being charged to the blitter.
-        public byte   CpuRead8 (uint addr)            { Blitter.NoteCpuBusAccess(addr); ApplyBusWait(addr); return Read8(addr); }
-        public ushort CpuRead16(uint addr)            { Blitter.NoteCpuBusAccess(addr); ApplyBusWait(addr); return Read16(addr); }
-        public void   CpuWrite8 (uint addr, byte v)   { Blitter.NoteCpuBusAccess(addr); ApplyBusWait(addr); Write8(addr, v); }
-        public void   CpuWrite16(uint addr, ushort v) { Blitter.NoteCpuBusAccess(addr); ApplyBusWait(addr); Write16(addr, v); }
+        public byte   CpuRead8 (uint addr)            { Blitter.NoteCpuBusAccess(addr, false); ApplyBusWait(addr); return Read8(addr); }
+        public ushort CpuRead16(uint addr)            { Blitter.NoteCpuBusAccess(addr, false); ApplyBusWait(addr); return Read16(addr); }
+        public void   CpuWrite8 (uint addr, byte v)   { Blitter.NoteCpuBusAccess(addr, true); ApplyBusWait(addr); Write8(addr, v); }
+        public void   CpuWrite16(uint addr, ushort v) { Blitter.NoteCpuBusAccess(addr, true); ApplyBusWait(addr); Write16(addr, v); }
 
         /// <summary>
         /// Reproduces the Atari ST memory-bus wait states for a single CPU bus access, by advancing

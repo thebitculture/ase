@@ -207,7 +207,7 @@ namespace ASE
         /// </para>
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static void NoteCpuBusAccess(uint addr)
+        public static void NoteCpuBusAccess(uint addr, bool write)
         {
             // The blitter held the bus until busFreeAt: an access before that waits for it, like
             // any other wait state. This is the only thing a burst costs the 68000 -- the cycles
@@ -245,6 +245,25 @@ namespace ASE
                 }
             }
 
+            // The write half of a TAS whose read got the bus is still the CPU's. TAS is the 68000's
+            // one indivisible read-modify-write: AS stays asserted from the read to the write, and
+            // no master can take the bus in between (stBlitter.sv grants only with AS negated,
+            // Hatari holds the start back while cpu_bus_rmw). With no early access booked yet, the
+            // read just before was not one either, so the write is not an early access, and the
+            // burst starts once it is over. Running the burst here, as for any other register
+            // access, is what broke the VDI of TOS and EmuTOS: its restart loop `tas.b (a5) / nop / bmi.b *-4`
+            // read the control byte, the burst moved the halftone line on, and the write put the
+            // line read before it back -- every desktop fill drawn after such a turn had its
+            // pattern a few lines out of phase.
+            if (write && earlyCpuAccesses == 0 && IsTas(CPU._moira.IRD))
+            {
+                // Moira calls back halfway through the 4-cycle access.
+                long lockEnd = CPU._moira.Clock + BusAccessCycles / 2;
+                long grant = busRequestClock + 2 * BusArbitrationCycles + (slotStolen ? BusAccessCycles : 0);
+                if (!busGranted && lockEnd > grant) busRequestClock += lockEnd - grant;
+                return;
+            }
+
             // The window has closed and the bus is the blitter's. On the machine this access
             // simply would not happen yet; here it already has, so it is booked and paid for
             // when the burst ends (see ReleaseBus).
@@ -253,12 +272,26 @@ namespace ASE
             // Booking the time is enough for an access to RAM the blit does not touch, but not
             // for one to the blitter itself: a register written now would change the blit before
             // it has run. The restart idiom does exactly that — `move.w d1,(a2)` (y count) then
-            // `move.b d6,(a6)` (busy + HOG), over and over, Lotus Esprit Turbo Challenge's sprite
-            // routine for one — and the y count meant for the next chunk was consumed by the one
-            // still waiting, so every plane lost its last chunk. The access waits for the bus
+            // `move.b d6,(a6)` (busy + HOG), over and over, common in sprite routines — and the y
+            // count meant for the next chunk would be consumed by the one still waiting, so every
+            // plane would lose its last chunk. The access waits for the bus
             // here, as on the machine: the burst runs first (the whole blit, in HOG mode).
             if ((addr & 0xFFFFC0) == BASE)
                 Run(long.MaxValue);
+        }
+
+        /// <summary>
+        /// The opcode is a TAS on memory: <c>0100 1010 11 mmm rrr</c> with a data-alterable
+        /// memory mode. Moira keeps the instruction in IRD until the prefetch at its end, so
+        /// this holds for both of its bus accesses. Dn makes no access, and the other encodings
+        /// (An, PC-relative, immediate -- $4AFC is ILLEGAL) raise an exception whose stack writes
+        /// must not pass for the write half.
+        /// </summary>
+        static bool IsTas(ushort ird)
+        {
+            if ((ird & 0xFFC0) != 0x4AC0) return false;
+            int mode = (ird >> 3) & 7;
+            return mode >= 2 && (mode < 7 || (ird & 7) <= 1);
         }
 
         public static void Reset()
@@ -435,6 +468,10 @@ namespace ASE
                 haveFxsr = false;
                 lastBusWord = 0;
             }
+
+            // The INT line is the busy bit on GPIP3. The MFP's section, restored first, has it
+            // already -- except in snapshots older than the wiring, which saved the pull-up.
+            ASEMain._mfp.SetBlitterLineLevel(busy);
         }
 
         /// <summary>
@@ -538,12 +575,8 @@ namespace ASE
                 case 0x3A: hop = (byte)(v & 0x03); break;
                 case 0x3B: op = (byte)(v & 0x0F); break;
                 case 0x3C:
-                {
-                    bool wasBusy = busy;
-                    UnpackControl(v);
-                    ControlWritten(wasBusy);
+                    WriteControl(v);
                     break;
-                }
                 case 0x3D:
                     UnpackSkew(v);
                     break;
@@ -569,16 +602,42 @@ namespace ASE
             // Control + Skew word at $FF8A3C: set both bytes before starting
             if (offset == 0x3C)
             {
-                bool wasBusy = busy;
                 UnpackSkew((byte)(v & 0xFF));
-                UnpackControl((byte)(v >> 8));
-                ControlWritten(wasBusy);
+                WriteControl((byte)(v >> 8));
                 return;
             }
 
             WriteByte(addr, (byte)(v >> 8));
             WriteByte(addr + 1, (byte)(v & 0xFF));
         }
+
+        /// <summary>
+        /// A write to the control register ($FF8A3C), from a byte or a word access. The blitter's
+        /// INT line follows busy, but busy reads as deasserted for as long as the register is
+        /// being written (stBlitter.sv: <c>busy = rBusy &amp; !ctrlWr</c>, "this will even toggle
+        /// INTn if Blitter still busy"): a write to a running blitter drops the line and raises
+        /// it again, so the MFP sees both edges and a "blit done" interrupt is requested on
+        /// whichever its AER selects -- the restart loop of a program that also enabled the
+        /// interrupt takes one per turn on the machine.
+        /// </summary>
+        static void WriteControl(byte v)
+        {
+            bool wasBusy = busy;
+            if (wasBusy) ASEMain._mfp.SetGPIOBit(3, false);
+
+            UnpackControl(v);
+            ControlWritten(wasBusy);
+            UpdateIrqLine();
+        }
+
+        /// <summary>
+        /// Drives the blitter's INT output onto MFP GPIP3: high while busy, low when idle
+        /// (MiSTer's <c>INTn = busy</c>, Hatari's Blitter_Set_Line_IRQ_MFP). The 1-&gt;0 edge at the
+        /// end of a blit is the MFP's "blit done" interrupt with the default AER. Hatari raises
+        /// the line when the first burst starts, MiSTer when busy is written; this follows the
+        /// RTL. The MFP only acts on a change, so calling it with the level unchanged is free.
+        /// </summary>
+        static void UpdateIrqLine() => ASEMain._mfp.SetGPIOBit(3, busy);
 
         // --- Control / Skew register packing ---
 
@@ -627,15 +686,18 @@ namespace ASE
 
         /// <summary>
         /// Acts on a write to the control register ($FF8A3C), given the busy bit as it stood
-        /// <b>before</b> the write. Busy is a flip-flop: writing a 1 into one that is already set
-        /// changes nothing, so only the 0-&gt;1 edge arms a blit and only the 1-&gt;0 edge aborts
-        /// one. Re-arming on every write is not a corner case, it is the normal path — the
-        /// standard way to wait for a blit is to keep writing the bit back, and TOS' own VDI does
-        /// exactly that:
+        /// <b>before</b> the write. Busy is a flip-flop: only the 0-&gt;1 edge arms a blit and only
+        /// the 1-&gt;0 edge aborts one. Writing a 1 into one that is already set is a
+        /// <b>restart</b>, not a new blit: the blit carries on where it is, but the blitter asks
+        /// for the bus again at once instead of waiting for the CPU to spend its 64 accesses
+        /// (see <see cref="RequestBus"/>). That is the normal path, not a corner case — the
+        /// standard way to wait for a shared-mode blit is to keep writing the bit back, and TOS'
+        /// own VDI does exactly that:
         /// <code>tas.b (a5) / nop / bmi.b *-4</code>
         /// with a5 = $FF8A3C (ten copies of that loop in TOS 1.62, at $E0B4A2, $E0AB64, $E104C8
-        /// and seven more), where TAS is a read-modify-write that puts bit 7 back on <i>every
-        /// turn</i> of the loop.
+        /// and seven more; four in EmuTOS), where TAS is a read-modify-write that puts bit 7
+        /// back on <i>every turn</i> of the loop. The loop is how the blitter gets nearly the
+        /// whole bus without HOG mode: the CPU makes a handful of accesses per turn, not 64.
         /// <para>
         /// While the whole blit ran inside the register write this was invisible: busy was
         /// already clear by the time the loop first looked. Now that the blit is stepped,
@@ -644,15 +706,25 @@ namespace ASE
         /// NFSR blit whose state was cleared between xCount 2 and 1 then made the source read it
         /// was meant to skip, so srcAddr advanced one word too far and every line after it was
         /// fetched from the wrong place. That is what shredded the GEM menus and the Atari logo.
-        /// It also reset the arbitration (credit, request clock, <see cref="busGranted"/>) on
-        /// every turn, which is the other half of the same bug.
+        /// The restart does reset the arbitration on every turn, and that is right now that a
+        /// register access arriving after the blitter has the bus runs the burst first (see
+        /// <see cref="NoteCpuBusAccess"/>): by the time the write lands, the burst it would have
+        /// cut short is over and no CPU access is left booked against it.
         /// </para>
         /// </summary>
         static void ControlWritten(bool wasBusy)
         {
+            // Busy written with no lines left: the transfer is already complete, and the chip
+            // drops busy and HOG on the spot (see BlitComplete). This is what the VDI's restart
+            // loop meets on its last turn -- TAS writes bit 7 back over a finished blit -- and
+            // it must read as idle at once, not as a blit armed with nothing to do.
+            if (busy && yCount == 0)
+                BlitComplete();
+
             if (busy)
             {
                 if (!wasBusy) StartBlit();
+                else if (!busGranted) RequestBus();
             }
             else if (wasBusy)
             {
@@ -666,20 +738,36 @@ namespace ASE
         /// </summary>
         static void StartBlit()
         {
+            RequestBus();
+
+            nfsrState = false;
+            haveFxsr = false;
+        }
+
+        /// <summary>
+        /// Asks for the bus from the write to $FF8A3C that is going on now, with a fresh burst
+        /// quota: both the start of a blit and the restart of a running one (busy written while
+        /// set). The restart leaves the blit's own state alone -- it continues from the word it
+        /// stopped at -- and only cuts the CPU's quota short. stBlitter.sv shows why: BUSY reads
+        /// as deasserted while the control register is being written, and its 64-cycle bus
+        /// counter clears whenever BUSY is low, so every control write starts the count from zero
+        /// with the blitter wanting the bus; Hatari puts the blitter back into PRE_START on any
+        /// such write ("the cpu can restart the blitter immediately, without waiting for 64 cpu
+        /// bus accesses") and only flushes the word state when it was stopped.
+        /// </summary>
+        static void RequestBus()
+        {
             blitterBusCredit = hog ? int.MaxValue : SharedBusBlitterAccesses;
             cpuBusCredit = 0;
             busGranted = false;
 
-            // Starting a blit is a bus *request* like any other: the write to $FF8A3C completes,
-            // the CPU keeps the bus for the arbitration latency, and what it does in that window
-            // decides whether this burst gets 64 accesses or 63 (see NoteCpuBusAccess).
+            // A bus *request* like any other: the write to $FF8A3C completes, the CPU keeps the
+            // bus for the arbitration latency, and what it does in that window decides whether
+            // this burst gets 64 accesses or 63 (see NoteCpuBusAccess).
             busRequestClock = CPU._moira.Clock;
             busRequestPending = true;
             earlyCpuAccesses = 0;
             slotStolen = false;
-
-            nfsrState = false;
-            haveFxsr = false;
         }
 
         /// <summary>A blit is in progress (the busy bit of $FF8A3C is set).</summary>
@@ -714,6 +802,7 @@ namespace ASE
         static long FinishBlit()
         {
             busy = false;
+            UpdateIrqLine();
             long stall = 0;
 
             if (busGranted)
@@ -782,6 +871,8 @@ namespace ASE
             // Armed with nothing to do: the busy bit still has to drop.
             if (yCount == 0 || xCountReset == 0)
             {
+                // y count rewritten to 0 under a paused blit: complete, as at its last word.
+                if (yCount == 0) BlitComplete();
                 CPU._moira.Clock = cpuClock + FinishBlit();
                 return false;
             }
@@ -1071,7 +1162,22 @@ namespace ASE
             }
 
             if (yCount == 0)
-                busy = false;
+                BlitComplete();
+        }
+
+        /// <summary>
+        /// The last word of the last line is done: busy <b>and HOG</b> drop, so $FF8A3C reads
+        /// back $00 plus the line number after a HOG blit, not $40. In stBlitter.sv a completed
+        /// blit raises XYZ, which holds both bits at zero until the y count is written again --
+        /// so a 1 written into busy meanwhile does not stick either (see ControlWritten);
+        /// Hatari clears both bits at the end of a blit and on a start with y count 0. A program
+        /// restarting with <c>bset #7</c> after a HOG blit therefore gets a shared-mode one.
+        /// </summary>
+        static void BlitComplete()
+        {
+            busy = false;
+            hog = false;
+            UpdateIrqLine();
         }
 
         /// <summary>
