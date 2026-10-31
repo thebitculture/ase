@@ -65,13 +65,22 @@ DRV_SECTOR  equ     1               ; first sector of the resident driver
 boot:       bra.s   boot_go
             dc.b    'ASEHD2'        ; signature: how the installer knows its own
 drv_sects:  dc.w    0               ; sectors of driver to load (installer fills in)
-drv_bytes:  dc.l    0               ; driver size in bytes (installer fills in)
+drv_bytes:  dc.l    0               ; driver size in bytes (installer fills in; the
+                                    ; Malloc goes by drv_sects, see boot_go)
 
 boot_go:    movem.l d1-d7/a0-a6,-(sp)
 
             ; --- Ask GEMDOS for a home for the driver -----------------------
-            move.l  drv_bytes(pc),d0
+            ; Room for every sector b_read brings in, not just drv_bytes: the
+            ; DMA writes whole sectors, and the padding of the last one would
+            ; land past the block. TOS keeps its memory descriptors apart and
+            ; never notices; an OS that heads every block with its control
+            ; block (MagiC) finds the next one overwritten and halts.
+            moveq   #0,d0
+            move.w  drv_sects(pc),d0
             beq     boot_fail       ; never installed: nothing to load
+            lsl.l   #8,d0
+            add.l   d0,d0           ; sectors x 512
             move.l  d0,-(sp)
             move.w  #$48,-(sp)      ; Malloc
             trap    #1

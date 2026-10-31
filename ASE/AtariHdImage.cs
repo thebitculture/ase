@@ -104,8 +104,8 @@ namespace ASE
 
             // The Atari boot record stores the partition length in a 16-bit field, which is what
             // caps an unaided TOS partition at 32 MB; past that it is left at zero and the real
-            // length comes from the 32-bit field in the partition table, which is where a driver
-            // reads it anyway.
+            // length goes in the 32-bit fields: the partition table's, where an AHDI-style driver
+            // reads it, and the boot record's own at $20 (below), where EmuTOS reads it.
 
             // ---- root sector: one partition, the rest of the table left empty ----
             var root = new byte[sectorSize];
@@ -141,6 +141,14 @@ namespace ASE
             WriteLE16(boot, 24, 63);                            // sectors per track (cosmetic)
             WriteLE16(boot, 26, 16);                            // heads (cosmetic)
             WriteLE16(boot, 28, 0);                             // hidden sectors
+
+            // Past 65535 sectors the 16-bit count at 19 is zero and the length goes in the
+            // 32-bit field at $20, as on DOS. ASEHD takes it from the partition table, but
+            // EmuTOS' own ACSI driver reads it here: left at zero it counts no clusters, every
+            // allocation finds the disk full, and creating a folder ends in a bus error inside
+            // EmuTOS (HARDWARE-NOTES.md, "A large partition that EmuTOS sees as full").
+            if (partSectors > 65535)
+                WriteLE32(boot, 32, (uint)partSectors);
 
             fs.Position = AtariHdDriver.PartitionFirstSector * sectorSize;
             fs.Write(boot, 0, sectorSize);
@@ -187,6 +195,12 @@ namespace ASE
         static void WriteLE16(byte[] b, int off, int v)
         {
             b[off] = (byte)v; b[off + 1] = (byte)(v >> 8);
+        }
+
+        static void WriteLE32(byte[] b, int off, uint v)
+        {
+            WriteLE16(b, off, (int)(v & 0xFFFF));
+            WriteLE16(b, off + 2, (int)(v >> 16));
         }
 
         static void WriteAscii(byte[] b, int off, string s, int len)

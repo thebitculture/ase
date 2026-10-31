@@ -500,6 +500,7 @@ namespace ASE
                         // granularity of a few cycles)
                         ACIA.Sync(lineCycles);
                         MidiAcia.Sync(lineCycles);
+                        Rp5c15.Sync(lineCycles);
 
                         // Resolve the line (open borders, etc.)
                         VideoTiming.LineInfo line = VideoTiming.ResolveLine();
@@ -1017,6 +1018,9 @@ namespace ASE
             // A new machine draws new random bits (a restored snapshot puts its own back).
             MachineRandom.Reseed();
 
+            // ...and finds its clocks at the host's time (see StartWithSnapshot for a restore)
+            SetClocksFromHost(powerOn: true);
+
             // TOS missing or invalid: leave the machine off (black screen). The user can pick a
             // TOS in the Configuration window, whose OK triggers a HardReset and lands here again.
             if (!CPU.InitCpu())
@@ -1045,6 +1049,19 @@ namespace ASE
             return true;
         }
 
+        /// <summary>
+        /// Both of the machine's clocks — the IKBD's (<see cref="IkbdClock"/>) and the Mega's
+        /// RP5C15 — to the host's local time. Only from outside the emulation (a power-on, a
+        /// restored snapshot, the time warp), never inside it: from there on they count emulated
+        /// time, so a session that starts from a snapshot runs the same clocks on every machine.
+        /// </summary>
+        internal static void SetClocksFromHost(bool powerOn)
+        {
+            DateTime now = DateTime.Now;
+            IkbdClock.SetFromHost(now);
+            Rp5c15.SetFromHost(now, powerOn);
+        }
+
         public static void HardReset()
         {
             StopEmulationThread();
@@ -1070,7 +1087,7 @@ namespace ASE
 
             // TurnOn reports a machine that would not power on by returning false, not by
             // throwing, so StartWithSnapshot has no message for it.
-            bool ok = StartWithSnapshot(snap, out error, beforeStart);
+            bool ok = StartWithSnapshot(snap, out error, beforeStart, session: true);
             if (!ok && error == null)
                 error = "the machine could not be powered on (is the configured TOS file there?)";
 
@@ -1118,7 +1135,10 @@ namespace ASE
         /// be running. On failure it reverts to the previous configuration and boots clean, so
         /// the machine is always left running.
         /// </summary>
-        static bool StartWithSnapshot(Snapshot.SnapshotFile snap, out string error, Action beforeStart = null)
+        /// <param name="session">A recording, a playback or a shared game starting: the machine
+        /// must be exactly the snapshot's, clocks included. Any other restore sets them to the
+        /// host's time, as a power-on does.</param>
+        static bool StartWithSnapshot(Snapshot.SnapshotFile snap, out string error, Action beforeStart = null, bool session = false)
         {
             error = null;
 
@@ -1126,11 +1146,13 @@ namespace ASE
             var prevRam = ConfigOptions.RunninConfig.RAMConfiguration;
             var prevMono = ConfigOptions.RunninConfig.MonochromeMonitor;
             var prevDriveB = ConfigOptions.RunninConfig.DriveBEnabled;
+            var prevRtc = ConfigOptions.RunninConfig.RealTimeClock;
 
             ConfigOptions.RunninConfig.STModel = snap.Model;
             ConfigOptions.RunninConfig.RAMConfiguration = snap.RamConfig;
             ConfigOptions.RunninConfig.MonochromeMonitor = snap.Mono;
             ConfigOptions.RunninConfig.DriveBEnabled = snap.DriveBConnected;
+            ConfigOptions.RunninConfig.RealTimeClock = snap.RealTimeClock;
 
             try
             {
@@ -1142,6 +1164,8 @@ namespace ASE
                 bool ok = TurnOn(() =>
                 {
                     Snapshot.Apply(snap);
+                    if (!session)
+                        SetClocksFromHost(powerOn: false);
                     beforeStart?.Invoke();
                 });
                 MainWindow?.RefreshAspectRatio();   // the snapshot may have a different monitor type
@@ -1157,6 +1181,7 @@ namespace ASE
                 ConfigOptions.RunninConfig.RAMConfiguration = prevRam;
                 ConfigOptions.RunninConfig.MonochromeMonitor = prevMono;
                 ConfigOptions.RunninConfig.DriveBEnabled = prevDriveB;
+                ConfigOptions.RunninConfig.RealTimeClock = prevRtc;
 
                 TurnOn();
                 MainWindow?.RefreshAspectRatio();

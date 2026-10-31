@@ -362,6 +362,9 @@ namespace ASE
 
             ASEMain.ForgetCpuHalt();
 
+            // Going back in the game, not in the calendar: the clocks keep the host's time
+            ASEMain.SetClocksFromHost(powerOn: false);
+
             // The disks as they were, when they are not still exactly those
             if (!DrivesHold(moment.Disks))
                 Snapshot.RestoreMediaSection(moment.Disks.Section);

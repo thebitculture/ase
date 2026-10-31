@@ -135,8 +135,7 @@ namespace ASE
         // KEYS: left = scancode $74, right = $75, break = +$80, and the ss bits are ignored
         // (Hatari's IKBD_SendOnMouseAction does the same). Games combine it with absolute
         // mode to drive a pointer with $0D interrogations while reading the click out of the
-        // keyboard stream -- Cannon Fodder's pre-game screens do exactly that, and with the
-        // bit unimplemented their pointer moved but no click was ever seen.
+        // keyboard stream; with the bit unimplemented such a pointer moves but never clicks.
         private static byte _mouseAction = 0;
 
         // *** Mouse sampling ***
@@ -329,6 +328,7 @@ namespace ASE
                 w.U8(_mouseAction);
                 w.U8((byte)_hostMouseButtons);
                 w.U8(Joystick0State);
+                IkbdClock.SaveState(w);
             }
         }
 
@@ -400,6 +400,9 @@ namespace ASE
                     : _mouseButtons & ((Joystick1State & JOY_FIRE) != 0 ? 2 : 3);
                 // Joystick 0, appended with the port configuration: before it there was none.
                 Joystick0State = r.Remaining > 0 ? r.U8() : (byte)0;
+                // The time-of-day clock, appended last: an older snapshot keeps the power-on one.
+                if (r.Remaining >= IkbdClock.StateSize)
+                    IkbdClock.LoadState(r);
                 UpdateKeyboardIrq();
             }
         }
@@ -418,6 +421,8 @@ namespace ASE
         {
             lock (_syncLock)
             {
+                IkbdClock.Advance(cycles);
+
                 // Mouse sampling: whatever the host reported since the last tick becomes one
                 // packet, at the IKBD's rate instead of the host's event rate.
                 _mouseSampleCountdown -= cycles;
@@ -830,7 +835,7 @@ namespace ASE
                     // 0x14 -- it only reports on the next change. Emitting an unsolicited
                     // 0xFF/state packet here injected a byte the game had not asked for; if
                     // it stayed unread while the program reprogrammed the MFP, the ACIA
-                    // receiver dead-locked and froze all keyboard/joystick input (Nebulus).
+                    // receiver dead-locked and froze all keyboard/joystick input.
                     break;
 
                 case 0x15: // SET JOYSTICK INTERROGATION MODE (stop auto)
@@ -844,7 +849,7 @@ namespace ASE
 
                 case 0x16: // JOYSTICK INTERROGATE
                     // Independent ports: copying joystick 1 into joystick 0 presses
-                    // BOTH triggers. Turrican uses the second trigger for its powerup.
+                    // BOTH triggers, and programs read the second one as a button of its own.
                     PushIkbdPacket(0xFD, Joystick0Report, Joystick1Report);
                     break;
 
@@ -879,11 +884,11 @@ namespace ASE
                 // Clock commands
 
                 case 0x1B: // SET TIME-OF-DAY CLOCK
+                    IkbdClock.Set(_commandBuffer);
                     break;
 
-                case 0x1C: // INTERROGATE TIME-OF-DAY CLOCK, I dont know how to implement
-                    //             YY MM DD hh mm ss
-                    PushIkbdPacket(0xFC, 0, 0, 0, 0, 0, 0);
+                case 0x1C: // INTERROGATE TIME-OF-DAY CLOCK: $FC, then YY MM DD hh mm ss
+                    PushIkbdPacket(IkbdClock.Packet());
                     break;
 
                 // Memory commands

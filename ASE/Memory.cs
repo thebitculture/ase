@@ -204,9 +204,8 @@ namespace ASE
             if (addr >= 0xFFFC00 && addr <= 0xFFFC07) return true;   // ACIAs: keyboard, MIDI
             if (addr >= 0xFFFC08 && addr <= 0xFFFC1F) return true;   // gap before the clock: void
 
-            // Mega ST/STE real-time clock (see IsRtcBlock): decoded in every model, with no chip
-            // behind it -- the second block, after the HD density register, that has to answer
-            // without being implemented.
+            // Mega ST/STE real-time clock (see IsRtcBlock): decoded in every model, whether the
+            // chip is fitted or not
             if (IsRtcBlock(addr)) return true;
 
             if (addr >= 0xFFFC40 && addr <= 0xFFFDFF) return true;   // gap after the clock: void
@@ -218,27 +217,30 @@ namespace ASE
         }
 
         /// <summary>
-        /// The Mega ST/STE real-time clock block ($FFFC20-$FFFC3F, an RP5C15 on odd bytes). ASE
-        /// emulates no clock in any model, but the block is <b>decoded</b> all the same: on a real
-        /// machine it answers whether or not the clock board is fitted, reading open bus when it
-        /// is not. Only this block is decoded, not the rest of the page around the ACIAs -- what
-        /// the gaps at $FFFC08-$FFFC1F and above $FFFC3F do is untested, so they keep faulting.
+        /// The Mega ST/STE real-time clock block ($FFFC20-$FFFC3F, an RP5C15 on odd bytes). The
+        /// chip is fitted in the Mega model, and in an ST or STE only on request
+        /// (<see cref="Rp5c15.Fitted"/>), but the block is <b>decoded</b> in every model: on a
+        /// real machine it answers whether or not the clock is there, reading open bus when it is
+        /// not, and the even bytes float even when it is.
         /// <para>
         /// TOS 1.02 -- the Mega's own TOS, also sold as the upgrade for plain STs -- depends on
         /// exactly that. Its clock probe at $FC4C0C writes $09 to $FFFC3B, MOVEPs $0A05 into
         /// $FFFC25/27 and compares what comes back, taking a software fallback when it differs;
         /// the ROM installs no bus-error handler anywhere, so faulting the write sent the
         /// exception to the permanent vector and ended every cold boot in two bombs. TOS 1.04
-        /// boots because it never runs that probe.
+        /// boots either way: its probe guards that first write with a temporary handler.
         /// </para>
         /// <para>
-        /// It must not be served out of <see cref="Ports"/> either: echoing the pattern back is
-        /// what tells TOS -- and EmuTOS, which probes the same block to decide it is on a Mega --
-        /// that a clock IS fitted. Reads float high and writes are dropped, so the comparison
-        /// fails and the machine is correctly taken for one without a clock.
+        /// The empty socket must not be served out of <see cref="Ports"/> either: echoing the
+        /// pattern back is what tells TOS -- and EmuTOS, which names an ST with a clock an
+        /// "Atari Mega ST" -- that a clock IS fitted. Reads float high and writes are dropped, so
+        /// the comparison fails and the machine is correctly taken for one without a clock.
         /// </para>
         /// </summary>
         static bool IsRtcBlock(uint addr) => addr >= 0xFFFC20 && addr <= 0xFFFC3F;
+
+        /// <summary>A register of the clock, when one is fitted: the odd bytes of its block.</summary>
+        static bool IsRtcRegister(uint addr) => (addr & 1) != 0 && IsRtcBlock(addr) && Rp5c15.Fitted;
 
         /// <summary>
         /// Every block the machine <b>decodes</b> with no register behind it: reads come back at
@@ -276,7 +278,7 @@ namespace ASE
             if (addr >= 0xFF8262 && addr <= 0xFF827F)
                 return !(IsSTE && (addr == STPortAdress.ST_HSCROLL_NP || addr == STPortAdress.ST_HSCROLL));
 
-            if (IsRtcBlock(addr)) return true;
+            if (IsRtcBlock(addr)) return !IsRtcRegister(addr);
 
             // The MFP page above the USART registers, and the gaps either side of the clock
             if (addr >= 0xFFFA30 && addr <= 0xFFFA3F) return true;
@@ -836,8 +838,11 @@ namespace ASE
                 if (addr == STPortAdress.ST_MIDIDATA)
                     return MidiAcia.ReadData();
 
-                // Decoded with nothing behind it (the shifter's tail, the Mega clock, the I/O
-                // gaps): floats at its own level instead of answering out of the Ports latch,
+                if (IsRtcRegister(addr))
+                    return Rp5c15.Read(addr);
+
+                // Decoded with nothing behind it (the shifter's tail, an empty clock socket, the
+                // I/O gaps): floats at its own level instead of answering out of the Ports latch,
                 // where a value written earlier would still be sitting (see IsVoidIo).
                 if (IsVoidIo(addr))
                     return VoidIoByte(addr);
@@ -1378,9 +1383,15 @@ namespace ASE
                 if (addr >= 0xFF9200 && addr <= 0xFF9223)
                     return;
 
+                if (IsRtcRegister(addr))
+                {
+                    Rp5c15.Write(addr, v);
+                    return;
+                }
+
                 // Decoded with nothing behind it (see IsVoidIo). Dropped rather than latched in
                 // Ports: a probe that reads its own pattern back concludes the chip is fitted,
-                // which is exactly what the Mega clock block must not answer.
+                // which is exactly what an empty clock socket must not answer.
                 if (IsVoidIo(addr))
                     return;
 

@@ -149,6 +149,14 @@ namespace ASE
             /// </summary>
             public bool DriveBEnabled { get; set; } = false;
 
+            /// <summary>
+            /// Whether an ST or STE carries the Mega's RP5C15 clock (the Mega always does; see
+            /// Rp5c15). Off by default, as those machines shipped: their TOS 1.0x and 1.6x never
+            /// read the IKBD's clock at boot and start on the ROM's date, and EmuTOS names an ST
+            /// with the clock a Mega ST. Applies at power-on (--rtc).
+            /// </summary>
+            public bool RealTimeClock { get; set; } = false;
+
             /// <summary>Disk image to put in drive B: at startup (--floppy-b); implies the drive
             /// is connected. Like <see cref="FloppyImagePath"/> it is a starting condition, not a
             /// record of what the user later inserted by hand.</summary>
@@ -677,6 +685,10 @@ namespace ASE
                         ConfigOptions.RunninConfig.DriveBEnabled =
                             parts.Length < 2 || !bool.TryParse(parts[1], out bool _drvb) || _drvb;
                         break;
+                    case "--rtc":
+                        ConfigOptions.RunninConfig.RealTimeClock =
+                            parts.Length < 2 || !bool.TryParse(parts[1], out bool _rtc) || _rtc;
+                        break;
                     case "--acsi":
                         if (parts.Length > 1)
                         {
@@ -1041,6 +1053,7 @@ namespace ASE
 
             HelpSection("Machine");
             HelpOption("--tos", "=<path>", "TOS ROM image (192 KB for ST/Mega, 256 KB for STE)");
+            HelpOption("--rtc", "[=true|false]", "Fit the Mega's real-time clock in an ST or STE (the Mega has it)");
             HelpOption("--altconfig", "=<path>", "Load this configuration file instead of the default one");
             HelpOption("--maxspeed", "=true|false", "Run as fast as the host allows instead of at ST speed");
 

@@ -55,7 +55,7 @@
                                     <TextBlock Classes="description" Text="Choose the emulated Atari model and installed memory." />
                                 </StackPanel>
 
-                                <Grid ColumnDefinitions="160,*" RowDefinitions="Auto,Auto" RowSpacing="12" ColumnSpacing="18">
+                                <Grid ColumnDefinitions="160,*" RowDefinitions="Auto,Auto,Auto" RowSpacing="12" ColumnSpacing="18">
                                     <TextBlock Grid.Row="0" Grid.Column="0" Classes="fieldLabel" VerticalAlignment="Center" Text="ATARI MODEL" />
                                     <ComboBox x:Name="ComboModel"
                                               Grid.Row="0" Grid.Column="1"
@@ -64,7 +64,7 @@
                                               SelectedIndex="{Binding STModel, Mode=TwoWay}"
                                               SelectionChanged="Model_SelectionChanged">
                                         <ComboBoxItem>Atari STF/FM</ComboBoxItem>
-                                        <ComboBoxItem>Atari STF/FM + Blitter</ComboBoxItem>
+                                        <ComboBoxItem>Atari Mega ST</ComboBoxItem>
                                         <ComboBoxItem>Atari STE</ComboBoxItem>
                                     </ComboBox>
 
@@ -79,6 +79,14 @@
                                         <ComboBoxItem>2MB</ComboBoxItem>
                                         <ComboBoxItem>4MB</ComboBoxItem>
                                     </ComboBox>
+
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Classes="fieldLabel" VerticalAlignment="Center" Text="CLOCK" />
+                                    <CheckBox x:Name="ChkRealTimeClock"
+                                              Grid.Row="2" Grid.Column="1"
+                                              VerticalAlignment="Center"
+                                              Content="Real-time clock"
+                                              IsCheckedChanged="ChkRealTimeClock_OnIsCheckedChanged"
+                                              ToolTip.Tip="The Mega ST's battery clock. TOS 1.02 to 1.62 only take the date from it at boot, so without it they start on the date the ROM was built; EmuTOS and TOS 2.05/2.06 also read the keyboard's clock. The Mega ST model always has it. EmuTOS calls an STF/FM with this clock a Mega ST." />
                                 </Grid>
                             </StackPanel>
                         </Border>

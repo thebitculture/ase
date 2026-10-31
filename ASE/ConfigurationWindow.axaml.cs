@@ -165,6 +165,11 @@ namespace ASE
             LoadMidiDevices();
             UpdateMidiVisibility();
 
+            // The clock chip of an ST or STE: edited locally and committed on OK (with a reset),
+            // like the hard disks
+            _realTimeClock = Config.ConfigOptions.RunninConfig.RealTimeClock;
+            UpdateRealTimeClockCheckbox();
+
             _lastValidModelIndex = (int)Config.ConfigOptions.RunninConfig.STModel;
             _uiReady = true;
 
@@ -382,6 +387,11 @@ namespace ASE
                 hardDisksChanged = true;
             }
 
+            // The clock chip is fitted at power-on. On a Mega the choice is only stored.
+            if (_realTimeClock != Config.ConfigOptions.RunninConfig.RealTimeClock &&
+                Config.ConfigOptions.RunninConfig.STModel != Config.ConfigOptions.STModels.Mega)
+                ForceReset = true;
+
             if (ForceReset)
             {
                 MessageBoxButton result = TinyDialogs.MessageBox("Reset", $"ST must be reset to apply changes.", MessageBoxDialogType.YesNo, MessageBoxIconType.Warning, MessageBoxButton.Yes);
@@ -397,6 +407,7 @@ namespace ASE
             Config.ConfigOptions.RunninConfig.AcsiImageEnabled = acsiOn;
             Config.ConfigOptions.RunninConfig.AcsiImagePath = acsiImage;
             Config.ConfigOptions.RunninConfig.BootFromHardDisk = bootFromHd;
+            Config.ConfigOptions.RunninConfig.RealTimeClock = _realTimeClock;
 
             // Changing the disks is asking for them: a hard-disk game from the library would
             // otherwise keep the bus on the reset that is about to apply them
@@ -899,6 +910,25 @@ namespace ASE
 
             _lastValidModelIndex = (int)model;
             ForceReset = model != configBackup.STModel;
+            UpdateRealTimeClockCheckbox();
+        }
+
+        // The user's choice for an ST or STE; the Mega has the clock whatever it says
+        bool _realTimeClock;
+
+        void UpdateRealTimeClockCheckbox()
+        {
+            bool mega = Config.ConfigOptions.RunninConfig.STModel == Config.ConfigOptions.STModels.Mega;
+
+            // Disabled first, so the handler does not take the Mega's forced tick for a choice
+            ChkRealTimeClock.IsEnabled = !mega;
+            ChkRealTimeClock.IsChecked = mega || _realTimeClock;
+        }
+
+        private void ChkRealTimeClock_OnIsCheckedChanged(object sender, RoutedEventArgs e)
+        {
+            if (ChkRealTimeClock.IsEnabled)
+                _realTimeClock = ChkRealTimeClock.IsChecked == true;
         }
 
         // A 256KB TOS image (TOS 1.06-2.06) only boots on the STE.

@@ -11,7 +11,8 @@
  * Sections (unknown ids are skipped on load, so the format can grow):
  *
  *   "CFG "  ST model, RAM configuration and the floppy image paths that were
- *           inserted (re-inserted on restore when the files still exist).
+ *           inserted (re-inserted on restore when the files still exist); then the
+ *           monitor, drive B and the clock chip of an ST or STE, appended in that order.
  *   "CPU "  68000: D0-D7, A0-A7, USP, SSP, PC, PC0, SR, IRC/IRD (prefetch),
  *           IPL and the absolute cycle clock (disk rotation and motor state
  *           derive from it, so it is load-bearing for the FDC).
@@ -21,7 +22,8 @@
  *   "MFP "  MFP 68901 registers, timer counters/prescalers and the HBL/VBL/MFP
  *           interrupt line state.
  *   "PSG "  YM2149 registers and synthesis counters.
- *   "ACIA"  ACIA 6850 + IKBD state, including the pending receive queue.
+ *   "ACIA"  ACIA 6850 + IKBD state, including the pending receive queue and the IKBD's
+ *           time-of-day clock.
  *   "FDC "  WD1772 + DMA registers, head position, motor clock. A timed STX
  *           command in flight is completed (flushed) before saving.
  *   "DMAS"  STE DMA sound + Microwire/LMC1992 (ignored on ST/Mega restores).
@@ -42,6 +44,10 @@
  *           ASEMain.StartWithSnapshot before the power-on, not by Apply.
  *   "RNG "  The machine's random generator (MachineRandom: STX fuzzy bits, the noise
  *           of an unformatted track). Absent in older snapshots: the power-on seed stays.
+ *   "RTC "  The RP5C15 clock, written whether it is fitted or not. Like the IKBD's clock in
+ *           "ACIA" it is restored as saved and then set to the host's time, except in a
+ *           session (a recording, a playback, a shared game), whose machines must be the
+ *           snapshot's (ASEMain.StartWithSnapshot).
  *   "FLP "  Only in session snapshots (SaveToBytes with media): both drives' disks as
  *           the drives hold them, writes included, compressed (FloppyImage.SaveMedia).
  *           When present they replace the re-insertion by path.
@@ -132,6 +138,7 @@ namespace ASE
             public ConfigOptions.RAMConfigurations RamConfig;
             public bool Mono;
             public bool DriveBConnected;
+            public bool RealTimeClock;
             public string DriveAPath = "";
             public string DriveBPath = "";
             public Dictionary<string, byte[]> Sections = new();
@@ -194,6 +201,10 @@ namespace ASE
                 // the machine had the drive at all — and an unplugged B: is a different machine to
                 // the software (see WD1772.DriveSelected).
                 w.U8((byte)(ConfigOptions.RunninConfig.DriveBEnabled ? 1 : 0));
+
+                // Whether an ST or STE carries the clock chip (the Mega always does): a machine
+                // with it is another machine to TOS and EmuTOS (see Rp5c15)
+                w.U8((byte)(ConfigOptions.RunninConfig.RealTimeClock ? 1 : 0));
             });
 
             WriteSection(fs, "ROM ", w =>
@@ -241,6 +252,7 @@ namespace ASE
             WriteSection(fs, "UART", MfpUsart.SaveState);
             WriteSection(fs, "GHD ", GemdosHD.SaveState);
             WriteSection(fs, "RNG ", MachineRandom.SaveState);
+            WriteSection(fs, "RTC ", Rp5c15.SaveState);
         }
 
         /// <summary>The disks exactly as the drives hold them (see <see cref="FloppyImage.SaveMedia"/>),
@@ -441,6 +453,7 @@ namespace ASE
             // snapshots, which then restore with drive B unplugged.
             snap.Mono = cfg.Remaining > 0 && cfg.Bool();
             snap.DriveBConnected = cfg.Remaining > 0 && cfg.Bool();
+            snap.RealTimeClock = cfg.Remaining > 0 && cfg.Bool();
 
             // Consistency checks that don't need the machine
             int romLen = snap.Sections["ROM "].Length - 4;
@@ -522,6 +535,7 @@ namespace ASE
             if (sections.TryGetValue("UART", out var uart)) MfpUsart.LoadState(new Reader(uart));
             if (sections.TryGetValue("GHD ", out var ghd)) GemdosHD.LoadState(new Reader(ghd));
             if (sections.TryGetValue("RNG ", out var rng)) MachineRandom.LoadState(new Reader(rng));
+            if (sections.TryGetValue("RTC ", out var rtc)) Rp5c15.LoadState(new Reader(rtc));
 
             // The GLUE sync/resolution latches mirror the restored port bytes
             VideoTiming.RestoreFromPorts();
