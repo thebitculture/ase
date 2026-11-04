@@ -1,0 +1,83 @@
+
+name: Bug Report
+description: Report a problem with Atari System Emulator
+title: "[BUG] "
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Before reporting an issue
+
+        Thank you for helping improve ASE!
+
+        Please make sure that:
+        - You are using the latest version of ASE.
+        - The issue has not already been reported.
+        - You provide enough information to reproduce the problem.
+        
+        **Important:** Issues without sufficient information may not be investigated. Bug reports will be considered if they are based on the behavior of real Atari ST hardware. Comparisons with any other emulator may not be investigated.
+
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: Before continuing
+      options:
+        - label: I am using the latest version of ASE.
+          required: true
+        - label: I have checked for existing issues.
+          required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: ASE Version
+      placeholder: "e.g. 1.14"
+    validations:
+      required: true
+
+  - type: input
+    id: host-operating-system
+    attributes:
+      label: Host Operating System
+      placeholder: "e.g. Windows 11"
+    validations:
+      required: true
+
+  - type: input
+    id: guest-system
+    attributes:
+      label: Guest System
+      placeholder: "e.g. Atari STe 4MB + TOS 1.06"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the problem
+      description: Explain what happened and what you expected.
+      placeholder: Describe the issue here...
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Explain how to reproduce the problem.
+      placeholder: |
+        1. Start ASE
+        2. Load...
+        3. Select...
+        4. The problem occurs...
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional information
+      description: Add screenshots, logs or other details.
+    validations:
+      required: false
