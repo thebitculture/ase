@@ -63,6 +63,9 @@ namespace ASE
             _moira?.RemoveAllBreakpoints();
         }
 
+        // Cycles the MFP's interrupt acknowledge takes beyond the 4 Moira books (see IrqAck)
+        const int MfpIackExtraCycles = 8;
+
         /// <summary>
         /// Get interrupt vector based on level
         /// </summary>
@@ -85,6 +88,15 @@ namespace ASE
 
                 case 6: // MFP
                     vec = ASEMain._mfp.GetInterruptVector();
+
+                    // The MFP takes longer to put its vector on the bus than the 4 cycles Moira
+                    // books for the IACK: an MFP interrupt costs 56 cycles on an ST, not 44
+                    // (Hatari's CPU_IACK_CYCLES_MFP_CE, 12). The 8 extra cycles here plus the bus
+                    // alignment ApplyBusWait adds to the stacking give exactly that. It moves
+                    // every MFP handler, and a Timer B handler restarting its own timer counts on
+                    // it to land the restart after the next line's count, not before.
+                    if (ConfigOptions.RunninConfig.CycleExactBus)
+                        _moira.Clock += MfpIackExtraCycles;
                     break;
 
                 default:

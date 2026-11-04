@@ -437,20 +437,35 @@ namespace ASE
 
                         VideoTiming.StartLine(scanline, lineBase);
 
-                        // Run the CPU until the Display Enable (DE) signal drops. This is where
-                        // Timer B MUST fire (cycle 376 at 50 Hz colour, 184 in mono).
+                        // Timer B's count for this line (see below), scheduled before the CPU runs:
+                        // the instruction that reaches the display stop can run past the count,
+                        // and its MFP accesses must already be ordered against it. Where the
+                        // display stops is a prediction until the CPU gets there.
+                        _mfp.ScheduleTimerBEvent(lineBase + VideoTiming.TimerBEventCycle());
+
+                        // Run the CPU until the Display Enable (DE) signal drops (cycle 376 at 50 Hz
+                        // colour, 184 in mono).
                         int cyclesToDEStop = VideoTiming.DE_STOP_CYCLE;
                         if (RunCpuUntil(lineBase + cyclesToDEStop)) { hitBreakpoint = true; break; }
 
-                        // Fire Timer B exactly when Display Enable drops (like the real hardware).
-                        // Only on lines that actually display, and that is the DE the GLUE is
-                        // producing right now, NOT the fixed 63..262 window: with the top border
-                        // opened the display really starts at line 34 and with the bottom one
-                        // opened it runs past 263, and Timer B (whose event input is wired to DE)
-                        // counts those extra lines on real hardware. Border-opening code relies
-                        // on it — the classic "open both borders" routine arms Timer B for line 228
-                        // counted from the *opened* top border (229 displayed lines), so a counter
-                        // that only ever sees 200 events never fires and the bottom border stays.
+                        // The STE's sound DMA tops up its FIFO once a line, where the display
+                        // stops; the end of a sound frame happens here, at the last fetch.
+                        if (isSTE)
+                            STEDmaSound.RefillFifo();
+
+                        // Timer B counts the display stop 24 cycles after it (VideoTiming.
+                        // TimerBEventCycle: 400 at 50 Hz, 396 at 60 Hz, 488 with the right border
+                        // open), taken at its own cycle so that an MFP access made by the
+                        // instruction crossing it is ordered by its cycle, not by the instruction's
+                        // start (see MFP68901.ScheduleTimerBEvent). Only on lines that actually
+                        // display, and that is the DE the GLUE is producing right now, NOT the fixed
+                        // 63..262 window: with the top border opened the display really starts at
+                        // line 34 and with the bottom one opened it runs past 263, and Timer B
+                        // (whose event input is wired to DE) counts those extra lines on real
+                        // hardware. Border-opening code relies on it — the classic "open both
+                        // borders" routine arms Timer B for line 228 counted from the *opened* top
+                        // border (229 displayed lines), so a counter that only ever sees 200 events
+                        // never fires and the bottom border stays.
                         //
                         // Timer B ONLY. It is the MFP's TBI pin that the GLUE's Display Enable
                         // drives; TAI is wired to the monochrome-detect line, and on the STE that
@@ -462,13 +477,15 @@ namespace ASE
                         // displayed line and reloaded the frame pointer continuously, so digital
                         // sound came out as noise. Hatari splits it the same way — video.c only
                         // calls MFP_TimerB_EventCount, dmaSnd.c only MFP_TimerA_EventCount.
-                        if (VideoTiming.DisplayEnabledNow())
-                            _mfp.TickTimerB_EventCount();
-
-                        // The STE's sound DMA tops up its FIFO once a line, where the display
-                        // stops; the end of a sound frame happens here, at the last fetch.
-                        if (isSTE)
-                            STEDmaSound.RefillFifo();
+                        //
+                        // The count is taken here unconditionally if no MFP access took it first:
+                        // with the blitter holding the bus, RunCpuUntil can come back with the
+                        // CPU's clock still short of the event (see MFP68901.TakeTimerBEvent),
+                        // and the count belongs to this line all the same.
+                        long timerBEvent = lineBase + VideoTiming.TimerBEventCycle();
+                        _mfp.RescheduleTimerBEvent(timerBEvent);
+                        if (RunCpuUntil(timerBEvent)) { hitBreakpoint = true; break; }
+                        _mfp.TakeTimerBEvent();
 
                         // Run the rest of the scanline (H-Blank / right border). Its length is NOT
                         // a constant: the GLUE's horizontal counter wraps at 508 cycles in 60 Hz

@@ -886,6 +886,10 @@ namespace ASE
                 // treatment for MFP registers
                 if (addr >= MFP68901.MFP_BASE && addr <= MFP68901.MFP_BASE + 0x26)
                 {
+                    // A Timer B count due before this access is taken first (see
+                    // MFP68901.ScheduleTimerBEvent)
+                    ASEMain._mfp.SyncTimerBEvent();
+
                     uint offset = addr - MFP68901.MFP_BASE;
 
                     switch (offset)
@@ -1454,6 +1458,12 @@ namespace ASE
                 }
 
                 uint offset = addr - MFP68901.MFP_BASE;
+
+                // A Timer B count due before this access is taken first: a handler restarting the
+                // timer near the next line's event must find it counted or not by the cycle of
+                // its write, not by when its instruction started (see MFP68901.ScheduleTimerBEvent)
+                if (offset <= 0x2F)
+                    ASEMain._mfp.SyncTimerBEvent();
 
                 // This is a complete mess.. fixme later
                 switch (offset)

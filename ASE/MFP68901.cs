@@ -296,6 +296,64 @@ namespace ASE
             }
         }
 
+        // Absolute CPU clock of the Timer B event the emulation loop has scheduled for the line
+        // being run, or long.MaxValue when none is pending (see ScheduleTimerBEvent).
+        long _timerBEventClock = long.MaxValue;
+
+        /// <summary>
+        /// Schedules the display-enable edge that reaches Timer B's event input on this line, at an
+        /// absolute CPU clock. The emulation loop runs the CPU up to that point and then calls
+        /// <see cref="SyncTimerBEvent"/>, but Moira stops only between instructions, so the
+        /// instruction that crosses the event finishes first — and if it accesses the MFP after the
+        /// event, the order matters. A Timer B handler that stops the timer, reloads it and starts it
+        /// again in event-count mode usually lands that restart a few cycles from the next line's
+        /// event: counted or not decides which line every later interrupt falls on, and deciding it
+        /// by "whose instruction started first" made the choice change from frame to frame with the
+        /// interrupt jitter. Every MFP register access calls <see cref="SyncTimerBEvent"/> first,
+        /// so the event is taken at its own cycle relative to the access.
+        /// </summary>
+        public void ScheduleTimerBEvent(long clock) => _timerBEventClock = clock;
+
+        /// <summary>
+        /// Moves the scheduled Timer B event, if it has not been taken yet. The loop schedules it
+        /// at the start of the line, where the display stop it follows is only a prediction (a
+        /// sync write before cycle 376 can still move it), and puts it in its final place once the
+        /// CPU has reached the stop.
+        /// </summary>
+        public void RescheduleTimerBEvent(long clock)
+        {
+            if (_timerBEventClock != long.MaxValue)
+                _timerBEventClock = clock;
+        }
+
+        /// <summary>
+        /// Takes the scheduled Timer B event if the CPU clock has reached it: one count, on lines
+        /// the GLUE is displaying. Cheap no-op otherwise. Called on every MFP register access.
+        /// </summary>
+        public void SyncTimerBEvent()
+        {
+            if (CPU._moira.Clock >= _timerBEventClock)
+                TakeTimerBEvent();
+        }
+
+        /// <summary>
+        /// Takes the scheduled Timer B event now, wherever the CPU clock is. The emulation loop
+        /// calls it once it has run the line up to the event: while the blitter holds the bus
+        /// the CPU's clock can still be behind the point the line has reached (each shared-mode
+        /// burst hands the 68000 back the clock it stopped at), and an event left waiting for the
+        /// CPU there is overwritten by the next line's — Timer B loses that count, and a raster
+        /// driven by it slips a line or more on every frame the game blits during it.
+        /// </summary>
+        public void TakeTimerBEvent()
+        {
+            if (_timerBEventClock == long.MaxValue)
+                return;
+
+            _timerBEventClock = long.MaxValue;
+            if (VideoTiming.DisplayEnabledNow())
+                TickTimerB_EventCount();
+        }
+
         public void UpdateTimers(int cpuCycles)
         {
             // The timers are now accurate up to the current CPU clock; remember it so timer
@@ -501,6 +559,9 @@ namespace ASE
 
             timerACounter = r.I32(); timerBCounter = r.I32(); timerCCounter = r.I32(); timerDCounter = r.I32();
             timerAPredivAcc = r.I32(); timerBPredivAcc = r.I32(); timerCPredivAcc = r.I32(); timerDPredivAcc = r.I32();
+
+            // Snapshots are taken between frames, where no Timer B event is pending
+            _timerBEventClock = long.MaxValue;
 
             mfpAcc = r.I64();
             _lastUpdateClock = r.I64();

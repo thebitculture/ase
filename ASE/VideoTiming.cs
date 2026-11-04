@@ -53,7 +53,15 @@ namespace ASE
         // Video.PaletteWriteLead moves with this value.
         const int VideoCounterLag = 8;
         const int COLOR_SCANLINES  = 313;
-        const int COLOR_DE_STOP    = 376;   // where the emulation loop fires Timer B
+        const int COLOR_DE_STOP    = 376;   // display stop: where the loop tops up the STE sound FIFO
+
+        // How long after the display stops the edge reaches Timer B's event input, in cycles
+        // (Hatari's TIMERB_VIDEO_CYCLE_OFFSET: 376+24 at 50 Hz, 372+24 at 60 Hz). Timer B counts
+        // there, and that is the clock its interrupt and every restart race against: a handler
+        // that stops, reloads and restarts the timer from its own interrupt lands the restart
+        // within a few cycles of the next line's count, and the side it falls on decides which
+        // line every later interrupt comes on. See TimerBEventCycle.
+        const int TimerBEventDelay = 24;
 
         const int DE_START_50 = 56;
         const int DE_STOP_50  = 376;   // (376-56)/2 = 160 bytes
@@ -82,7 +90,7 @@ namespace ASE
         const int MONO_V_START         = 36;                    // first displayed scanline
         const int MONO_V_STOP          = MONO_V_START + MONO_HEIGHT;   // 436
         const int MONO_DE_START        = 24;                    // left edge of the fetched data
-        const int MONO_DE_STOP         = MONO_DE_START + 160;   // where the loop fires Timer B
+        const int MONO_DE_STOP         = MONO_DE_START + 160;   // display stop (Timer B counts 24 later)
 
         // ===================== Visible window (what a real colour TV shows, centred) =====================
         // Horizontal units are "low-res pixels" == DE cycles; each maps to 2 texture pixels
@@ -129,7 +137,7 @@ namespace ASE
         public static int  BUFFER_HEIGHT       { get; private set; } = COLOR_HEIGHT;
         public static int  CYCLES_PER_LINE     { get; private set; } = COLOR_CYCLES_PER_LINE;
         public static int  SCANLINES_PER_FRAME { get; private set; } = COLOR_SCANLINES;
-        public static int  DE_STOP_CYCLE       { get; private set; } = COLOR_DE_STOP;       // loop Timer B split
+        public static int  DE_STOP_CYCLE       { get; private set; } = COLOR_DE_STOP;       // loop split at the display stop
         public static int  RENDER_TOP_LINE     { get; private set; } = VISIBLE_TOP_LINE;    // scanline shown at buffer row 0
         public static double FRAME_SECONDS     { get; private set; } = (double)COLOR_SCANLINES * COLOR_CYCLES_PER_LINE / 8_000_000.0;
 
@@ -661,6 +669,31 @@ namespace ASE
         /// <summary>Length of the line being executed (512 / 508 / 224). Diagnostics.</summary>
         public static int LineCycles => _lineCycles;
 
+        // Where the colour display stops on the line being executed. A 60 Hz frequency seen at
+        // cycle 372 stops DE early (normal 60 Hz line). If it is still 50 Hz at 372 but 60 Hz at
+        // 376, neither stop marker fired -> DE runs on to the end of the line (right border
+        // removed). Only sync writes up to cycle 376 count, so it is final once the CPU is there.
+        static int LineDeStop()
+        {
+            if (Is60AtCycle(DE_STOP_60))
+                return DE_STOP_60;
+            if (Is60AtCycle(DE_STOP_50))
+                return DE_STOP_RIGHT_OPEN;
+            return DE_STOP_50;
+        }
+
+        /// <summary>
+        /// Cycle of the line being executed at which Timer B's event input sees the display stop:
+        /// <see cref="TimerBEventDelay"/> after it, so 400 on a 50 Hz line, 396 at 60 Hz, 488 with
+        /// the right border open (Hatari's Video_TimerB_GetPosFromDE). Final once the CPU has
+        /// reached the display stop (<see cref="DE_STOP_CYCLE"/>), since the stop depends on the
+        /// sync writes up to there; earlier in the line it predicts from the writes so far.
+        /// </summary>
+        public static int TimerBEventCycle()
+        {
+            return (Mono ? MONO_DE_STOP : LineDeStop()) + TimerBEventDelay;
+        }
+
         /// <summary>
         /// Resolve the line that just finished executing: compute the horizontal DE window
         /// (left/right borders), advance the shifter address and return the render info.
@@ -712,16 +745,7 @@ namespace ASE
                 deStart = DE_START_50;
 
             // ---- DE stop (right border) ----
-            // A 60 Hz frequency seen at cycle 372 stops DE early (normal 60 Hz line). If it is
-            // still 50 Hz at 372 but 60 Hz at 376, neither stop marker fired -> DE runs on to
-            // the end of the line (right border removed).
-            int deStop;
-            if (Is60AtCycle(DE_STOP_60))
-                deStop = DE_STOP_60;
-            else if (Is60AtCycle(DE_STOP_50))
-                deStop = DE_STOP_RIGHT_OPEN;
-            else
-                deStop = DE_STOP_50;
+            int deStop = LineDeStop();
 
             info.VideoAddr = _lineStartCounter;
             info.DeStart = deStart;
