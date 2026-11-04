@@ -472,13 +472,11 @@ namespace ASE
 
                         // Run the rest of the scanline (H-Blank / right border). Its length is NOT
                         // a constant: the GLUE's horizontal counter wraps at 508 cycles in 60 Hz
-                        // and 512 in 50 Hz, so the frequency in effect at the wrap point decides.
-                        // The CPU is run to the shortest a line can be, where every sync write
-                        // that decides its length has been made (ResolveLineCycles only looks at
-                        // those stamped at or before the wrap), and a 512-cycle line then runs its
-                        // last four cycles. RunForCycles' per-instruction overshoot past the end
-                        // is what lineBase (below) absorbs.
-                        if (RunCpuUntil(lineBase + VideoTiming.SHORTEST_LINE_CYCLES)) { hitBreakpoint = true; break; }
+                        // and 512 in 50 Hz, and which one this line gets was latched at cycle 54
+                        // (56 on the STE), long before the display stop we are at — a sync write
+                        // from here on only counts for the next line (see ResolveLineCycles).
+                        // RunForCycles' per-instruction overshoot past the end is what lineBase
+                        // (below) absorbs.
                         int lineCycles = VideoTiming.ResolveLineCycles();
                         if (RunCpuUntil(lineBase + lineCycles)) { hitBreakpoint = true; break; }
 

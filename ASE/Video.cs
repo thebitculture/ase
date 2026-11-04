@@ -59,25 +59,27 @@ namespace ASE
             private static readonly byte[] _work = new byte[32];  // raw $FF8240 bytes, mutated as events apply
 
             // Hatari encodes the same correction as 7 extra 4-cycle spans (28 cycles) in
-            // Spec512_StartScanLine ("'7' is required to align pixels and colors"); ASE's value
-            // differs because Moira's precise timing stamps the write at a different point inside
-            // the instruction than Hatari's convention.
-            // 19 is the value at which every image renders clean (20 applied some entries one pixel early,
-            // spraying wrong-coloured pixels on a few images). Without the lead every mid-line
-            // palette change shows up that many low-res pixels late — invisible on flat palette
-            // splits, but a Spectrum 512 photo shows it wherever consecutive values of an entry
-            // differ.
+            // Spec512_StartScanLine ("'7' is required to align pixels and colors").
+            // 27 is the value at which every Spectrum 512 image renders clean (one more applied
+            // some entries one pixel early, spraying wrong-coloured pixels on a few images).
+            // Without the lead every mid-line palette change shows up that many low-res pixels
+            // late — invisible on flat palette splits, but a Spectrum 512 photo shows it wherever
+            // consecutive values of an entry differ.
+            //
+            // The calibration was first made at 19/20, against a video counter that read 8 cycles
+            // early (VideoTiming.VideoCounterLag): Spectrum 512 synchronises its kernel on that
+            // counter, so all its writes were stamped 8 cycles early and the lead had shrunk by the
+            // same amount to hide it. With the counter right the same pictures need 27/28 — Hatari's
+            // value — and a colour-0 raster synchronised on the counter lands where a capture of
+            // the real machine puts it (one transition every 12 pixels at stamp - 27 - 56).
             //
             // The BORDER samples colour 0 with ONE MORE cycle of lead (PaintBorderSpan). The
             // stamps sit on the 4-cycle bus grid, so a single integer cannot place both edges:
-            // the display columns calibrate to 19, but the colour-0 write that on real hardware
-            // (and Hatari) already covers the first right-border pixel needs 20 there — with 19
+            // the display columns calibrate to 27, but the colour-0 write that on real hardware
+            // (and Hatari) already covers the first right-border pixel needs 28 there — with 27
             // on both, a 1-px stripe of the previous border colour runs down the display→border
             // seam. Sub-grid detail the 4-aligned stamps cannot express, split empirically.
-            //
-            // I think this needs further investigation, and it would be useful if this variable
-            // could be set either as an environment variable or as a parameter so we can run more tests.
-            const int PaletteWriteLead = 19;
+            const int PaletteWriteLead = 27;
             const int BorderWriteLead  = PaletteWriteLead + 1;
 
             /// <summary>

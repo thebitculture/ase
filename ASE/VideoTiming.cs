@@ -37,8 +37,21 @@ namespace ASE
         public const int COLOR_CYCLES_PER_LINE = 512;
         // A 60 Hz line is four cycles SHORTER: the GLUE's horizontal counter wraps at 508 instead
         // of 512 (60 Hz = 508 x 263 lines, 50 Hz = 512 x 313). Which of the two a given line gets
-        // is decided by the frequency in effect AT cycle 508 — see ResolveLineCycles.
+        // is latched early in the line, at LINE_SET_PAL — see ResolveLineCycles.
         const int COLOR_CYCLES_PER_LINE_60 = 508;
+        const int LINE_SET_PAL_ST  = 54;    // Hatari's Line_Set_Pal: STF (WS1)
+        const int LINE_SET_PAL_STE = 56;    //                        STE
+
+        // How far the video counter a CPU read sees ($FF8205/07/09) trails the read's stamp, in
+        // cycles: the counter counts the words the MMU has handed to the shifter, and Hatari's
+        // Video_CalculateAddress takes 8 cycles off the read position for it. Load-bearing for
+        // every program that synchronises on the counter — wait for its low byte to cross a
+        // value, compensate the read jitter, then count cycles — because the whole routine moves
+        // with it. A fullscreen whose 60 Hz write must land on cycle 376 to open the right border
+        // lands on 368 with the counter 8 cycles early: the line stops at 372, fetches 158 bytes
+        // instead of 204, and the picture shears. Spectrum 512 syncs the same way, which is why
+        // Video.PaletteWriteLead moves with this value.
+        const int VideoCounterLag = 8;
         const int COLOR_SCANLINES  = 313;
         const int COLOR_DE_STOP    = 376;   // where the emulation loop fires Timer B
 
@@ -117,7 +130,6 @@ namespace ASE
         public static int  CYCLES_PER_LINE     { get; private set; } = COLOR_CYCLES_PER_LINE;
         public static int  SCANLINES_PER_FRAME { get; private set; } = COLOR_SCANLINES;
         public static int  DE_STOP_CYCLE       { get; private set; } = COLOR_DE_STOP;       // loop Timer B split
-        public static int  SHORTEST_LINE_CYCLES { get; private set; } = COLOR_CYCLES_PER_LINE_60; // earliest a line can end
         public static int  RENDER_TOP_LINE     { get; private set; } = VISIBLE_TOP_LINE;    // scanline shown at buffer row 0
         public static double FRAME_SECONDS     { get; private set; } = (double)COLOR_SCANLINES * COLOR_CYCLES_PER_LINE / 8_000_000.0;
 
@@ -133,14 +145,12 @@ namespace ASE
             {
                 BUFFER_WIDTH = MONO_WIDTH; BUFFER_HEIGHT = MONO_HEIGHT;
                 CYCLES_PER_LINE = MONO_CYCLES_PER_LINE; SCANLINES_PER_FRAME = MONO_SCANLINES;
-                SHORTEST_LINE_CYCLES = MONO_CYCLES_PER_LINE;
                 DE_STOP_CYCLE = MONO_DE_STOP; RENDER_TOP_LINE = MONO_V_START;
             }
             else
             {
                 BUFFER_WIDTH = COLOR_WIDTH; BUFFER_HEIGHT = COLOR_HEIGHT;
                 CYCLES_PER_LINE = COLOR_CYCLES_PER_LINE; SCANLINES_PER_FRAME = COLOR_SCANLINES;
-                SHORTEST_LINE_CYCLES = COLOR_CYCLES_PER_LINE_60;
                 DE_STOP_CYCLE = COLOR_DE_STOP; RENDER_TOP_LINE = VISIBLE_TOP_LINE;
             }
 
@@ -394,7 +404,7 @@ namespace ASE
             if ((v & 0x02) == 0)   // switched to 60 Hz
             {
                 // Bottom border: a 60 Hz pulse around the 50 Hz stop line (263) makes the display
-                // miss its stop and keep going into the bottom border. (Pang fires this at line 262.)
+                // miss its stop and keep going into the bottom border (line 262 is common).
                 if (_currentLine >= V_STOP_50 - 2 && _currentLine <= V_STOP_50)
                     _bottomBorderOpen = true;
 
@@ -579,10 +589,10 @@ namespace ASE
             bool saw60 = false, backTo50 = false;
             byte sync = _syncAtLineStart;
             // A 60 Hz state carried from the previous line is not a left-border pulse.
-            // Turrican opens the bottom border late on line 262 and returns to 50 Hz
-            // at cycle 32 of line 263, before either DE-start compare. That line must
-            // fetch the normal 160 bytes. Treating the inherited state as a pulse
-            // fetched 26 extra bytes and misaligned every bitplane in the reflection.
+            // A bottom-border routine that switches late on line 262 can return to 50 Hz
+            // early in line 263, before either DE-start compare. That line must fetch the
+            // normal 160 bytes; treating the inherited state as a pulse fetches 26 extra
+            // bytes and misaligns every bitplane below it.
             for (int i = 0; i < _eventCount; i++)
             {
                 if (_events[i].IsRes) continue;
@@ -596,31 +606,56 @@ namespace ASE
         }
 
         // ===================== Line length (508 / 512 cycles) =====================
-        // The GLUE's horizontal counter wraps at 508 cycles in 60 Hz and at 512 in 50 Hz, so the
-        // frequency the register holds *at the wrap point* is what sets the length of the line —
-        // a distinction demos rely on twice over:
-        //   - The border-removal pulses (left border at ~cycle 50, right border at ~372, bottom
-        //     border late in the line) are back to 50 Hz well before cycle 508, so they open the
-        //     border WITHOUT shortening the line. A model that shortened on any 60 Hz write would
-        //     drift every cycle-counted effect on the screen.
-        //   - A *sustained* 60 Hz across the wrap point really does produce a 508-cycle line, and
-        //     code that counts cycles (Timer B/D in delay mode, or plain instruction counting)
-        //     measures those four cycles per line.
-        // Not modelled yet: the exotic lengths a switch landing exactly on the wrap point can
-        // produce (516/520-cycle lines) and the 224-cycle line a mid-line switch to high
-        // resolution gives on a colour monitor — both belong with mid-line resolution changes.
+        // The GLUE's horizontal counter wraps at 508 cycles in 60 Hz and at 512 in 50 Hz, but the
+        // GLUE does not look at the frequency when it wraps: it latches the line's length early in
+        // the line, at cycle 54 on the ST and 56 on the STE (Hatari's Line_Set_Pal), and a switch
+        // after that point only counts from the next line. Demos rely on it twice over:
+        //   - The border-removal pulses (right border at ~376, bottom border late in the line) do
+        //     not shorten their line, however long they last. A bottom-border routine typically
+        //     switches to 60 Hz late in line 262 and back to 50 Hz a few cycles into line 263 —
+        //     60 Hz across the wrap point, and still two 512-cycle lines. Shortening line 262
+        //     moves every cycle-counted write below it four cycles late: a fullscreen whose right
+        //     border opens on cycle 376 loses it on every line under the bottom border.
+        //   - A *sustained* 60 Hz really does produce 508-cycle lines, and code that counts cycles
+        //     (Timer B/D in delay mode, or plain instruction counting) measures those four cycles
+        //     per line.
+        // Not modelled yet: the exotic lengths a switch landing on the wrap point can produce
+        // (516/520-cycle lines) and the 224-cycle line a mid-line switch to high resolution gives
+        // on a colour monitor — both belong with mid-line resolution changes.
 
         /// <summary>
-        /// Length in CPU cycles of the line being executed. Call it at the end of the line: only
-        /// the sync writes stamped at or before the wrap (cycle 508) count, so running the CPU past
-        /// that point first does not change the answer — it just saves splitting the run in two.
+        /// Length in CPU cycles of the line being executed. Call it once the CPU has run past
+        /// LINE_SET_PAL (the emulation loop asks at the display stop): only the sync writes stamped
+        /// before that point count.
         /// </summary>
         public static int ResolveLineCycles()
         {
             _lineCycles = Mono ? MONO_CYCLES_PER_LINE
-                               : (Is60AtCycle(COLOR_CYCLES_PER_LINE_60) ? COLOR_CYCLES_PER_LINE_60
-                                                                        : COLOR_CYCLES_PER_LINE);
+                               : (LineLatched60() ? COLOR_CYCLES_PER_LINE_60 : COLOR_CYCLES_PER_LINE);
             return _lineCycles;
+        }
+
+        // The frequency the GLUE latched for this line's length. Hatari's comparisons are kept as
+        // they are: a switch to 60 Hz has to come before LINE_SET_PAL, one back to 50 Hz may land
+        // on it (with the stamps on the 4-cycle grid that matters on the STE, whose latch is 56).
+        static bool LineLatched60()
+        {
+            int setPal = ConfigOptions.RunninConfig.STModel == ConfigOptions.STModels.STE
+                ? LINE_SET_PAL_STE : LINE_SET_PAL_ST;
+
+            byte sync = _syncAtLineStart;
+            for (int i = 0; i < _eventCount; i++)
+            {
+                if (_events[i].IsRes) continue;
+
+                int cycle = _events[i].Cycle;
+                if (cycle > setPal) break;
+
+                byte val = _events[i].Val;
+                if (cycle == setPal && (val & 0x02) == 0) continue;
+                sync = val;
+            }
+            return (sync & 0x02) == 0;
         }
 
         /// <summary>Length of the line being executed (512 / 508 / 224). Diagnostics.</summary>
@@ -731,7 +766,10 @@ namespace ASE
                 return (_lineStartCounter + (uint)(mwords * 2)) & 0xFFFFFFu;
             }
 
-            int cycleInLine = (int)(CPU._moira.Clock - _lineStartClock);
+            // The counter a read sees trails the stamp by VideoCounterLag (see there). A read in the
+            // first cycles of a line therefore still sees the previous line's end, which is this
+            // line's start: the clamp below gives exactly that.
+            int cycleInLine = (int)(CPU._moira.Clock - _lineStartClock) - VideoCounterLag;
 
             // DE window estimated from the frequency currently programmed; this is enough for the
             // usual case where the VAP is polled during the active display or right at the border.
