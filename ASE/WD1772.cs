@@ -777,11 +777,10 @@ namespace ASE
             // That silence is how a program tells a second drive from an empty cable, and
             // completing the command with a seek error instead (which is what a WD1772 reports
             // only after it has really stepped 255 times looking for TR00) answers "there IS a
-            // drive there" to the shape of probe everyone uses. Psygnosis' Barbarian II is the
-            // case that found it: its loader selects drive B, sends RESTORE ($03) and spins on
-            // GPIP5 for ~3 s; the interrupt arriving at all is what it stores as "two drives",
-            // so it asked for disk two in B: on a machine that has no B: — and then read from a
-            // drive that cannot answer. TOS' own probe is built the same way and copes either
+            // drive there" to the shape of probe everyone uses: select drive B, send RESTORE
+            // ($03) and wait on GPIP5 for a few seconds; the interrupt arriving at all means "two
+            // drives", and the program then asks for a disk in a B: that does not exist and reads
+            // from a drive that cannot answer. TOS' own probe is built the same way and copes either
             // way: it times out after 2 s (1 s with the motor already running) and issues the
             // Force Interrupt itself ($E0175A in TOS 1.06).
             //
@@ -874,7 +873,7 @@ namespace ASE
 
             // Type II/III on an STX (Pasti) image: run with real disk timing — busy stays
             // set and the data flows to the DMA byte by byte while the disk rotates,
-            // which is what timing-based protections (Copylock etc.) measure.
+            // which is what timing-based protections measure.
             if (command >= 0x80 && (command & 0xF0) != CMD_FORCE_INTERRUPT
                 && DriveSelected && ActiveDrive.Stx != null)
             {
@@ -889,8 +888,9 @@ namespace ASE
             {
                 ExecuteReadSector();
 
-                // Multiple, and every sector the DMA wanted arrived: the chip keeps hunting
-                // for the next one instead of interrupting (see KeepSearchingAfterMultiple)
+                // Multiple, read without errors — every sector the DMA wanted, or every one up to
+                // the end of the track: the chip keeps hunting for the next one instead of
+                // interrupting (see KeepSearchingAfterMultiple)
                 if ((command & 0x10) != 0 && statusRegister == 0)
                     KeepSearchingAfterMultiple();
                 else
@@ -914,8 +914,9 @@ namespace ASE
             }
             if (hiNibble == CMD_READ_TRACK)
             {
-                ExecuteReadTrack();
-                EndCommandOK();
+                StartReadTrack(command, motorWasOn);
+                if (stxOp == null)
+                    EndCommandOK();
                 return;
             }
             if (hiNibble == CMD_WRITE_TRACK)
@@ -935,14 +936,11 @@ namespace ASE
                 // form, and even then it just clears the spin-up bit and raises motor on
                 // (Hatari's FDC_TypeIV_ForceInterrupt, verified on an STF).
                 //
-                // Rewriting it as a fresh Type I status is what broke Turrican (Kixx, .STX):
-                // its boot loader reads a whole track with READ SECTOR MULTIPLE, waits for the
-                // DMA address to reach its target, stops the chip with $D0 and then tests the
-                // status against #$1C — lost data / CRC / record not found. In Type I form bit 2
-                // is TR00, not lost data, so a perfectly good read of track 0 came back as an
-                // error. The loader's retry path re-enters its read routine with D0 still
-                // holding the $D0 opcode, which it writes to the sector register: from there it
-                // asked for sector 208 forever, which is where it was found parked.
+                // A loader may read a whole track with READ SECTOR MULTIPLE, wait for the DMA
+                // address to reach its target, stop the chip with $D0 and then test the status
+                // against #$1C — lost data / CRC / record not found. In Type I form bit 2 is
+                // TR00, not lost data, so rewriting the register as a fresh Type I status turns
+                // a perfectly good read of track 0 into an error.
                 statusRegister = (byte)(wasBusy
                     ? statusBeforeCommand & ~STATUS_BUSY
                     : statusBeforeCommand & ~(STATUS_BUSY | STATUS_SPIN_UP));
@@ -1014,13 +1012,14 @@ namespace ASE
         }
 
         /// <summary>
-        /// A read MULTIPLE that has given the DMA everything it asked for is *not* finished:
+        /// A read MULTIPLE that has given the DMA everything it asked for, or has reached the end
+        /// of the track before that, is *not* finished:
         /// the WD1772 goes on looking for the next sector and only reports Record Not Found
         /// after five index pulses, so no interrupt arrives in between — programs stop the chip
-        /// with a Force Interrupt once they have their data. Loaders build on that gap: Sega's
-        /// Super Hang-On checks once per VBL whether the DMA address has reached its target,
-        /// but tests the FDC interrupt *first* and reads an early one as a disk error, so it
-        /// retried the same sector forever when the command ended by itself. The command
+        /// with a Force Interrupt once they have their data. Loaders build on that gap: one that
+        /// checks once per VBL whether the DMA address has reached its target, but tests the
+        /// FDC interrupt *first*, reads an early one as a disk error and retries the same
+        /// sector forever if the command ends by itself. The command
         /// therefore stays busy on a timed operation (the same one the STX engine uses) instead
         /// of ending here. Write Multiple is left alone: no loader depends on it and finishing
         /// it early has never been a problem.
@@ -1184,24 +1183,19 @@ namespace ASE
                 Console.Write(Environment.NewLine);
             }
 
+            // Every sector read cleanly. A multi-sector read that has run off the end of the track
+            // is not over: the WD1772 goes on looking for the next sector number and reports
+            // Record Not Found only five index pulses later, whether or not the DMA still wanted
+            // data — the chip knows nothing of the DMA's count. The caller keeps the command busy
+            // for that search (KeepSearchingAfterMultiple), as the STX path does.
+            //
+            // Answering RNF here instead, the moment the track ends with sectors still owed to
+            // the DMA, breaks the common track loader that programs the DMA for more sectors than
+            // the track holds, watches the DMA address and stops the chip with $D0 once it has
+            // its data, then tests the status against #$1C: the $D0 reaches an idle chip, the RNF
+            // stays in the register, and the loader retries the same track for ever.
             if (!readError)
-            {
-                // On a multi-sector read the WD1772 keeps reading sequential sectors until it is
-                // explicitly stopped (Force Interrupt) or it runs off the end of the track. The
-                // Atari DMA chip stops storing data once its sector count reaches 0, so:
-                //   - dmaSectorCount == 0  -> every sector the host asked for was transferred, the
-                //     read succeeded even if the last one happened to be the final sector on the
-                //     track (this is the common "read exactly N sectors" case).
-                //   - dmaSectorCount  > 0  -> the track ended before the DMA was satisfied, so the
-                //     next sector the FDC looked for does not exist -> RECORD NOT FOUND, which is
-                //     the signal trackloaders use to know they must seek to the next track.
-                // (The previous code keyed on "SR > SPT", which wrongly reported RNF whenever the
-                //  requested sectors reached the end of the track, making loaders retry forever.)
-                if (multi && dmaSectorCount > 0)
-                    statusRegister = STATUS_RECORD_NOT_FOUND;
-                else
-                    statusRegister = 0x00;
-            }
+                statusRegister = 0x00;
         }
 
         private static void ExecuteWriteSector()
@@ -1305,13 +1299,23 @@ namespace ASE
             statusRegister = 0x00;
         }
 
-        // READ TRACK: streams the whole raw track (gaps, sync marks, address marks, sector data
-        // and CRCs) into RAM through the DMA, just like the real chip does between two index
-        // pulses. .ST/.MSA images only store the sector payloads, so the surrounding format bytes
-        // are synthesized as a standard double-density IBM/ISO track. Loaders and copy tools that
-        // analyze the raw track (or wait for the DMA to drain) need real data here, otherwise they
-        // hang forever on an empty transfer.
-        private static void ExecuteReadTrack()
+        // READ TRACK: the whole raw track (gaps, sync marks, address marks, sector data and CRCs)
+        // from one index pulse to the next. .ST/.MSA images only store the sector payloads, so
+        // the surrounding format bytes are synthesized as a standard double-density IBM/ISO
+        // track — but the transfer itself runs with the disk's timing, on the timed engine the
+        // STX commands use: the chip waits for the index pulse (after the spin-up, if the
+        // command asked for one), hands the DMA one byte every 32 µs through its 16-byte FIFO,
+        // stays busy for the whole revolution and interrupts only at its end. A Force Interrupt
+        // stops it with whatever has reached RAM by then.
+        //
+        // Delivering the whole track the moment the command is written is not a harmless
+        // shortcut. READ TRACK is a probe as often as a copy: software points the DMA at a
+        // buffer, starts the command, watches the DMA address until a few hundred bytes have
+        // arrived and stops the chip with $D0. Such a buffer only has to hold what arrives
+        // before the $D0 — it can be a block of the prober's own code, saved beforehand and
+        // put back afterwards — and 6 KB written at once overwrite everything past it, the
+        // code doing the probing included (HARDWARE-NOTES.md, "A track read cut short").
+        private static void StartReadTrack(byte command, bool motorWasOn)
         {
             if (!DriveSelected || !ActiveDrive.HasDisk)
             {
@@ -1319,22 +1323,32 @@ namespace ASE
                 return;
             }
 
-            byte[] track = BuildRawTrack(headTrack, currentSide);
+            stxDmaByteCount = 0;
+            dmaFifoCount = 0;      // whatever the previous command left half-collected is gone
 
-            int bps = ActiveDrive.DiskConfig.SectorSize;
-            // The DMA stops storing once its sector count reaches 0; if the host did not program a
-            // count, fall back to transferring the whole synthesized track.
-            int maxBytes = dmaSectorCount > 0 ? dmaSectorCount * bps : track.Length;
-            int toCopy = Math.Min(track.Length, maxBytes);
+            // Spin-up: 6 revolutions when the motor was stopped and the h bit (3) is clear
+            long spinUp = (!motorWasOn && (command & 0x08) == 0) ? 6 * CYCLES_PER_REVOLUTION : 0;
+            long now = CPU._moira.Clock + spinUp;
 
-            for (int i = 0; i < toCopy; i++)
-                ASEMain._mem.Write8(dmaAddress++, track[i]);
+            // The first byte follows the next index pulse, on the rotation the status
+            // register's index bit is computed from (ComposeStatus)
+            long start = now + (CYCLES_PER_REVOLUTION - now % CYCLES_PER_REVOLUTION);
 
-            // Decrement the DMA sector count for every full sector (SectorSize bytes) transferred.
-            if (dmaSectorCount > 0)
-                dmaSectorCount = (byte)Math.Max(0, dmaSectorCount - (toCopy / bps));
+            byte[] raw = BuildRawTrack(headTrack, currentSide);
+            long[] due = new long[raw.Length];
+            for (int i = 0; i < raw.Length; i++)
+                due[i] = start + (long)(i + 1) * CYCLES_PER_MFM_BYTE;
 
-            statusRegister = 0x00;
+            // The DMA stores only while its sector counter has not run out (ProcessStxOp), so
+            // a track read with no count programmed moves nothing into RAM, as on the chip
+            stxOp = new StxOp
+            {
+                Bytes = raw,
+                Due = due,
+                CompleteClock = due[^1],
+                FinalStatus = 0,
+                CountDmaBytes = true
+            };
         }
 
         // WRITE TRACK: low-level format. The host streams a raw track image through the DMA; the
@@ -1503,9 +1517,12 @@ namespace ASE
         //  revolution and every data byte is delivered to the DMA at the CPU
         //  cycle it would come off the drive (including the per-16-byte-block
         //  variable bit rate stored in the image). Copy protections measure
-        //  exactly this: Copylock times the sector blocks, Dungeon Master
-        //  re-reads fuzzy sectors expecting different bits, others check CRC
-        //  errors or ID fields that don't match the physical track.
+        //  exactly this: some time the sector blocks, some re-read fuzzy
+        //  sectors expecting different bits, others check CRC errors or ID
+        //  fields that don't match the physical track.
+        //
+        //  READ TRACK on a .ST/.MSA image runs on this engine too, over a
+        //  synthesized track (StartReadTrack).
         // ------------------------------------------------------------------
 
         private const int CYCLES_PER_MFM_BYTE = 256;   // one MFM byte = 32 µs = 256 CPU cycles at 8 MHz
@@ -1536,10 +1553,10 @@ namespace ASE
         // The DMA chip is not byte-addressed: bytes coming off the FDC are collected in a
         // 16-byte FIFO, and only when it fills does the block reach RAM and the address
         // register ($FF8609/0B/0D) step — by 16, never by 1. Copy protections measure exactly
-        // that: Ocean's Batman the Movie loader samples the interval between consecutive steps
-        // of $FF860D with MFP Timer A to read back the variable bit rate of a protected sector
-        // (its 32 samples are the sector's 32 blocks of 16 bytes). Stepping the address per
-        // byte makes every sample identical and the loader hangs. Same model as Hatari's
+        // that: they sample the interval between consecutive steps of $FF860D with an MFP
+        // timer to read back the variable bit rate of a protected sector, one sample per block
+        // of 16 bytes. Stepping the address per byte makes every sample identical and the
+        // check fails. Same model as Hatari's
         // FDC_DMA_FIFO_Push / DMA_DISK_TRANSFER_SIZE.
         const int DMA_FIFO_SIZE = 16;
         static readonly byte[] dmaFifo = new byte[DMA_FIFO_SIZE];

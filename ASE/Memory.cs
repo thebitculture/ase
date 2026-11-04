@@ -569,8 +569,26 @@ namespace ASE
         // after, is what keeps the write that starts a blit from being charged to the blitter.
         public byte   CpuRead8 (uint addr)            { Blitter.NoteCpuBusAccess(addr, false); ApplyBusWait(addr); return Read8(addr); }
         public ushort CpuRead16(uint addr)            { Blitter.NoteCpuBusAccess(addr, false); ApplyBusWait(addr); return Read16(addr); }
-        public void   CpuWrite8 (uint addr, byte v)   { Blitter.NoteCpuBusAccess(addr, true); ApplyBusWait(addr); Write8(addr, v); }
-        public void   CpuWrite16(uint addr, ushort v) { Blitter.NoteCpuBusAccess(addr, true); ApplyBusWait(addr); Write16(addr, v); }
+        public void   CpuWrite8 (uint addr, byte v)   { Blitter.NoteCpuBusAccess(addr, true); ApplyBusWait(addr); if (!WritesRomShadow(addr)) Write8(addr, v); }
+        public void   CpuWrite16(uint addr, ushort v) { Blitter.NoteCpuBusAccess(addr, true); ApplyBusWait(addr); if (!WritesRomShadow(addr)) Write16(addr, v); }
+
+        /// <summary>
+        /// The first 8 bytes of the address space are the ROM's, not RAM's (the reset SSP and PC,
+        /// see <see cref="Read8"/>), so a CPU write there is a write to ROM and the bus errors, in
+        /// supervisor mode too (Hatari's <c>SysMem_*put</c>). Software that clears memory from
+        /// address 0 relies on it: the fault, not the clear, is what stops the loop. Only the
+        /// CPU's writes: Hatari drops the blitter's there without a fault, and what the blitter
+        /// leaves in RAM[0..7] is never read back.
+        /// </summary>
+        bool WritesRomShadow(uint addr)
+        {
+            addr &= 0xFFFFFFu;
+            if (addr >= 0x08)
+                return false;
+
+            BusError(addr, true);
+            return true;
+        }
 
         /// <summary>
         /// Reproduces the Atari ST memory-bus wait states for a single CPU bus access, by advancing
