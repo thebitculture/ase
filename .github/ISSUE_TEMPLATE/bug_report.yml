@@ -1,6 +1,7 @@
 
 name: Bug Report
 description: Report a problem with Atari System Emulator
+labels: ["bug"]
 title: "[BUG] "
 
 body:
@@ -15,8 +16,10 @@ body:
         - You are using the latest version of ASE.
         - The issue has not already been reported.
         - You provide enough information to reproduce the problem.
-        
-        **Important:** Issues without sufficient information may not be investigated. Bug reports will be considered if they are based on the behavior of real Atari ST hardware. Comparisons with any other emulator may not be investigated.
+
+        **Important:** Issues without sufficient information may not be investigated.
+
+        Bug reports must be based on the behavior of real Atari ST hardware. Comparisons with Hatari, Steem, or any other emulator are not considered valid evidence of a bug.
 
   - type: checkboxes
     id: confirmation
@@ -48,6 +51,7 @@ body:
     id: guest-system
     attributes:
       label: Guest System
+      description: Specify the emulated Atari model, RAM and TOS version.
       placeholder: "e.g. Atari STe 4MB + TOS 1.06"
     validations:
       required: true
