@@ -196,8 +196,13 @@ namespace ASE
             // STE DMA sound and joypads, and the blitter: the model check for these belongs to
             // their own handlers, which report it, so the block is "known" here in every model.
             if (addr >= 0xFF8900 && addr <= 0xFF8925) return true;
-            if (addr >= 0xFF8A00 && addr <= 0xFF8A3D) return true;
             if (addr >= 0xFF9200 && addr <= 0xFF9223) return true;
+
+            // The blitter decodes 64 bytes, not the 62 its registers fill: it compares A23-A6 and
+            // acknowledges the whole block, so $FF8A3E/3F answer as an empty sixteenth register
+            // instead of faulting (see Blitter.ReadByte). Software loading the register file with
+            // `movem.l d0-d7,$FFFF8A20.w` -- 32 bytes, through $FF8A3F -- depends on it.
+            if (addr >= 0xFF8A00 && addr <= 0xFF8A3F) return true;
 
             if (addr >= 0xFFFA00 && addr <= 0xFFFA2F) return true;   // MFP 68901
             if (addr >= 0xFFFA30 && addr <= 0xFFFA3F) return true;   // rest of the MFP page: void
@@ -824,10 +829,10 @@ namespace ASE
                 if (addr >= 0xFF860E && addr <= 0xFF860F)
                     return 0xFF;
 
-                 // Blitter ($FF8A00-$FF8A3D)
+                 // Blitter ($FF8A00-$FF8A3F, the last two bytes an empty register)
                  // On the real ST (without blitter), accessing these registers causes a bus error.
                  // On the STE/Mega the blitter is present and registers are readable.
-                 if (addr >= 0xFF8A00 && addr <= 0xFF8A3D)
+                 if (addr >= 0xFF8A00 && addr <= 0xFF8A3F)
                  {
                      if (HasBlitter)
                      {
@@ -979,8 +984,8 @@ namespace ASE
                 if (addr >= 0xFF8604 && addr <= 0xFF860D)
                     return WD1772.ReadWord(addr);
 
-                // Blitter ($FF8A00-$FF8A3D)
-                if (addr >= 0xFF8A00 && addr <= 0xFF8A3C)
+                // Blitter ($FF8A00-$FF8A3F)
+                if (addr >= 0xFF8A00 && addr <= 0xFF8A3E)
                 {
                     if (HasBlitter)
                     {
@@ -1444,8 +1449,8 @@ namespace ASE
                     return;
                 }
 
-                // Blitter ($FF8A00-$FF8A3D)
-                if (addr >= 0xFF8A00 && addr <= 0xFF8A3D)
+                // Blitter ($FF8A00-$FF8A3F)
+                if (addr >= 0xFF8A00 && addr <= 0xFF8A3F)
                 {
                     if (HasBlitter)
                     {
@@ -1659,8 +1664,8 @@ namespace ASE
                     return;
                 }
 
-                // Blitter ($FF8A00-$FF8A3C) - word writes handled atomically
-                if (addr >= 0xFF8A00 && addr <= 0xFF8A3C)
+                // Blitter ($FF8A00-$FF8A3F) - word writes handled atomically
+                if (addr >= 0xFF8A00 && addr <= 0xFF8A3E)
                 {
                     if (HasBlitter)
                     {

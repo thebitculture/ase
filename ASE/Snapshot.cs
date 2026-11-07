@@ -48,6 +48,9 @@
  *           "ACIA" it is restored as saved and then set to the host's time, except in a
  *           session (a recording, a playback, a shared game), whose machines must be the
  *           snapshot's (ASEMain.StartWithSnapshot).
+ *   "VID "  Shifter state the port latches in "MEM " do not carry: whether the STE's 16
+ *           extra pixels on the left are on, and the last $FF8265 write that arms them
+ *           (VideoTiming). Absent in older snapshots: restored with them off.
  *   "FLP "  Only in session snapshots (SaveToBytes with media): both drives' disks as
  *           the drives hold them, writes included, compressed (FloppyImage.SaveMedia).
  *           When present they replace the re-insertion by path.
@@ -253,6 +256,7 @@ namespace ASE
             WriteSection(fs, "GHD ", GemdosHD.SaveState);
             WriteSection(fs, "RNG ", MachineRandom.SaveState);
             WriteSection(fs, "RTC ", Rp5c15.SaveState);
+            WriteSection(fs, "VID ", VideoTiming.SaveState);
         }
 
         /// <summary>The disks exactly as the drives hold them (see <see cref="FloppyImage.SaveMedia"/>),
@@ -537,8 +541,10 @@ namespace ASE
             if (sections.TryGetValue("RNG ", out var rng)) MachineRandom.LoadState(new Reader(rng));
             if (sections.TryGetValue("RTC ", out var rtc)) Rp5c15.LoadState(new Reader(rtc));
 
-            // The GLUE sync/resolution latches mirror the restored port bytes
+            // The GLUE sync/resolution latches mirror the restored port bytes; what the port bytes
+            // do not carry comes after, from its own section
             VideoTiming.RestoreFromPorts();
+            if (sections.TryGetValue("VID ", out var vid)) VideoTiming.LoadState(new Reader(vid));
         }
 
         // The sections of an ASESNAP2 file, by id; unknown ones are simply carried and ignored

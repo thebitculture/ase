@@ -45,7 +45,7 @@
 
 	<PropertyGroup>
 		<Major>1</Major>
-		<Minor>14</Minor>
+		<Minor>15</Minor>
 	</PropertyGroup>
 
 	<PropertyGroup>
@@ -84,9 +84,9 @@
 	</ItemGroup>
 
 	<ItemGroup>
-		<PackageReference Include="Avalonia" Version="12.1.4" />
-		<PackageReference Include="Avalonia.Desktop" Version="12.1.4" />
-		<PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.4" />
+		<PackageReference Include="Avalonia" Version="12.1.5" />
+		<PackageReference Include="Avalonia.Desktop" Version="12.1.5" />
+		<PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.5" />
 		<PackageReference Include="ReactiveUI.Avalonia" Version="12.1.6" />
 		<PackageReference Include="LibVLCSharp" Version="3.10.2" />
 		<PackageReference Include="sdl2" Version="2.0.5" />

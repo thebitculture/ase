@@ -6,7 +6,8 @@
  * 
  * The BLiTTER provides hardware-accelerated block memory transfers with
  * halftone patterns, 16 logical operations, barrel-shifting (skew), and
- * configurable endmasks. Registers are mapped at $FF8A00-$FF8A3D.
+ * configurable endmasks. Registers are mapped at $FF8A00-$FF8A3D; the chip
+ * decodes the whole block up to $FF8A3F, the last two bytes an empty slot.
  * 
  * References:
  *   - Atari ST/STE Hardware Reference Manual
@@ -475,7 +476,8 @@ namespace ASE
         }
 
         /// <summary>
-        /// Reads a byte from a blitter register ($FF8A00-$FF8A3D).
+        /// Reads a byte from a blitter register ($FF8A00-$FF8A3D) or the empty slot after them
+        /// ($FF8A3E/3F).
         /// </summary>
         public static byte ReadByte(uint addr)
         {
@@ -522,6 +524,12 @@ namespace ASE
                 0x3B => op,
                 0x3C => PackControl(),
                 0x3D => PackSkew(),
+
+                // The sixteenth register slot ($FF8A3E/3F): decoded and acknowledged like the
+                // rest of the block, with nothing behind it. stBlitter.sv drives it as zero
+                // (`4'hF: ioOut = '0`); Hatari floats it high (IoMem_VoidRead, "No bus error
+                // here"). Writes are dropped (WriteByte has no case for it).
+                0x3E or 0x3F => 0,
                 _ => 0xFF
             };
         }

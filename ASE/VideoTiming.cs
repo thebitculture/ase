@@ -212,6 +212,21 @@ namespace ASE
         static int  _hScrollAtLineStart;
         static bool _hScrollPrefetchAtLineStart;
 
+        // ===================== STE: 16 more pixels on the left =====================
+        // A non-zero $FF8265 makes the shifter prefetch a word per plane; a 0 written to $FF8264
+        // right after it cancels the scroll but not what the prefetch filled. From then on the
+        // shifter has data in hand when DE rises and starts every line 16 pixels EARLIER: 336
+        // pixels, 168 bytes a line in low resolution, unshifted. It stays on until $FF8265 is
+        // written again (or $FF8264 with a non-zero value). The usual sequence is
+        // `move.w #1,$FFFF8264.w / clr.b $FFFF8264.w`; Hatari (Video_HorScroll_Write) takes the
+        // pair as such when the $FF8264 write comes within 40 cycles of the $FF8265 one.
+        // Latched at the start of the line like the scroll.
+        const int WideLeftWindowCycles = 40;
+        static bool _wideLeft;
+        static bool _wideLeftAtLineStart;
+        static int  _last8265;                // last value written to $FF8265 (4 bits)
+        static long _last8265Clock;           // ...and the CPU cycle it was written at
+
         // ===================== STE line width ($FF820F) =====================
         // Extra words the shifter skips at the end of each line. Latched like the scroll: the
         // value is consumed when display turns off (start of the right border, cycle 376), so a
@@ -280,6 +295,8 @@ namespace ASE
             _lineCycles = Mono ? MONO_CYCLES_PER_LINE : COLOR_CYCLES_PER_LINE;
             _hScroll = 0; _hScrollPrefetch = false;
             _hScrollAtLineStart = 0; _hScrollPrefetchAtLineStart = false;
+            _wideLeft = false; _wideLeftAtLineStart = false;
+            _last8265 = 0; _last8265Clock = 0;
             _lineWidth = 0; _pendingLineWidth = -1;
             _pendingCounter = 0; _hasPendingCounter = false; _counterDelayedOffset = 0;
             _vDisplayOn = false;
@@ -303,6 +320,11 @@ namespace ASE
             OnHScrollWrite(hs, true);
             _hScrollAtLineStart = _hScroll;
             _hScrollPrefetchAtLineStart = _hScrollPrefetch;
+
+            // Not in the port bytes: the "VID " section (LoadState, applied after this) puts it
+            // back; a snapshot without one restores with it off.
+            _wideLeft = false; _wideLeftAtLineStart = false;
+            _last8265 = 0;
 
             _lineWidth = ASEMain._mem.Ports[(int)(Memory.STPortAdress.ST_LINEWIDTH - Memory.PortsBase)];
             _pendingLineWidth = -1;
@@ -335,6 +357,7 @@ namespace ASE
             _resAtLineStart = _currentRes;
             _hScrollAtLineStart = _hScroll;
             _hScrollPrefetchAtLineStart = _hScrollPrefetch;
+            _wideLeftAtLineStart = _wideLeft;
             _eventCount = 0;
             _lineStartCounter = _videoCounter;
 
@@ -426,14 +449,46 @@ namespace ASE
         /// <summary>
         /// STE horizontal fine scroll. <paramref name="prefetch"/> is true for $FF8265 (the normal
         /// register, which makes the shifter fetch an extra word per plane before the display) and
-        /// false for $FF8264 (same latch, no prefetch cycle).
-        /// Not modelled: the STE left-border trick, where a $FF8264 write of 0 after a $FF8265 one
-        /// keeps the prefetched word but stops the shift, showing 16 extra pixels on the left.
+        /// false for $FF8264 (same latch, no prefetch cycle). A 0 written to $FF8264 just after a
+        /// non-zero $FF8265 turns on the 16 extra pixels on the left (see _wideLeft); any write to
+        /// $FF8265 turns them off.
         /// </summary>
         public static void OnHScrollWrite(byte v, bool prefetch)
         {
             _hScroll = v & 0x0F;
             _hScrollPrefetch = prefetch && _hScroll != 0;
+
+            long now = CPU._moira.Clock;
+            if (prefetch)
+            {
+                _last8265 = _hScroll;
+                _last8265Clock = now;
+                _wideLeft = false;
+            }
+            else
+            {
+                _wideLeft = _hScroll == 0 && _last8265 != 0 && now - _last8265Clock <= WideLeftWindowCycles;
+            }
+        }
+
+        /// <summary>How much earlier a line starts with the 16 extra pixels: one word per plane,
+        /// 16 cycles in low resolution, 8 in medium (none in high, which has no such fetch).</summary>
+        static int WideLeftCycles(byte res) => (res & 0x03) switch { 0 => 16, 1 => 8, _ => 0 };
+
+        /// <summary>Shifter state the port bytes do not carry (snapshot section "VID ").</summary>
+        public static void SaveState(Snapshot.Writer w)
+        {
+            w.Bool(_wideLeft);
+            w.U8((byte)_last8265);
+            w.I64(_last8265Clock);
+        }
+
+        public static void LoadState(Snapshot.Reader r)
+        {
+            _wideLeft = r.Bool();
+            _wideLeftAtLineStart = _wideLeft;
+            _last8265 = r.U8() & 0x0F;
+            _last8265Clock = r.I64();
         }
 
         /// <summary>
@@ -744,6 +799,13 @@ namespace ASE
             else
                 deStart = DE_START_50;
 
+            // STE, 16 more pixels on the left (see _wideLeft): the line starts one prefetched
+            // word per plane earlier -- 16 pixels, 16 cycles in low resolution and 8 in medium --
+            // so the renderer draws them and the advance below counts the bytes. A left border
+            // opened by the frequency switch outranks it (Hatari's order).
+            if (_wideLeftAtLineStart && deStart != DE_START_LEFT_OPEN)
+                deStart -= WideLeftCycles(_resAtLineStart);
+
             // ---- DE stop (right border) ----
             int deStop = LineDeStop();
 
@@ -800,6 +862,8 @@ namespace ASE
             bool is60 = Is60AtCycle(DE_START_60);
             int deStart = is60 ? DE_START_60 : DE_START_50;
             int deStop  = is60 ? DE_STOP_60  : DE_STOP_50;
+            if (_wideLeftAtLineStart)
+                deStart -= WideLeftCycles(_resAtLineStart);
 
             // TEMP bisect toggle: ASE_VAP_LEGACY restores the old byte-granular (odd-capable) formula.
             if (_vapLegacy)
